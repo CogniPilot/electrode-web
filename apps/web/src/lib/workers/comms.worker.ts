@@ -5,8 +5,6 @@ import {
   createDemoReplay,
   createInitialVehicleState,
   framesThroughCursor,
-  makeSimulatedEvent,
-  makeSimulatedTelemetryBundle,
   normalizeReplayFrames,
   refreshStaleTopics,
   rejectedCommandResult,
@@ -17,7 +15,6 @@ import {
   plotSeriesKey,
   SynapseLogRecorder,
   validateCommandPreconditions,
-  WebSocketBridgeTransport,
   ZenohWasmTransport,
   type CommandName,
   type CommandResult,
@@ -26,14 +23,19 @@ import {
   type PlotPacketDefinition,
   type PlotSeries,
   type RuntimeMode,
+  type TopicCatalog,
   type TransportMessage,
   type VehicleState
 } from '@electrode/sdk';
+// Bundler-resolved URL so the wasm is fetched with the correct application/wasm
+// MIME type (the glue's own import.meta.url guess breaks under Vite optimization).
+import zenohWasmUrl from '@cognipilot/zenoh-wasm/zenoh_wasm_bg.wasm?url';
 
 type WorkerIn =
   | { type: 'connect'; mode: RuntimeMode; url: string; vehicleId: string }
   | { type: 'disconnect' }
   | { type: 'command'; command: CommandName; args?: Record<string, unknown> }
+  | { type: 'setSubscriptions'; keys: string[] }
   | { type: 'startRecording' }
   | { type: 'stopRecording' }
   | { type: 'exportRecording' }
@@ -49,16 +51,11 @@ const PLOT_POST_INTERVAL_MS = 250;
 
 let vehicleId = 'electrode-01';
 let state: VehicleState = createInitialVehicleState(vehicleId);
-let mode: RuntimeMode = 'simulator';
-let bridge: WebSocketBridgeTransport | null = null;
+let mode: RuntimeMode = 'zenoh';
 let zenoh: ZenohWasmTransport | null = null;
-let simulatorTimer: ReturnType<typeof setInterval> | null = null;
 let staleTimer: ReturnType<typeof setInterval> | null = null;
 let replayTimer: ReturnType<typeof setInterval> | null = null;
-let simulatorStartedAt = Date.now();
-let telemetrySequence = 1;
 let commandSequence = 1;
-let eventSequence = 100_000;
 let recording = false;
 let recorder: SynapseLogRecorder | null = null;
 let replayFrames: GcsFrame[] = [];
@@ -84,6 +81,8 @@ ctx.addEventListener('message', (event: MessageEvent<WorkerIn>) => {
     disconnect();
   } else if (message.type === 'command') {
     sendCommand(message.command, message.args ?? {});
+  } else if (message.type === 'setSubscriptions') {
+    zenoh?.setSubscriptions(message.keys);
   } else if (message.type === 'startRecording') {
     recording = true;
     recorder = new SynapseLogRecorder({
@@ -95,6 +94,10 @@ ctx.addEventListener('message', (event: MessageEvent<WorkerIn>) => {
   } else if (message.type === 'stopRecording') {
     recording = false;
     ctx.postMessage({ type: 'recording', recording, count: recorder?.frameCount ?? 0 });
+    // Stopping saves the log immediately — no separate export step needed.
+    if (recorder && recorder.frameCount > 0) {
+      ctx.postMessage({ type: 'recordingExport', export: recorder.export() });
+    }
   } else if (message.type === 'exportRecording') {
     const exported = recorder?.export();
     if (exported) {
@@ -121,14 +124,11 @@ function connect(nextMode: RuntimeMode, url: string): void {
   resetPlotState();
   startStaleTimer();
 
-  if (nextMode === 'bridge') {
-    bridge = new WebSocketBridgeTransport(url, handleTransportMessage, postConnection);
-    bridge.connect();
-    return;
-  }
-
   if (nextMode === 'zenoh') {
-    zenoh = new ZenohWasmTransport(url, postConnection);
+    zenoh = new ZenohWasmTransport(url, handleTransportMessage, postConnection, postCatalog, {
+      vehicleId,
+      wasmUrl: zenohWasmUrl
+    });
     zenoh.connect().catch((error) => {
       state = appendEvent(state, {
         severity: 'error',
@@ -148,35 +148,13 @@ function connect(nextMode: RuntimeMode, url: string): void {
     playReplay();
     return;
   }
-
-  simulatorStartedAt = Date.now();
-  postConnection({ mode: 'simulator', status: 'connected', url: 'simulator://electrode', message: 'simulator running' });
-  simulatorTimer = setInterval(() => {
-    const frames = makeSimulatedTelemetryBundle({
-      vehicleId,
-      elapsedMs: Date.now() - simulatorStartedAt,
-      sequenceStart: telemetrySequence,
-      armed: state.mode.armed,
-      mode: state.mode.name === 'standby' ? 'hold' : state.mode.name
-    });
-    telemetrySequence += frames.length;
-    applyFrames(frames);
-
-    if (telemetrySequence % 700 === 1) {
-      applyFrames([makeSimulatedEvent(vehicleId, eventSequence++, 'Simulator nominal')]);
-    }
-  }, 100);
 }
 
 function disconnect(post = true): void {
-  bridge?.disconnect();
-  bridge = null;
   zenoh?.disconnect().catch(() => {});
   zenoh = null;
-  clearTimer(simulatorTimer);
   clearTimer(staleTimer);
   clearTimer(replayTimer);
-  simulatorTimer = null;
   staleTimer = null;
   replayTimer = null;
   replayPlaying = false;
@@ -208,15 +186,6 @@ function sendCommand(command: CommandName, args: Record<string, unknown>): void 
 
   if (failures.length > 0) {
     applyCommandResult(rejectedCommandResult(intent, failures.join(', ')));
-    return;
-  }
-
-  if (mode === 'bridge' && bridge) {
-    try {
-      bridge.sendCommand(intent);
-    } catch (error) {
-      applyCommandResult(rejectedCommandResult(intent, error instanceof Error ? error.message : String(error)));
-    }
     return;
   }
 
@@ -382,6 +351,10 @@ function postState(): void {
 
 function postConnection(connection: ConnectionState): void {
   ctx.postMessage({ type: 'connection', connection });
+}
+
+function postCatalog(catalog: TopicCatalog): void {
+  ctx.postMessage({ type: 'topicCatalog', catalog });
 }
 
 function postReplay(): void {
