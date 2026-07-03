@@ -142,10 +142,15 @@ impl AutopilotLink {
         zconfig
             .insert_json5("mode", "\"peer\"")
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        let endpoint = profile.runtime_endpoint.trim();
-        if !endpoint.is_empty() {
+        let endpoints = autopilot_zenoh_endpoints(profile);
+        if !endpoints.is_empty() {
+            let endpoints_json = endpoints
+                .iter()
+                .map(|endpoint| format!("\"{endpoint}\""))
+                .collect::<Vec<_>>()
+                .join(",");
             zconfig
-                .insert_json5("connect/endpoints", &format!("[\"{endpoint}\"]"))
+                .insert_json5("connect/endpoints", &format!("[{endpoints_json}]"))
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         }
         let session = zenoh::open(zconfig)
@@ -205,11 +210,23 @@ impl AutopilotLink {
             let count = frames_in.clone();
             let id = topic.id;
             let key = topic.key.clone();
+            let callback_key = key.clone();
+            let logged = Arc::new(AtomicBool::new(false));
+            let callback_logged = logged.clone();
             let subscriber = session
                 .declare_subscriber(key.clone())
                 .callback(move |sample| {
                     let payload = sample.payload().to_bytes();
-                    let frame = build_frame(id, &payload);
+                    if !callback_logged.swap(true, Ordering::Relaxed) {
+                        tracing::info!(
+                            key = %callback_key,
+                            id,
+                            bytes = payload.len(),
+                            "autopilot inbound sample"
+                        );
+                    }
+                    let frame_payload = payload.to_vec();
+                    let frame = build_frame(id, &frame_payload);
                     if tx.send(&frame).is_ok() {
                         count.fetch_add(1, Ordering::Relaxed);
                     }
@@ -258,6 +275,23 @@ impl AutopilotLink {
 struct InboundTopic {
     key: String,
     id: u16,
+}
+
+fn autopilot_zenoh_endpoints(profile: &AutopilotProfile) -> Vec<String> {
+    let mut endpoints = Vec::new();
+    push_unique_endpoint(&mut endpoints, profile.runtime_endpoint.trim());
+    if let Ok(connect) = std::env::var("ELECTRODE_GCS_ZENOH_CONNECT") {
+        for endpoint in connect.split(',') {
+            push_unique_endpoint(&mut endpoints, endpoint.trim());
+        }
+    }
+    endpoints
+}
+
+fn push_unique_endpoint(endpoints: &mut Vec<String>, endpoint: &str) {
+    if !endpoint.is_empty() && !endpoints.iter().any(|existing| existing == endpoint) {
+        endpoints.push(endpoint.to_string());
+    }
 }
 
 fn resolve_inbound_topic(spec: &str) -> Option<InboundTopic> {
