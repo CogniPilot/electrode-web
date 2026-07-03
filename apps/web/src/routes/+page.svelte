@@ -146,6 +146,14 @@
     return Math.round(clamp(value, 0, 1) * 1000 + 1000);
   }
 
+  function centeredFromPwm(value: number): number {
+    return clamp((value - 1500) / 500, -1, 1);
+  }
+
+  function throttleFromPwm(value: number): number {
+    return clamp((value - 1000) / 1000, 0, 1);
+  }
+
   function manualControlPwm(manual: VehicleState['manualControl']): number[] | null {
     if (!manual || !manual.valid || manual.killSwitch) return null;
     return [
@@ -154,6 +162,16 @@
       throttleToPwm(manual.throttle),
       centeredToPwm(-manual.yaw)
     ];
+  }
+
+  function pwmControlInputs(pwm: number[] | null | undefined): VehicleState['controls'] {
+    if (!pwm || pwm.length < 4) return null;
+    return {
+      aileron: centeredFromPwm(pwm[0]),
+      elevator: centeredFromPwm(pwm[1]),
+      throttle: throttleFromPwm(pwm[2]),
+      rudder: centeredFromPwm(pwm[3])
+    };
   }
 
   let worker: Worker | null = null;
@@ -209,24 +227,30 @@
   $: ioHealth = topicBySuffix(vehicle, 'vehicle_health');
   $: ioAttitude = topicBySuffix(vehicle, 'attitude_estimate');
   $: ioSelectedPwm = topicBySuffix(vehicle, 'motor_output');
-  $: ioPwm = ioSelectedPwm ?? topicBySuffix(vehicle, 'pwm_signal_outputs');
+  $: ioPwm = ioSelectedPwm && !ioSelectedPwm.stale ? ioSelectedPwm : topicBySuffix(vehicle, 'pwm_signal_outputs');
   $: ioManual = topicBySuffix(vehicle, 'manual_control_command');
   $: ioMocap = topicBySuffix(vehicle, 'mocap_frame') ?? topicBySuffix(vehicle, 'pose');
-  $: controlSource = manualControl
+  $: requestedControlSource = manualControl
     ? manualControl.valid
-      ? manualControl.flightMode === 1
+      ? manualControl.flightMode > 0
         ? 'autopilot'
         : manualControl.flightMode === 0
           ? 'manual'
           : `mode ${manualControl.flightMode}`
       : 'failsafe'
     : 'unknown';
-  $: controlSourceDetail = manualControl
+  $: requestedControlSourceDetail = manualControl
     ? `${manualControl.active ? 'stabilization on' : 'stabilization off'} · mode ${manualControl.flightMode}`
     : 'waiting for manual_control_command';
-  $: manualPwm = controlSource === 'manual' ? manualControlPwm(manualControl) : null;
+  $: autopilotReportedMode = vehicle.mode.name;
+  $: controlModeMismatch =
+    manualControl?.valid === true &&
+    ((manualControl.flightMode > 0 && autopilotReportedMode !== 'auto') ||
+      (manualControl.flightMode === 0 && autopilotReportedMode === 'auto'));
+  $: manualPwm = requestedControlSource === 'manual' ? manualControlPwm(manualControl) : null;
   $: displayedPwm = motors && motors.length >= 4 ? motors.slice(0, 4) : manualPwm;
   $: displayedPwmLabel = ioSelectedPwm ? 'Selected PWM' : manualPwm ? 'Manual PWM' : 'Autopilot PWM';
+  $: deflectionControls = requestedControlSource === 'manual' ? controls : pwmControlInputs(displayedPwm);
 
   function ioRate(snapshot: TopicSnapshot | null): string {
     if (!snapshot) return 'no data';
@@ -791,7 +815,7 @@
       </div>
 
       <div class="mode-readout">
-        <span>Mode</span>
+        <span>Autopilot reported</span>
         <strong class:on={vehicle.mode.name === 'auto'}>{vehicle.mode.name}</strong>
         <em>{vehicle.mode.armed ? 'armed' : 'disarmed'}{vehicle.mode.failsafe ? ' · FAILSAFE' : ''}</em>
       </div>
@@ -849,9 +873,10 @@
       <div class="io-group">
         <h3>Manual control state</h3>
         <div class="io-row">
-          <span>Control source <em>{ioRate(ioManual)}</em></span>
-          <strong class:on={controlSource === 'autopilot'}>
-            {controlSource} · {controlSourceDetail}
+          <span>Mode switch request <em>{ioRate(ioManual)}</em></span>
+          <strong class:on={requestedControlSource === 'autopilot'} class:warn={controlModeMismatch}>
+            {requestedControlSource} · {requestedControlSourceDetail}
+            {controlModeMismatch ? ' · not accepted by autopilot' : ''}
           </strong>
         </div>
         <div class="io-row">
@@ -973,7 +998,7 @@
         </div>
         <Gauge size={20} />
       </div>
-      <DeflectionView {attitude} {controls} {motors} {theme} bind:vehicleType={selectedVehicleType} />
+      <DeflectionView {attitude} controls={deflectionControls} {motors} {theme} bind:vehicleType={selectedVehicleType} />
     </section>
 
     <section class="panel command-panel">

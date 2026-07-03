@@ -239,7 +239,9 @@ function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: nu
       state.motors = motors;
     }
   } else if (topic.endsWith('pwm_signal_outputs')) {
-    const hasSelectedOutput = Object.values(state.topics).some((snapshot) => snapshot.topic.endsWith('motor_output'));
+    const hasSelectedOutput = Object.values(state.topics).some(
+      (snapshot) => snapshot.topic.endsWith('motor_output') && !snapshot.stale
+    );
     if (!hasSelectedOutput) {
       const motors = parseMotorOutputs(frame.payload);
       if (motors) {

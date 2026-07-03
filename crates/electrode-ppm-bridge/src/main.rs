@@ -417,6 +417,10 @@ fn select_channels(
     manual_channels: PpmChannels,
     control_channels: Option<PpmChannels>,
 ) -> PpmChannels {
+    // Source selection is only the manual mode switch:
+    //   manual -> transmitter sticks
+    //   auto   -> autopilot/control output
+    // Stabilization/active is a separate radio channel and stays operator-owned.
     match manual_mode {
         ManualMode::Manual => manual_channels,
         ManualMode::Auto => control_channels

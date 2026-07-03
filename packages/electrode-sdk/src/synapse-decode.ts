@@ -295,6 +295,10 @@ function decodePwmSignalOutputs(bytes: Uint8Array): unknown | null {
 }
 
 function decodeMocapFrame(bytes: Uint8Array): unknown | null {
+  if (bytes.length === 28) {
+    return decodeCompactRigidBodyPose(bytes);
+  }
+
   const frame = MocapFrame.getRootAsMocapFrame(byteBuffer(bytes));
 
   const rigidBodies: unknown[] = [];
@@ -333,5 +337,35 @@ function decodeMocapFrame(bytes: Uint8Array): unknown | null {
     frame_number: frame.frameNumber(),
     rigid_bodies: rigidBodies,
     labeled_markers: labeledMarkers
+  };
+}
+
+function decodeCompactRigidBodyPose(bytes: Uint8Array): unknown | null {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const values = Array.from({ length: 7 }, (_, index) => view.getFloat32(index * 4, true));
+  if (!values.every(Number.isFinite)) {
+    return null;
+  }
+  const [x, y, z, qwRaw, qxRaw, qyRaw, qzRaw] = values;
+  // The LAN pose topic carries the tracked rigid-body frame. The cub1 rigid
+  // body forward axis is opposite the aircraft FLU forward axis, so convert
+  // q_world_rigid to q_world_aircraft with a right-side 180 deg Y correction:
+  // q * [0, 0, 1, 0].
+  const qw = -qyRaw;
+  const qx = -qzRaw;
+  const qy = qwRaw;
+  const qz = qxRaw;
+  return {
+    timestamp_us: 0,
+    frame_number: 0,
+    rigid_bodies: [
+      {
+        id: 0,
+        position: { x, y, z },
+        attitude: { x: qx, y: qy, z: qz, w: qw },
+        residual: 0,
+        tracking_valid: true
+      }
+    ]
   };
 }
