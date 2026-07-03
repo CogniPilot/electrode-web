@@ -7,6 +7,9 @@ use std::{
 };
 
 use serde_json::Value;
+use tokio::sync::broadcast;
+
+use crate::zenoh_bridge::ZenohShared;
 
 #[derive(Debug, Clone)]
 pub struct VehicleRuntime {
@@ -15,17 +18,23 @@ pub struct VehicleRuntime {
     pub failsafe: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppState {
     pub vehicle_id: String,
     pub started_at: Instant,
     telemetry_sequence: Arc<AtomicU64>,
     command_sequence: Arc<AtomicU64>,
     runtime: Arc<RwLock<VehicleRuntime>>,
+    pub zenoh: Arc<ZenohShared>,
+    pub frame_tx: broadcast::Sender<String>,
 }
 
 impl AppState {
-    pub fn new(vehicle_id: impl Into<String>) -> Self {
+    pub fn new(
+        vehicle_id: impl Into<String>,
+        zenoh: Arc<ZenohShared>,
+        frame_tx: broadcast::Sender<String>,
+    ) -> Self {
         Self {
             vehicle_id: vehicle_id.into(),
             started_at: Instant::now(),
@@ -36,6 +45,8 @@ impl AppState {
                 armed: true,
                 failsafe: false,
             })),
+            zenoh,
+            frame_tx,
         }
     }
 
