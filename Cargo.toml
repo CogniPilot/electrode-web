@@ -1,7 +1,9 @@
 [workspace]
 members = [
   "crates/electrode-web-core",
+  "crates/electrode-fake-sim",
   "crates/electrode-ground-bridge",
+  "crates/electrode-ground-station",
   "crates/electrode-log",
   "crates/electrode-manual-control-bridge",
   "crates/electrode-ppm-bridge"

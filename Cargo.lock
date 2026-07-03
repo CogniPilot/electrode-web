@@ -689,19 +689,54 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
+name = "electrode-fake-sim"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "electrode-web-core",
+ "flatbuffers",
+ "synapse_fbs",
+ "zenoh",
+]
+
+[[package]]
 name = "electrode-ground-bridge"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
  "electrode-web-core",
+ "flatbuffers",
  "futures-util",
  "serde",
  "serde_json",
+ "synapse_fbs",
  "tokio",
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "zenoh",
+]
+
+[[package]]
+name = "electrode-ground-station"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "electrode-ppm-bridge",
+ "electrode-web-core",
+ "flatbuffers",
+ "serde",
+ "serde_json",
+ "synapse_fbs",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "zenoh",
 ]
 
 [[package]]
@@ -2910,9 +2945,9 @@ dependencies = [
 
 [[package]]
 name = "synapse_fbs"
-version = "0.1.5"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f61bb9e0f14c22431ba0fd7d004c05d3f474e990d7dc446baf22301f3dca4db4"
+checksum = "295b0672c4d15ef7d90429c18e6d19bf2f34135af3c054688309aaf31c2056ab"
 dependencies = [
  "flatbuffers",
 ]
