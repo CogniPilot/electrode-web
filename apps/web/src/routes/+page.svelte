@@ -1222,7 +1222,11 @@
         <label class="file-button">
           <Upload size={18} />
           <span>Load</span>
-          <input type="file" accept=".sylg,application/vnd.synapse.log,application/octet-stream" onchange={loadReplay} />
+          <input
+            type="file"
+            accept=".mcap,application/mcap,application/octet-stream"
+            onchange={loadReplay}
+          />
         </label>
       </div>
 
@@ -1238,7 +1242,7 @@
       <div class="panel-heading">
         <div>
           <h2>Logging</h2>
-          <p>{recordingCount} frames · all topics · Stop saves .sylg</p>
+          <p>{recordingCount} frames · all topics · Stop saves .mcap</p>
         </div>
         <Download size={20} />
       </div>

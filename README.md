@@ -14,7 +14,7 @@ viewer and as the UI served by the local Rust ground-station daemon.
 - Discovers and subscribes to Synapse topics, decodes known FlatBuffer payloads,
   and adapts them into a live vehicle state.
 - Provides status, map/scene, RC/manual-control, simulation, topic discovery,
-  plotting, command, event, log recording, and replay views.
+  plotting, command, event, MCAP log recording, and replay views.
 - Serves as a static viewer when no local backend is present.
 - Unlocks host hardware workflows when served by `electrode-ground-station`,
   including joystick discovery, RC mapping, PPM bridge control, simulation
@@ -77,6 +77,9 @@ npm run verify:pages
 
 The GitHub Actions workflow publishes `apps/web/build` to GitHub Pages on pushes
 to `main`.
+
+Recordings download as `.mcap` files using FlatBuffer schema records. Replay
+loads MCAP recordings.
 
 ## Local Ground Station
 

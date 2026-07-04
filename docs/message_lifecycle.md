@@ -22,18 +22,21 @@ Replay feeds recorded envelopes into the same worker and state store used by liv
 
 ## Logs
 
-Ground-station recordings use committed schema assets from
-`@electrode/flatbuffers`. Live Synapse topic schemas come from the published
-`@cognipilot/synapse-fbs` and `synapse_fbs` packages.
+Ground-station recordings use MCAP files with FlatBuffer schema records. Live
+Synapse topic schemas come from the published `@cognipilot/synapse-fbs` and
+`synapse_fbs` packages, which ship pregenerated `.bfbs` reflection schemas; the
+FlatBuffers compiler is not part of normal development or CI.
 
-The browser exports `.sylg` files as a stream of size-prefixed `synapse.log.LogRecord`
-FlatBuffers with file identifier `SYLG`. Each file starts with:
+The browser exports `.mcap` files with:
 
-- `LogFileHeader`
-- `SchemaRecord` for the Synapse log schema, including BFBS bytes
-- `SchemaRecord` for `electrode.gcs.GcsFrame`, including BFBS bytes
-- `TopicRecord` entries for every topic captured in the session
+- MCAP profile `synapse`
+- `flatbuffer` schema encoding and message encoding
+- BFBS schema data for `electrode.gcs.GcsFrame`
+- one channel per captured Zenoh topic
+- `electrode.recording` metadata for source, description, and creation time
 
-Each data sample is then a `LogFrame` whose payload is an `electrode.gcs.GcsFrame`
-FlatBuffer with file identifier `EGCS`. `GcsFrame` wraps the typed state/event
-payloads in a FlatBuffer union, so replay does not depend on JSON.
+Each browser-recorded message payload is an `electrode.gcs.GcsFrame` FlatBuffer
+with file identifier `EGCS`. `GcsFrame` wraps the typed state/event payloads in a
+FlatBuffer union, so replay does not depend on JSON. The replay loader can also
+read native Synapse MCAP channels when their payloads match the SDK's current
+Synapse decoder.
