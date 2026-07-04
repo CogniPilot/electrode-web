@@ -94,13 +94,10 @@ ctx.addEventListener('message', (event: MessageEvent<WorkerIn>) => {
     ctx.postMessage({ type: 'recording', recording, count: recorder?.frameCount ?? 0 });
     // Stopping saves the log immediately — no separate export step needed.
     if (recorder && recorder.frameCount > 0) {
-      ctx.postMessage({ type: 'recordingExport', export: recorder.export() });
+      void postRecordingExport(recorder);
     }
   } else if (message.type === 'exportRecording') {
-    const exported = recorder?.export();
-    if (exported) {
-      ctx.postMessage({ type: 'recordingExport', export: exported });
-    }
+    void postRecordingExport(recorder);
   } else if (message.type === 'loadReplay') {
     loadReplay(message.bytes);
   } else if (message.type === 'playReplay') {
@@ -114,6 +111,13 @@ ctx.addEventListener('message', (event: MessageEvent<WorkerIn>) => {
     postReplay();
   }
 });
+
+async function postRecordingExport(source: SynapseLogRecorder | null): Promise<void> {
+  const exported = await source?.export();
+  if (exported) {
+    ctx.postMessage({ type: 'recordingExport', export: exported });
+  }
+}
 
 function connect(nextMode: RuntimeMode, url: string): void {
   disconnect(false);
