@@ -13,12 +13,19 @@
     "build": "npm run build:packages && npm --workspace apps/web run build",
     "build:packages": "npm run schemas:assets && npm --workspace @electrode/flatbuffers run build && npm --workspace @electrode/sdk run build",
     "check": "npm run build:packages && npm --workspace apps/web run check",
+    "station": "npm run build && ELECTRODE_GCS_ZENOH_CONNECT=udp/192.168.10.2:7447 cargo run -p electrode-ground-station --",
+    "ground-station": "ELECTRODE_GCS_ZENOH_CONNECT=udp/192.168.10.2:7447 cargo run -p electrode-ground-station --",
     "bridge": "cargo run -p electrode-ground-bridge",
+    "sim:fake": "cargo run -p electrode-fake-sim --",
     "manual:bridge": "cargo run -p electrode-manual-control-bridge --bin electrode-manual-control-bridge --",
     "manual:dump": "cargo run -p electrode-manual-control-bridge --bin electrode-manual-control-dump --",
     "ppm:bridge": "cargo run -p electrode-ppm-bridge --bin electrode-ppm-bridge --",
     "schemas:assets": "node scripts/generate-log-schema-assets.mjs",
     "schemas:generate": "node scripts/generate-flatbuffers.mjs",
+    "synapse:fbs": "node scripts/generate-synapse-fbs.mjs",
     "build:gcs": "cargo build && npm run build"
+  },
+  "dependencies": {
+    "@cognipilot/synapse-fbs": "^0.3.0"
   }
 }

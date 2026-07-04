@@ -1,10 +1,15 @@
-use synapse_fbs::topic::ManualControlData;
+use std::time::{SystemTime, UNIX_EPOCH};
+use synapse_fbs::topic::{ManualControlData, ManualControlFlags, PwmSignalOutputsData};
 
 pub const NUM_CHANNELS: usize = 5;
 pub const PACKET_LEN: usize = 14;
 pub const PACKET_HEADER: u16 = 0xffff;
 pub const DEFAULT_CHANNEL_MAP: [usize; NUM_CHANNELS] = [0, 1, 2, 3, 4];
-pub const FAILSAFE_CHANNELS: [u16; NUM_CHANNELS] = [1000, 1500, 1500, 1500, 2000];
+pub const DEFAULT_CHANNEL_INVERT: [bool; NUM_CHANNELS] = [false; NUM_CHANNELS];
+pub const IDLE_THROTTLE_PWM: u16 = 1000;
+pub const STABILIZATION_PWM: u16 = 2000;
+pub const LOW_CHANNELS: [u16; NUM_CHANNELS] = [1000; NUM_CHANNELS];
+pub const FAILSAFE_CHANNELS: [u16; NUM_CHANNELS] = LOW_CHANNELS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PpmChannels(pub [u16; NUM_CHANNELS]);
@@ -12,9 +17,33 @@ pub struct PpmChannels(pub [u16; NUM_CHANNELS]);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelMap(pub [usize; NUM_CHANNELS]);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelInversions(pub [bool; NUM_CHANNELS]);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireOverrides {
+    pub force_idle_throttle: bool,
+    pub force_stabilizing_mode: bool,
+}
+
+impl Default for WireOverrides {
+    fn default() -> Self {
+        Self {
+            force_idle_throttle: false,
+            force_stabilizing_mode: false,
+        }
+    }
+}
+
 impl Default for ChannelMap {
     fn default() -> Self {
         Self(DEFAULT_CHANNEL_MAP)
+    }
+}
+
+impl Default for ChannelInversions {
+    fn default() -> Self {
+        Self(DEFAULT_CHANNEL_INVERT)
     }
 }
 
@@ -68,39 +97,117 @@ pub fn channel_map_from_slice(channels: &[usize]) -> Result<ChannelMap, ChannelM
     ChannelMap::new(channels)
 }
 
+pub fn channel_inversions_from_slice(
+    channels: &[bool],
+) -> Result<ChannelInversions, ChannelMapError> {
+    let channels: [bool; NUM_CHANNELS] =
+        channels
+            .try_into()
+            .map_err(|_| ChannelMapError::WrongLength {
+                expected: NUM_CHANNELS,
+                actual: channels.len(),
+            })?;
+    Ok(ChannelInversions(channels))
+}
+
 pub fn manual_control_to_channels(data: &ManualControlData) -> PpmChannels {
-    if !data.valid() || !data.active() || data.kill_switch() {
+    // 0.3.0 ManualControlData carries switch state in the flags bitmask and the
+    // axes as scaled shorts in -1000..1000 (normalized = value / 1000).
+    let flags = ManualControlFlags::from_bits_retain(data.flags());
+    if !flags.contains(ManualControlFlags::Valid) || flags.contains(ManualControlFlags::KillSwitch)
+    {
         return PpmChannels(FAILSAFE_CHANNELS);
     }
 
-    let axes = data.axes();
     PpmChannels([
-        throttle_to_pwm(axes.throttle()),
-        centered_to_pwm(axes.roll()),
-        centered_to_pwm(axes.pitch()),
-        centered_to_pwm(-axes.yaw()),
-        mode_to_pwm(data.flight_mode()),
+        throttle_to_pwm(milli_to_norm(data.throttle_milli())),
+        centered_to_pwm(milli_to_norm(data.roll_milli())),
+        centered_to_pwm(milli_to_norm(data.pitch_milli())),
+        centered_to_pwm(-milli_to_norm(data.yaw_milli())),
+        stabilization_to_pwm(flags.contains(ManualControlFlags::Active)),
     ])
 }
 
-pub fn rc_channels_payload_to_channels(payload: &[u8]) -> Option<PpmChannels> {
-    if payload.len() < 20 {
+/// Wire size of a bare `synapse.topic.PwmSignalOutputsData` struct.
+pub const PWM_SIGNAL_OUTPUTS_PAYLOAD_SIZE: usize = 48;
+
+pub fn pwm_signal_outputs_to_channels(payload: &[u8]) -> Option<PpmChannels> {
+    if payload.len() != PWM_SIGNAL_OUTPUTS_PAYLOAD_SIZE {
         return None;
     }
+    // Safety: fixed-layout structs are repr(transparent) byte arrays with
+    // unaligned accessors, and the size check above covers the struct.
+    let data = unsafe { <PwmSignalOutputsData as flatbuffers::Follow>::follow(payload, 0) };
 
-    let ch0 = read_i32_le(payload, 0)?;
-    let ch1 = read_i32_le(payload, 1)?;
-    let ch2 = read_i32_le(payload, 2)?;
-    let ch3 = read_i32_le(payload, 3)?;
-    let ch4 = read_i32_le(payload, 4)?;
-
+    // CUBS2 copies its arbitrated RC channels 1:1 into output<N>_us
+    // (0=roll, 1=pitch, 2=throttle, 3=yaw, 4=stabilization), so reorder to the
+    // base throttle,roll,pitch,yaw,stabilization PPM order and keep pitch/yaw servo
+    // inversions carried over from the RcChannels16-era bridge.
     Some(PpmChannels([
-        pwm_i32_to_u16(ch2),
-        pwm_i32_to_u16(ch0),
-        invert_pwm_i32_to_u16(ch1),
-        invert_pwm_i32_to_u16(ch3),
-        pwm_i32_to_u16(ch4),
+        clamp_pwm_u16(data.output2_us()),
+        clamp_pwm_u16(data.output0_us()),
+        invert_pwm_u16(data.output1_us()),
+        invert_pwm_u16(data.output3_us()),
+        clamp_pwm_u16(data.output4_us()),
     ]))
+}
+
+pub fn channels_to_pwm_signal_outputs_payload(channels: PpmChannels) -> Vec<u8> {
+    // Selected command stream is canonical AETR PwmSignalOutputsData:
+    // output0=aileron/roll, output1=elevator/pitch, output2=throttle,
+    // output3=rudder/yaw, output4=stabilization.
+    let [throttle, roll, pitch, yaw, stabilization] = channels.0;
+    let data = PwmSignalOutputsData::new(
+        timestamp_us(),
+        0b1_1111,
+        0,
+        roll,
+        pitch,
+        throttle,
+        yaw,
+        stabilization,
+        1000,
+        1000,
+        1000,
+        1000,
+        1000,
+        1000,
+        1000,
+        1000,
+        1000,
+        1000,
+        1000,
+    );
+    data.0.to_vec()
+}
+
+pub fn channels_to_wire(
+    channels: PpmChannels,
+    channel_map: ChannelMap,
+    inversions: ChannelInversions,
+    overrides: WireOverrides,
+) -> PpmChannels {
+    let mut wire = [0_u16; NUM_CHANNELS];
+    for (output, source) in channel_map.0.into_iter().enumerate() {
+        let mut value = channels.0[source];
+        let forced = match source {
+            0 if overrides.force_idle_throttle => {
+                value = IDLE_THROTTLE_PWM;
+                true
+            }
+            4 if overrides.force_stabilizing_mode => {
+                value = STABILIZATION_PWM;
+                true
+            }
+            _ => false,
+        };
+        wire[output] = if inversions.0[output] && !forced {
+            invert_pwm_u16(value)
+        } else {
+            value
+        };
+    }
+    PpmChannels(wire)
 }
 
 pub fn build_packet(channels: PpmChannels) -> [u8; PACKET_LEN] {
@@ -124,18 +231,16 @@ pub fn checksum(channels: PpmChannels) -> u16 {
         .fold(0_u16, |sum, channel| sum.wrapping_add(*channel))
 }
 
-fn read_i32_le(payload: &[u8], index: usize) -> Option<i32> {
-    let start = index.checked_mul(4)?;
-    let bytes: [u8; 4] = payload.get(start..start + 4)?.try_into().ok()?;
-    Some(i32::from_le_bytes(bytes))
+fn clamp_pwm_u16(value: u16) -> u16 {
+    value.clamp(1000, 2000)
 }
 
-fn pwm_i32_to_u16(value: i32) -> u16 {
-    value.clamp(1000, 2000) as u16
+fn invert_pwm_u16(value: u16) -> u16 {
+    (3000 - i32::from(value)).clamp(1000, 2000) as u16
 }
 
-fn invert_pwm_i32_to_u16(value: i32) -> u16 {
-    (3000 - value).clamp(1000, 2000) as u16
+fn milli_to_norm(value: i16) -> f32 {
+    f32::from(value) / 1000.0
 }
 
 fn throttle_to_pwm(value: f32) -> u16 {
@@ -146,12 +251,8 @@ fn centered_to_pwm(value: f32) -> u16 {
     scale_to_pwm(value, -1.0, 1.0, 1000.0, 2000.0)
 }
 
-fn mode_to_pwm(flight_mode: u8) -> u16 {
-    if flight_mode == 0 {
-        1000
-    } else {
-        2000
-    }
+fn stabilization_to_pwm(active: bool) -> u16 {
+    if active { 2000 } else { 1000 }
 }
 
 fn scale_to_pwm(value: f32, in_min: f32, in_max: f32, out_min: f32, out_max: f32) -> u16 {
@@ -160,10 +261,58 @@ fn scale_to_pwm(value: f32, in_min: f32, in_max: f32, out_min: f32, out_max: f32
     (out_min + normalized * (out_max - out_min)).round() as u16
 }
 
+fn timestamp_us() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use synapse_fbs::topic::{ManualControlAux8f, ManualControlAxes, ManualControlData};
+    use synapse_fbs::topic::{ManualControlAxes, ManualControlData, ManualControlFlags};
+
+    /// The four stick axes we always populate on the wire.
+    const STICK_AXES: ManualControlAxes = ManualControlAxes::Pitch
+        .union(ManualControlAxes::Roll)
+        .union(ManualControlAxes::Throttle)
+        .union(ManualControlAxes::Yaw);
+
+    fn to_milli(value: f32) -> i16 {
+        (value * 1000.0).round().clamp(-1000.0, 1000.0) as i16
+    }
+
+    /// Build a 0.3.0 ManualControlData from normalized stick inputs and switch
+    /// flags (axes scaled to -1000..1000 shorts).
+    fn manual_control_data_with_flags(
+        roll: f32,
+        pitch: f32,
+        yaw: f32,
+        throttle: f32,
+        flight_mode: u8,
+        flags: ManualControlFlags,
+    ) -> ManualControlData {
+        ManualControlData::new(
+            42,
+            0,
+            STICK_AXES.bits(),
+            to_milli(pitch),
+            to_milli(roll),
+            to_milli(throttle),
+            to_milli(yaw),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            flight_mode,
+            flags.bits(),
+        )
+    }
 
     fn manual_control_data(
         roll: f32,
@@ -172,15 +321,13 @@ mod tests {
         throttle: f32,
         flight_mode: u8,
     ) -> ManualControlData {
-        ManualControlData::new(
-            42,
-            &ManualControlAxes::new(roll, pitch, yaw, throttle),
-            &ManualControlAux8f::default(),
+        manual_control_data_with_flags(
+            roll,
+            pitch,
+            yaw,
+            throttle,
             flight_mode,
-            false,
-            false,
-            true,
-            true,
+            ManualControlFlags::Active | ManualControlFlags::Valid,
         )
     }
 
@@ -195,10 +342,18 @@ mod tests {
 
     #[test]
     fn invalid_or_kill_switch_messages_use_failsafe_channels() {
-        let axes = ManualControlAxes::new(1.0, 1.0, 1.0, 1.0);
-        let aux = ManualControlAux8f::default();
-        let invalid = ManualControlData::new(0, &axes, &aux, 1, false, false, true, false);
-        let killed = ManualControlData::new(0, &axes, &aux, 1, false, true, true, true);
+        // valid=false: no Valid flag set.
+        let invalid =
+            manual_control_data_with_flags(1.0, 1.0, 1.0, 1.0, 1, ManualControlFlags::Active);
+        // kill switch engaged even though active + valid.
+        let killed = manual_control_data_with_flags(
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1,
+            ManualControlFlags::Active | ManualControlFlags::Valid | ManualControlFlags::KillSwitch,
+        );
 
         assert_eq!(
             manual_control_to_channels(&invalid),
@@ -211,11 +366,43 @@ mod tests {
     }
 
     #[test]
+    fn failsafe_channels_are_all_low() {
+        assert_eq!(FAILSAFE_CHANNELS, [1000; NUM_CHANNELS]);
+    }
+
+    #[test]
+    fn maps_inactive_valid_manual_control_to_channels() {
+        let data =
+            manual_control_data_with_flags(-0.2, 0.4, 0.1, 0.6, 0, ManualControlFlags::Valid);
+
+        assert_eq!(
+            manual_control_to_channels(&data),
+            PpmChannels([1600, 1400, 1700, 1450, 1000])
+        );
+    }
+
+    #[test]
     fn applies_channel_map_to_base_channels() {
         let map = ChannelMap::new([1, 2, 0, 3, 4]).unwrap();
         assert_eq!(
             map.apply(PpmChannels([1000, 1500, 1600, 1700, 2000])),
             PpmChannels([1500, 1600, 1000, 1700, 2000])
+        );
+    }
+
+    #[test]
+    fn applies_wire_mapping_inversions_and_safe_overrides() {
+        assert_eq!(
+            channels_to_wire(
+                PpmChannels([1200, 1300, 1400, 1500, 1000]),
+                ChannelMap([1, 2, 0, 3, 4]),
+                ChannelInversions([true, true, true, false, true]),
+                WireOverrides {
+                    force_idle_throttle: true,
+                    force_stabilizing_mode: true,
+                },
+            ),
+            PpmChannels([1700, 1600, IDLE_THROTTLE_PWM, 1500, STABILIZATION_PWM])
         );
     }
 
@@ -247,15 +434,28 @@ mod tests {
     }
 
     #[test]
-    fn maps_rc_channels_payload_to_base_channels() {
-        let mut payload = [0_u8; 64];
-        for (index, value) in [1100_i32, 1200, 1300, 1400, 1500].iter().enumerate() {
-            payload[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
-        }
+    fn maps_pwm_signal_outputs_payload_to_base_channels() {
+        // roll=1100, pitch=1200, throttle=1300, yaw=1400, stabilization=1500.
+        let data = PwmSignalOutputsData::new(
+            42, 0xffff, 0, 1100, 1200, 1300, 1400, 1500, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        );
 
         assert_eq!(
-            rc_channels_payload_to_channels(&payload),
+            pwm_signal_outputs_to_channels(&data.0),
             Some(PpmChannels([1300, 1100, 1800, 1600, 1500]))
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_size_pwm_signal_outputs_payload() {
+        assert_eq!(pwm_signal_outputs_to_channels(&[0_u8; 20]), None);
+        assert_eq!(
+            pwm_signal_outputs_to_channels(&[0_u8; PWM_SIGNAL_OUTPUTS_PAYLOAD_SIZE - 1]),
+            None
+        );
+        assert_eq!(
+            pwm_signal_outputs_to_channels(&[0_u8; PWM_SIGNAL_OUTPUTS_PAYLOAD_SIZE + 1]),
+            None
         );
     }
 }

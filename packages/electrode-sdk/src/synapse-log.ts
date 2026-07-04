@@ -73,7 +73,8 @@ enum GcsPayload {
   LinkStatus = 5,
   ModeState = 6,
   LocalizationState = 7,
-  Event = 8
+  Event = 8,
+  TelemetryJson = 9
 }
 
 enum CommonPriority {
@@ -359,7 +360,22 @@ function createGcsPayload(builder: Builder, frame: GcsFrame): EncodedPayload | n
     return { type: GcsPayload.LocalizationState, offset: builder.endObject() };
   }
 
-  return null;
+  // Anything else (raw Synapse wire topics: MocapFrame, ManualControl,
+  // PwmSignalOutputs, AttitudeEstimate, ...) is recorded as JSON so no
+  // stream is dropped; the header's message_type names the schema.
+  let json: string;
+  try {
+    json = JSON.stringify(telemetry.payload ?? null);
+  } catch {
+    return null;
+  }
+
+  const headerOffset = createHeader(builder, telemetry.header);
+  const jsonOffset = builder.createString(json);
+  builder.startObject(2);
+  builder.addFieldOffset(0, headerOffset, 0);
+  builder.addFieldOffset(1, jsonOffset, 0);
+  return { type: GcsPayload.TelemetryJson, offset: builder.endObject() };
 }
 
 function createEventPayload(builder: Builder, frame: EventFrame): EncodedPayload {
@@ -490,6 +506,18 @@ function decodeGcsFramePayload(bytes: Uint8Array): GcsFrame | null {
       quality: readFloat32Field(bb, payload, 10),
       updatedAtMs: Number(header.sourceTimeNs / 1_000_000)
     });
+  }
+
+  if (payloadType === GcsPayload.TelemetryJson) {
+    const header = decodeHeaderTable(bb, payload, 4);
+    const json = readStringField(bb, payload, 6);
+    let decoded: unknown = null;
+    try {
+      decoded = json ? JSON.parse(json) : null;
+    } catch {
+      return null;
+    }
+    return telemetryFrame(topic, header, decoded);
   }
 
   if (payloadType === GcsPayload.Event) {

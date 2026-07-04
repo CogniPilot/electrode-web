@@ -1,7 +1,9 @@
 [workspace]
 members = [
   "crates/electrode-web-core",
+  "crates/electrode-fake-sim",
   "crates/electrode-ground-bridge",
+  "crates/electrode-ground-station",
   "crates/electrode-log",
   "crates/electrode-manual-control-bridge",
   "crates/electrode-ppm-bridge"
@@ -22,7 +24,7 @@ futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serialport = "4.9"
-synapse_fbs = "0.1.5"
+synapse_fbs = "0.3.0"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "net"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }

@@ -1,13 +1,22 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const schemaDir = resolve(root, 'schemas/flatbuffers');
-const synapseSchemaDir = resolve(root, '..', 'synapse_fbs', 'fbs');
+// The Synapse log-container schema (`synapse.log.LogRecord`) is vendored under
+// `schemas/flatbuffers/synapse_log.fbs`: the published `@cognipilot/synapse-fbs`
+// package ships only the live topic schemas, not this logging format. The file
+// is self-contained and byte-identical to upstream `fbs/log.fbs`.
+const synapseSchemaDir = schemaDir;
+if (!existsSync(join(synapseSchemaDir, 'synapse_log.fbs'))) {
+  throw new Error(
+    `Missing ${join(synapseSchemaDir, 'synapse_log.fbs')} — the vendored Synapse log schema.`
+  );
+}
 const outFile = resolve(root, 'packages/electrode-flatbuffers/src/schema-assets.ts');
 
 const assets = [

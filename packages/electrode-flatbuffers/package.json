@@ -13,7 +13,7 @@
     "typescript": "^5.9.0"
   },
   "dependencies": {
-    "flatbuffers": "^25.2.10"
+    "flatbuffers": "25.9.23"
   }
 }
 

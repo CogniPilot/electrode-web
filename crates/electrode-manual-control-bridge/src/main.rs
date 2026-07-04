@@ -6,10 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{ArgAction, Parser};
-use flatbuffers::FlatBufferBuilder;
-use synapse_fbs::topic::{
-    ManualControl, ManualControlArgs, ManualControlAux8f, ManualControlAxes, ManualControlData,
-};
+use synapse_fbs::topic::{ManualControlAxes, ManualControlData, ManualControlFlags};
 use thiserror::Error;
 use zenoh::{config::Config, Wait};
 
@@ -23,7 +20,7 @@ const JS_EVENT_INIT: u8 = 0x80;
     version,
     about = "Bridge a USB RC transmitter joystick to Synapse ManualControl over Zenoh",
     long_about = "Reads Linux /dev/input/js* events from a USB RC transmitter, converts them into \
-synapse.topic.ManualControl FlatBuffers, and publishes them on a Zenoh key expression.",
+synapse.topic.ManualControlData bare structs, and publishes them on a Zenoh key expression.",
     next_line_help = true,
     after_help = "\
 Examples:
@@ -154,6 +151,22 @@ struct MappingArgs {
         help = "Optional joystick button index for kill_switch"
     )]
     kill_button: Option<u8>,
+
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = false,
+        help = "Treat the arm button as a toggle: each press latches high/low (vs momentary while held)"
+    )]
+    arm_toggle: bool,
+
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = false,
+        help = "Treat the kill button as a toggle: each press latches high/low"
+    )]
+    kill_toggle: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -164,7 +177,7 @@ struct ZenohArgs {
         env = "ZENOH_CONNECT",
         value_name = "LOCATOR",
         default_value = "udp/127.0.0.1:7447",
-        help = "Zenoh router locator"
+        help = "Zenoh router/peer locator to connect to (matches the ground-bridge peer default)"
     )]
     zenoh_connect: String,
 
@@ -173,8 +186,8 @@ struct ZenohArgs {
         alias = "zenoh-topic",
         env = "ZENOH_TOPIC",
         value_name = "KEYEXPR",
-        default_value = "synapse/manual_control",
-        help = "Zenoh key expression for synapse.topic.ManualControl payloads"
+        default_value = "synapse/v1/topic/manual_control_command",
+        help = "Zenoh key expression for synapse.topic.ManualControlData bare structs"
     )]
     topic: String,
 }
@@ -209,6 +222,9 @@ struct ManualState {
     axes: [f32; 32],
     buttons: [bool; 64],
     last_event: Option<Instant>,
+    // Latched outputs for buttons configured as toggles (flip on each press).
+    arm_latched: bool,
+    kill_latched: bool,
 }
 
 impl Default for ManualState {
@@ -217,6 +233,8 @@ impl Default for ManualState {
             axes: [0.0; 32],
             buttons: [false; 64],
             last_event: None,
+            arm_latched: false,
+            kill_latched: false,
         }
     }
 }
@@ -246,9 +264,9 @@ fn main() -> Result<()> {
     loop {
         match rx.recv_timeout(publish_period) {
             Ok(event) => {
-                apply_event(&mut state, event);
+                apply_event(&mut state, event, &cli.mapping);
                 while let Ok(event) = rx.try_recv() {
-                    apply_event(&mut state, event);
+                    apply_event(&mut state, event, &cli.mapping);
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -306,7 +324,7 @@ fn read_joystick_events(device: PathBuf, tx: mpsc::Sender<JoystickEvent>) -> io:
     }
 }
 
-fn apply_event(state: &mut ManualState, event: JoystickEvent) {
+fn apply_event(state: &mut ManualState, event: JoystickEvent, mapping: &MappingArgs) {
     state.last_event = Some(Instant::now());
     match event.kind {
         EventKind::Axis => {
@@ -315,8 +333,20 @@ fn apply_event(state: &mut ManualState, event: JoystickEvent) {
             }
         }
         EventKind::Button => {
-            if let Some(button) = state.buttons.get_mut(usize::from(event.number)) {
-                *button = event.value != 0;
+            let idx = usize::from(event.number);
+            let pressed = event.value != 0;
+            let was_pressed = state.buttons.get(idx).copied().unwrap_or(false);
+            if let Some(button) = state.buttons.get_mut(idx) {
+                *button = pressed;
+            }
+            // On a rising edge (press), flip any toggle latched to this button.
+            if pressed && !was_pressed {
+                if mapping.arm_toggle && mapping.arm_button == Some(event.number) {
+                    state.arm_latched = !state.arm_latched;
+                }
+                if mapping.kill_toggle && mapping.kill_button == Some(event.number) {
+                    state.kill_latched = !state.kill_latched;
+                }
             }
         }
     }
@@ -340,26 +370,65 @@ fn encode_manual_control(state: &ManualState, mapping: &MappingArgs, valid: bool
     let mode_axis = signed_axis(state, mapping.mode_axis, false);
     let flight_mode = if mode_axis > 0.0 { 1 } else { 0 };
     let active = signed_axis(state, mapping.active_axis, mapping.invert_active) > 0.0;
-    let arm_switch = mapped_button(state, mapping.arm_button);
-    let kill_switch = mapped_button(state, mapping.kill_button);
+    let arm_switch = if mapping.arm_toggle {
+        state.arm_latched
+    } else {
+        mapped_button(state, mapping.arm_button)
+    };
+    let kill_switch = if mapping.kill_toggle {
+        state.kill_latched
+    } else {
+        mapped_button(state, mapping.kill_button)
+    };
+
+    // Scale normalized stick/aux inputs (-1..1) to the wire's -1000..1000 shorts.
+    let to_milli = |value: f32| (value * 1000.0).round().clamp(-1000.0, 1000.0) as i16;
+    // We drive the four sticks plus aux0..5, so mark those axes valid.
+    let active_axes = (ManualControlAxes::Pitch
+        | ManualControlAxes::Roll
+        | ManualControlAxes::Throttle
+        | ManualControlAxes::Yaw
+        | ManualControlAxes::Aux0
+        | ManualControlAxes::Aux1
+        | ManualControlAxes::Aux2
+        | ManualControlAxes::Aux3
+        | ManualControlAxes::Aux4
+        | ManualControlAxes::Aux5)
+        .bits();
+    let mut flags = ManualControlFlags::empty();
+    if arm_switch {
+        flags |= ManualControlFlags::ArmSwitch;
+    }
+    if kill_switch {
+        flags |= ManualControlFlags::KillSwitch;
+    }
+    if active {
+        flags |= ManualControlFlags::Active;
+    }
+    if valid {
+        flags |= ManualControlFlags::Valid;
+    }
 
     let data = ManualControlData::new(
         timestamp_us(),
-        &ManualControlAxes::new(roll, pitch, yaw, throttle),
-        &ManualControlAux8f::new(
-            aux[0], aux[1], aux[2], aux[3], aux[4], aux[5], aux[6], aux[7],
-        ),
+        0,
+        active_axes,
+        to_milli(pitch),
+        to_milli(roll),
+        to_milli(throttle),
+        to_milli(yaw),
+        to_milli(aux[0]),
+        to_milli(aux[1]),
+        to_milli(aux[2]),
+        to_milli(aux[3]),
+        to_milli(aux[4]),
+        to_milli(aux[5]),
         flight_mode,
-        arm_switch,
-        kill_switch,
-        active,
-        valid,
+        flags.bits(),
     );
 
-    let mut builder = FlatBufferBuilder::new();
-    let message = ManualControl::create(&mut builder, &ManualControlArgs { data: Some(&data) });
-    builder.finish(message, None);
-    builder.finished_data().to_vec()
+    // Publish the raw bare-struct bytes (inverse of topic_decode's follow).
+    data.0.to_vec()
 }
 
 fn signed_axis(state: &ManualState, axis: u8, invert: bool) -> f32 {

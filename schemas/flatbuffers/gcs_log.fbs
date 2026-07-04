@@ -3,6 +3,15 @@ include "events.fbs";
 
 namespace electrode.gcs;
 
+// Catch-all for any decoded frame without a dedicated table above (raw
+// Synapse wire topics: MocapFrame, ManualControl, PwmSignalOutputs, ...).
+// The payload is the JSON-serialized decoded value; the header's
+// message_type names the schema.
+table TelemetryJson {
+  header:electrode.common.Header;
+  json:string;
+}
+
 union GcsPayload {
   electrode.state.Pose,
   electrode.state.Velocity,
@@ -11,7 +20,8 @@ union GcsPayload {
   electrode.state.LinkStatus,
   electrode.state.ModeState,
   electrode.state.LocalizationState,
-  electrode.events.Event
+  electrode.events.Event,
+  TelemetryJson
 }
 
 table GcsFrame {

@@ -1,6 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import IndoorScene from '$lib/components/IndoorScene.svelte';
+  import DeflectionView from '$lib/components/DeflectionView.svelte';
+  import ManualLinkView from '$lib/components/ManualLinkView.svelte';
+  import GroundStationPanel from '$lib/components/GroundStationPanel.svelte';
+  import RcMappingPanel from '$lib/components/RcMappingPanel.svelte';
+  import PpmHardwarePanel from '$lib/components/PpmHardwarePanel.svelte';
+  import AutopilotProfilePanel from '$lib/components/AutopilotProfilePanel.svelte';
+  import SimulationPanel from '$lib/components/SimulationPanel.svelte';
+  import { detectGroundStation, isGroundStation } from '$lib/capabilities';
+  import {
+    fetchAutopilotRunStatus,
+    fetchBridgeStatus,
+    setAutopilotRunning,
+    setBridgeRunning,
+    type AutopilotRunStatus
+  } from '$lib/gcs';
   import {
     Activity,
     AlertTriangle,
@@ -11,15 +26,14 @@
     Download,
     Gauge,
     MapPinned,
+    Moon,
     Plug,
     Power,
     Radio,
     RotateCcw,
-    Satellite,
-    ShieldCheck,
     Square,
-    Upload,
-    Wifi
+    Sun,
+    Upload
   } from '@lucide/svelte';
   import {
     COMMAND_DEFINITIONS,
@@ -37,6 +51,8 @@
     type ReplayState,
     type RuntimeMode,
     type SynapseLogExport,
+    type TopicCatalog,
+    type TopicSnapshot,
     type VehicleState
   } from '@electrode/sdk';
 
@@ -47,9 +63,12 @@
     | { type: 'recording'; recording: boolean; count: number }
     | { type: 'recordingExport'; export: SynapseLogExport }
     | { type: 'plotState'; plotState: PlotState }
+    | { type: 'topicCatalog'; catalog: TopicCatalog }
     | { type: 'replay'; replay: ReplayState };
 
   type MapViewMode = '2d' | '3d';
+  type VehicleKind = 'quadrotor' | 'fixedwing';
+  type GroundStationPage = 'dashboard' | 'firmware' | 'sim';
   type PlotTraceSelection = {
     packetKey: string;
     fieldPath: string;
@@ -66,38 +85,110 @@
   };
 
   const vehicleId = 'electrode-01';
-  const runtimeModes: RuntimeMode[] = ['simulator', 'zenoh', 'bridge', 'replay'];
+  const runtimeModes: RuntimeMode[] = ['zenoh', 'replay'];
   const mapViewModes: MapViewMode[] = ['2d', '3d'];
-  const plotTraceColors = ['#42e8c4', '#ffbf57'] as const;
+  const groundStationPages: Array<{ key: GroundStationPage; label: string }> = [
+    { key: 'dashboard', label: 'Dashboard' },
+    { key: 'firmware', label: 'Firmware' },
+    { key: 'sim', label: 'SIM' }
+  ];
+  type ThemeName = 'light' | 'dark';
   const commandEntries = Object.entries(COMMAND_DEFINITIONS) as Array<[CommandName, (typeof COMMAND_DEFINITIONS)[CommandName]]>;
   const flightModes = ['hold', 'manual', 'mission', 'return', 'land'];
-  const manualChannels = [
-    ['THR', '0'],
-    ['ROLL', '1'],
-    ['PITCH', '2'],
-    ['YAW', '3'],
-    ['MODE', '4']
-  ] as const;
   const manualLinks = [
-    ['Manual', 'synapse/manual_control'],
-    ['Auto', 'synapse/control_output'],
+    ['Manual', 'synapse/v1/topic/manual_control_command'],
+    ['Selected PWM', 'synapse/motor_output'],
     ['Serial', '/dev/ttyACM0 · 57600']
   ] as const;
   const rollTicks = [-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60];
-  const pitchMarks = [-30, -20, -10, 10, 20, 30];
+
+  // Head-up display geometry (SVG user units, 560x500 viewBox).
+  const HUD_CX = 280;
+  const HUD_CY = 250;
+  const HUD_PX_PER_DEG_HDG = 4.6;
+  const HUD_PX_PER_DEG_PITCH = 4.2;
+
+  function hudHeadingLabel(nd: number): string {
+    if (nd === 0) return 'N';
+    if (nd === 90) return 'E';
+    if (nd === 180) return 'S';
+    if (nd === 270) return 'W';
+    return String(Math.round(nd / 10));
+  }
+  function buildHeadingTicks(yaw: number) {
+    const ticks: { x: number; label: string; major: boolean }[] = [];
+    const base = Math.round(yaw / 5) * 5;
+    for (let off = -30; off <= 30; off += 5) {
+      const deg = base + off;
+      const nd = ((deg % 360) + 360) % 360;
+      const dx = ((deg - yaw + 540) % 360) - 180;
+      const major = nd % 10 === 0;
+      ticks.push({ x: HUD_CX + dx * HUD_PX_PER_DEG_HDG, label: major ? hudHeadingLabel(nd) : '', major });
+    }
+    return ticks;
+  }
+  function buildPitchRungs(pitch: number): number[] {
+    const rungs: number[] = [];
+    const lo = Math.ceil((pitch - 40) / 10) * 10;
+    const hi = Math.floor((pitch + 40) / 10) * 10;
+    for (let m = lo; m <= hi; m += 10) {
+      if (m === 0 || m < -90 || m > 90) continue;
+      rungs.push(m);
+    }
+    return rungs;
+  }
+
+  function centeredToPwm(value: number): number {
+    return Math.round(clamp(value, -1, 1) * 500 + 1500);
+  }
+
+  function throttleToPwm(value: number): number {
+    return Math.round(clamp(value, 0, 1) * 1000 + 1000);
+  }
+
+  function centeredFromPwm(value: number): number {
+    return clamp((value - 1500) / 500, -1, 1);
+  }
+
+  function throttleFromPwm(value: number): number {
+    return clamp((value - 1000) / 1000, 0, 1);
+  }
+
+  function manualControlPwm(manual: VehicleState['manualControl']): number[] | null {
+    if (!manual || !manual.valid || manual.killSwitch) return null;
+    return [
+      centeredToPwm(manual.roll),
+      centeredToPwm(manual.pitch),
+      throttleToPwm(manual.throttle),
+      centeredToPwm(-manual.yaw)
+    ];
+  }
+
+  function pwmControlInputs(pwm: number[] | null | undefined): VehicleState['controls'] {
+    if (!pwm || pwm.length < 4) return null;
+    return {
+      aileron: centeredFromPwm(pwm[0]),
+      elevator: centeredFromPwm(pwm[1]),
+      throttle: throttleFromPwm(pwm[2]),
+      rudder: centeredFromPwm(pwm[3])
+    };
+  }
 
   let worker: Worker | null = null;
-  let runtimeMode: RuntimeMode = 'simulator';
+  let theme: ThemeName = 'dark';
+  let activePage: GroundStationPage = initialGroundStationPage();
+  let runtimeMode: RuntimeMode = 'zenoh';
   let mapViewMode: MapViewMode = initialMapViewMode();
+  let selectedVehicleType: VehicleKind = 'fixedwing';
   let zenohEndpoint = 'ws/127.0.0.1:7447';
-  let bridgeUrl = 'ws://127.0.0.1:8787/ws';
   let selectedMode = 'hold';
   let vehicle = createInitialVehicleState(vehicleId);
-  let connection: ConnectionState = { mode: 'simulator', status: 'disconnected', url: '', message: 'offline' };
+  let connection: ConnectionState = { mode: 'zenoh', status: 'disconnected', url: '', message: 'offline' };
   let replay: ReplayState = { loaded: false, playing: false, cursorMs: 0, durationMs: 0, speed: 1, frameCount: 0 };
   let recording = false;
   let recordingCount = 0;
   let plotState: PlotState = { packets: createPlotPacketCatalog(vehicleId), series: [], updatedAtMs: 0 };
+  let topicCatalog: TopicCatalog | null = null;
   let plotTraces: PlotTraceSelection[] = [
     { packetKey: plotPacketKey(`vehicle/${vehicleId}/state/pose`, 'Pose'), fieldPath: 'altM' },
     { packetKey: plotPacketKey(`vehicle/${vehicleId}/state/velocity`, 'Velocity'), fieldPath: 'groundSpeedMps' }
@@ -107,6 +198,10 @@
   $: warningCount = vehicle.events.filter((event) => event.severity !== 'info').length;
   $: pose = vehicle.pose;
   $: attitude = vehicle.attitude;
+  $: controls = vehicle.controls;
+  $: manualControl = vehicle.manualControl;
+  $: radioControl = vehicle.radioControl;
+  $: motors = vehicle.motors;
   $: battery = vehicle.battery;
   $: link = vehicle.link;
   $: mapSubtitle =
@@ -120,8 +215,56 @@
   $: yawDeg = attitude?.yawDeg ?? 0;
   $: rollDeg = attitude?.rollDeg ?? 0;
   $: pitchDeg = attitude?.pitchDeg ?? 0;
-  $: bankPointerDeg = clamp(rollDeg, -60, 60);
-  $: pitchOffset = clamp(pitchDeg * 2.2, -54, 54);
+
+  // State I/O panel: live per-topic snapshots (rate + staleness) for the
+  // state bus around the autopilot, plant, mocap, and manual controller.
+  function topicBySuffix(state: VehicleState, suffix: string): TopicSnapshot | null {
+    for (const snapshot of Object.values(state.topics)) {
+      if (snapshot.topic.endsWith(suffix)) return snapshot;
+    }
+    return null;
+  }
+  $: ioHealth = topicBySuffix(vehicle, 'vehicle_health');
+  $: ioAttitude = topicBySuffix(vehicle, 'attitude_estimate');
+  $: ioSelectedPwm = topicBySuffix(vehicle, 'motor_output');
+  $: ioPwm = ioSelectedPwm && !ioSelectedPwm.stale ? ioSelectedPwm : topicBySuffix(vehicle, 'pwm_signal_outputs');
+  $: ioManual = topicBySuffix(vehicle, 'manual_control_command');
+  $: ioMocap = topicBySuffix(vehicle, 'mocap_frame') ?? topicBySuffix(vehicle, 'pose');
+  $: requestedControlSource = manualControl
+    ? manualControl.valid
+      ? manualControl.flightMode > 0
+        ? 'autopilot'
+        : manualControl.flightMode === 0
+          ? 'manual'
+          : `mode ${manualControl.flightMode}`
+      : 'failsafe'
+    : 'unknown';
+  $: requestedControlSourceDetail = manualControl
+    ? `${manualControl.active ? 'stabilization on' : 'stabilization off'} · mode ${manualControl.flightMode}`
+    : 'waiting for manual_control_command';
+  $: autopilotReportedMode = vehicle.mode.name;
+  $: controlModeMismatch =
+    manualControl?.valid === true &&
+    ((manualControl.flightMode > 0 && autopilotReportedMode !== 'auto') ||
+      (manualControl.flightMode === 0 && autopilotReportedMode === 'auto'));
+  $: manualPwm = requestedControlSource === 'manual' ? manualControlPwm(manualControl) : null;
+  $: displayedPwm = motors && motors.length >= 4 ? motors.slice(0, 4) : manualPwm;
+  $: displayedPwmLabel = ioSelectedPwm ? 'Selected PWM' : manualPwm ? 'Manual PWM' : 'Autopilot PWM';
+  $: deflectionControls = requestedControlSource === 'manual' ? controls : pwmControlInputs(displayedPwm);
+
+  function ioRate(snapshot: TopicSnapshot | null): string {
+    if (!snapshot) return 'no data';
+    if (snapshot.stale) return 'stale';
+    return `${snapshot.rateHz.toFixed(1)} Hz`;
+  }
+  $: hudSpeedMps = vehicle.velocity?.groundSpeedMps ?? 0;
+  $: hudAltMeters = pose?.altM ?? 0;
+  $: hudClimbMps = -(vehicle.velocity?.downMps ?? 0);
+  $: hudQualityPct = vehicle.localization.quality * 100;
+  $: hudHeadingText = String(Math.round(((yawDeg % 360) + 360) % 360) % 360).padStart(3, '0');
+  $: headingTicks = buildHeadingTicks(yawDeg);
+  $: pitchRungs = buildPitchRungs(pitchDeg);
+  $: horizonY = HUD_CY + pitchDeg * HUD_PX_PER_DEG_PITCH;
   $: staleTopics = topicRows.filter((topic) => topic.stale).length;
   $: plotPackets = plotState.packets;
   $: {
@@ -130,12 +273,87 @@
       plotTraces = nextPlotTraces;
     }
   }
+  $: plotTraceColors = theme === 'dark' ? ['#fd7719', '#f4fbf7'] : ['#e35f0c', '#12171b'];
   $: resolvedPlotTraces = plotTraces.map((trace, index) =>
-    resolvePlotTrace(trace, plotTraceColors[index] ?? '#42e8c4', plotState, plotPackets)
+    resolvePlotTrace(trace, plotTraceColors[index] ?? '#fd7719', plotState, plotPackets)
   );
   $: plotHasSamples = resolvedPlotTraces.some((trace) => trace.series && trace.series.samples.length > 1);
 
+  // Daemon-supervised native autopilot (cubs2 native_sim + Zenoh link).
+  let autopilotRun: AutopilotRunStatus | null = null;
+  let autopilotBusy = false;
+  let autopilotError = '';
+  let manualBridgeRunning = false;
+  let manualBridgeBusy = false;
+  let manualBridgeStatus = 'checking...';
+  $: autopilotRunning = autopilotRun?.running ?? false;
+
+  async function refreshAutopilotRun(): Promise<void> {
+    if (!$isGroundStation) return;
+    try {
+      autopilotRun = await fetchAutopilotRunStatus();
+    } catch {
+      // Backend briefly unreachable; keep the last status.
+    }
+  }
+
+  async function toggleAutopilot(): Promise<void> {
+    if (autopilotBusy) return;
+    autopilotBusy = true;
+    autopilotError = '';
+    try {
+      autopilotRun = await setAutopilotRunning(autopilotRunning ? 'stop' : 'start');
+    } catch (error) {
+      autopilotError = error instanceof Error ? error.message : String(error);
+    } finally {
+      autopilotBusy = false;
+    }
+  }
+
+  async function refreshManualBridge(): Promise<void> {
+    if (!$isGroundStation) return;
+    try {
+      const status = await fetchBridgeStatus();
+      manualBridgeRunning = status.running;
+      manualBridgeStatus = status.running
+        ? `manual publisher active · ${status.bin}`
+        : status.ppmRunning
+          ? 'manual publisher stopped · PPM hardware running'
+          : 'stopped';
+    } catch {
+      manualBridgeStatus = 'manual bridge unavailable';
+    }
+  }
+
+  async function toggleManualBridge(): Promise<void> {
+    if (manualBridgeBusy) return;
+    manualBridgeBusy = true;
+    try {
+      const status = await setBridgeRunning(!manualBridgeRunning);
+      manualBridgeRunning = status.running;
+      manualBridgeStatus = status.running
+        ? `manual publisher active · ${status.bin}`
+        : 'stopped';
+    } catch (error) {
+      manualBridgeStatus = error instanceof Error ? error.message : 'manual bridge toggle failed';
+    } finally {
+      manualBridgeBusy = false;
+    }
+  }
+
   onMount(() => {
+    const stored = document.documentElement.dataset.theme;
+    theme = stored === 'light' ? 'light' : 'dark';
+
+    // Unlock Ground Station (hardware) features when a local backend answers on
+    // this origin; otherwise this is the display-only Viewer.
+    void detectGroundStation().then(() => {
+      void refreshAutopilotRun();
+      void refreshManualBridge();
+    });
+    const autopilotTimer = setInterval(() => void refreshAutopilotRun(), 2000);
+    const manualBridgeTimer = setInterval(() => void refreshManualBridge(), 2000);
+
     worker = new Worker(new URL('$lib/workers/comms.worker.ts', import.meta.url), { type: 'module' });
     worker.addEventListener('message', (event: MessageEvent<WorkerOut>) => {
       const message = event.data;
@@ -151,6 +369,8 @@
         exportRecordingFile(message.export);
       } else if (message.type === 'plotState') {
         plotState = message.plotState;
+      } else if (message.type === 'topicCatalog') {
+        topicCatalog = message.catalog;
       } else if (message.type === 'replay') {
         replay = message.replay;
       }
@@ -159,14 +379,26 @@
     connect();
 
     return () => {
+      clearInterval(autopilotTimer);
+      clearInterval(manualBridgeTimer);
       worker?.postMessage({ type: 'disconnect' });
       worker?.terminate();
       worker = null;
     };
   });
 
+  function toggleTheme(): void {
+    theme = theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem('electrode-theme', theme);
+    } catch {
+      // ignore storage failures (private mode, etc.)
+    }
+  }
+
   function connect(): void {
-    const url = runtimeMode === 'zenoh' ? zenohEndpoint : bridgeUrl;
+    const url = zenohEndpoint;
     worker?.postMessage({ type: 'connect', mode: runtimeMode, url, vehicleId });
   }
 
@@ -177,6 +409,30 @@
 
     const requested = new URLSearchParams(window.location.search).get('map') as MapViewMode | null;
     return requested && mapViewModes.includes(requested) ? requested : '3d';
+  }
+
+  function initialGroundStationPage(): GroundStationPage {
+    if (typeof window === 'undefined') {
+      return 'dashboard';
+    }
+
+    const requested = new URLSearchParams(window.location.search).get('page') as GroundStationPage | null;
+    return requested && groundStationPages.some((page) => page.key === requested) ? requested : 'dashboard';
+  }
+
+  function setGroundStationPage(page: GroundStationPage): void {
+    activePage = page;
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const url = new URL(window.location.href);
+    if (page === 'dashboard') {
+      url.searchParams.delete('page');
+    } else {
+      url.searchParams.set('page', page);
+    }
+    window.history.replaceState({}, '', url);
   }
 
   function disconnect(): void {
@@ -191,6 +447,19 @@
 
     const args = command === 'setMode' ? { mode: selectedMode } : {};
     worker?.postMessage({ type: 'command', command, args });
+  }
+
+  function toggleTopicSubscription(key: string): void {
+    if (!topicCatalog) {
+      return;
+    }
+    const selected = new Set(topicCatalog.topics.filter((topic) => topic.selected).map((topic) => topic.key));
+    if (selected.has(key)) {
+      selected.delete(key);
+    } else {
+      selected.add(key);
+    }
+    worker?.postMessage({ type: 'setSubscriptions', keys: [...selected] });
   }
 
   function startRecording(): void {
@@ -387,9 +656,12 @@
   <header class="topbar">
     <div class="brand">
       <div class="brand-mark">
-        <img src="/cognipilot-mark.png" alt="CogniPilot" />
+        <img
+          src={theme === 'light' ? '/electrode-light.png' : '/electrode-dark.png'}
+          alt="electrode — ground station for CogniPilot"
+        />
       </div>
-      <div>
+      <div class="brand-meta">
         <h1>electrode</h1>
         <p>{vehicle.vehicleId}</p>
       </div>
@@ -405,6 +677,19 @@
     </div>
 
     <div class="header-actions">
+      <button
+        type="button"
+        class="icon-button quiet"
+        title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        aria-label="Toggle color theme"
+        onclick={toggleTheme}
+      >
+        {#if theme === 'dark'}
+          <Sun size={18} />
+        {:else}
+          <Moon size={18} />
+        {/if}
+      </button>
       <button type="button" class="icon-button primary" title="Connect" onclick={connect}>
         <Plug size={18} />
         <span>Connect</span>
@@ -415,26 +700,31 @@
     </div>
   </header>
 
-  <section class="status-strip">
-    <div class="strip-item" class:ok={vehicle.connected} class:warn={!vehicle.connected}>
-      <Wifi size={18} />
-      <span>{connection.status}</span>
-    </div>
-    <div class="strip-item" class:ok={vehicle.localization.fresh} class:warn={!vehicle.localization.fresh}>
-      <Satellite size={18} />
-      <span>{vehicle.localization.source}</span>
-    </div>
-    <div class="strip-item" class:ok={!vehicle.mode.failsafe} class:danger={vehicle.mode.failsafe}>
-      <ShieldCheck size={18} />
-      <span>{vehicle.mode.failsafe ? 'failsafe' : 'nominal'}</span>
-    </div>
-    <div class="strip-item" class:warn={staleTopics > 0} class:ok={staleTopics === 0 && topicRows.length > 0}>
-      <Activity size={18} />
-      <span>{staleTopics} stale</span>
-    </div>
-  </section>
+  {#if $isGroundStation}
+    <nav class="ground-nav" aria-label="Ground Station sections">
+      {#each groundStationPages as page}
+        <button
+          type="button"
+          class:active={activePage === page.key}
+          onclick={() => setGroundStationPage(page.key)}
+        >
+          {page.label}
+        </button>
+      {/each}
+    </nav>
+  {/if}
 
-  <div class="dashboard">
+  {#if !$isGroundStation || activePage === 'dashboard'}
+    {#if $isGroundStation}
+      <GroundStationPanel {theme} />
+      <details class="config-panel">
+        <summary>Dashboard config</summary>
+        <RcMappingPanel {theme} />
+        <PpmHardwarePanel {theme} channels={radioControl} />
+      </details>
+    {/if}
+
+    <div class="dashboard">
     <section class="panel connection-panel">
       <div class="panel-heading">
         <div>
@@ -449,15 +739,10 @@
           <span>Zenoh endpoint or JSON5 config</span>
           <input bind:value={zenohEndpoint} spellcheck="false" />
         </label>
-      {:else if runtimeMode === 'bridge'}
-        <label class="field">
-          <span>Bridge URL</span>
-          <input bind:value={bridgeUrl} spellcheck="false" />
-        </label>
       {:else}
         <div class="transport-readout">
           <span>Transport</span>
-          <strong>{runtimeMode === 'replay' ? 'replay://memory' : 'simulator://electrode'}</strong>
+          <strong>replay://memory</strong>
         </div>
       {/if}
 
@@ -470,6 +755,141 @@
           <Square size={18} />
           <span>Close</span>
         </button>
+      </div>
+    </section>
+
+    {#if $isGroundStation}
+      <section class="panel autopilot-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Autopilot</h2>
+            <p>
+              {autopilotError || autopilotRun?.message || 'checking...'}
+              — local cubs2 (native_sim); hardware boots on power and shows in Autopilot I/O
+            </p>
+          </div>
+          <Power size={20} />
+        </div>
+
+        <div class="metrics">
+          <div class="metric">
+            <span>State</span>
+            <strong>{autopilotRunning ? `running · pid ${autopilotRun?.pid ?? '—'}` : 'stopped'}</strong>
+          </div>
+          <div class="metric">
+            <span>Frames out</span>
+            <strong>{autopilotRun?.framesOut ?? 0}</strong>
+          </div>
+          <div class="metric">
+            <span>Frames in</span>
+            <strong>{autopilotRun?.framesIn ?? 0}</strong>
+          </div>
+        </div>
+
+        <div class="button-row">
+          <button
+            type="button"
+            class="icon-button primary"
+            onclick={() => void toggleAutopilot()}
+            disabled={autopilotBusy}
+          >
+            {#if autopilotRunning}
+              <Square size={18} />
+              <span>Stop</span>
+            {:else}
+              <CirclePlay size={18} />
+              <span>Start</span>
+            {/if}
+          </button>
+        </div>
+      </section>
+    {/if}
+
+    <section class="panel io-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>State I/O</h2>
+          <p>mocap, autopilot telemetry, actuator commands, and manual control</p>
+        </div>
+        <Activity size={20} />
+      </div>
+
+      <div class="mode-readout">
+        <span>Autopilot reported</span>
+        <strong class:on={vehicle.mode.name === 'auto'}>{vehicle.mode.name}</strong>
+        <em>{vehicle.mode.armed ? 'armed' : 'disarmed'}{vehicle.mode.failsafe ? ' · FAILSAFE' : ''}</em>
+      </div>
+
+      <div class="io-group">
+        <h3>Mocap 6DOF pose</h3>
+        <div class="io-row">
+          <span>Position <em>{ioRate(ioMocap)}</em></span>
+          <strong>
+            {pose
+              ? `x ${format(pose.xM)} · y ${format(pose.yM)} · z ${format(pose.altM)} m`
+              : '--'}
+          </strong>
+        </div>
+        <div class="io-row">
+          <span>Orientation <em>{vehicle.localization.source}</em></span>
+          <strong>r {format(attitude?.rollDeg)}° · p {format(attitude?.pitchDeg)}° · y {format(attitude?.yawDeg)}°</strong>
+        </div>
+        <div class="io-row">
+          <span>Tracking <em>{vehicle.localization.fresh ? 'fresh' : 'stale'}</em></span>
+          <strong>{vehicle.localization.source} · quality {format(vehicle.localization.quality * 100, 0)}%</strong>
+        </div>
+      </div>
+
+      <div class="io-group">
+        <h3>Autopilot telemetry received</h3>
+        <div class="io-row">
+          <span>Flight mode <em>{ioRate(ioHealth)}</em></span>
+          <strong class:on={vehicle.mode.name === 'auto'}>
+            {vehicle.mode.name} · {vehicle.mode.armed ? 'armed' : 'disarmed'}{vehicle.mode.failsafe ? ' · FAILSAFE' : ''}
+          </strong>
+        </div>
+        <div class="io-row">
+          <span>Attitude <em>{ioRate(ioAttitude)}</em></span>
+          <strong>r {format(attitude?.rollDeg)}° · p {format(attitude?.pitchDeg)}° · y {format(attitude?.yawDeg)}°</strong>
+        </div>
+        <div class="io-row">
+          <span>Link <em>{ioRate(ioHealth)}</em></span>
+          <strong>{format(link?.latencyMs, 0)} ms · {format(link?.rssiDbm, 0)} dBm · loss {format(link?.packetLossPct, 0)}%</strong>
+        </div>
+      </div>
+
+      <div class="io-group">
+        <h3>Selected raw commands to sim/hardware</h3>
+        <div class="io-row">
+          <span>{displayedPwmLabel} <em>{ioRate(ioPwm)}</em></span>
+          <strong>
+            {displayedPwm && displayedPwm.length >= 4
+              ? `${displayedPwm[0]} · ${displayedPwm[1]} · ${displayedPwm[2]} · ${displayedPwm[3]} µs`
+              : '--'}
+          </strong>
+        </div>
+      </div>
+
+      <div class="io-group">
+        <h3>Manual control state</h3>
+        <div class="io-row">
+          <span>Mode switch request <em>{ioRate(ioManual)}</em></span>
+          <strong class:on={requestedControlSource === 'autopilot'} class:warn={controlModeMismatch}>
+            {requestedControlSource} · {requestedControlSourceDetail}
+            {controlModeMismatch ? ' · not accepted by autopilot' : ''}
+          </strong>
+        </div>
+        <div class="io-row">
+          <span>Manual control <em>{ioRate(ioManual)}</em></span>
+          <strong>
+            {#if manualControl}
+              r {format(manualControl.roll, 2)} · p {format(manualControl.pitch, 2)} · y {format(manualControl.yaw, 2)} · t {format(manualControl.throttle, 2)}
+              {manualControl.armSwitch ? ' · ARM' : ''}{manualControl.killSwitch ? ' · KILL' : ''}
+            {:else}
+              --
+            {/if}
+          </strong>
+        </div>
       </div>
     </section>
 
@@ -528,34 +948,57 @@
 
       {#if mapViewMode === '2d'}
         <div class="map-canvas outdoor-map">
-          <svg class="mission-line" viewBox="0 0 100 100" aria-hidden="true">
-            <path d="M18 72 C28 26 48 24 60 42 S78 74 88 28" />
-          </svg>
           <div class="map-home">HOME</div>
           <div
             class="vehicle-marker"
-            style={`left: ${mapX}%; top: ${mapY}%; transform: translate(-50%, -50%) rotate(${yawDeg}deg);`}
+            style={`left: ${mapX}%; top: ${mapY}%; transform: translate(-50%, -50%) rotate(${90 - yawDeg}deg);`}
             title="Vehicle position"
           >
-            <svg class="map-axes-marker" viewBox="-24 -24 48 48" aria-hidden="true">
-              <defs>
-                <marker id="map-axis-forward" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto">
-                  <path d="M0 0 L8 4 L0 8 Z" />
-                </marker>
-                <marker id="map-axis-right" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="4.5" markerHeight="4.5" orient="auto">
-                  <path d="M0 0 L8 4 L0 8 Z" />
-                </marker>
-              </defs>
-              <line class="map-axis-forward" x1="0" y1="0" x2="0" y2="-17" marker-end="url(#map-axis-forward)" />
-              <line class="map-axis-right" x1="0" y1="0" x2="15" y2="0" marker-end="url(#map-axis-right)" />
-              <circle cx="0" cy="0" r="3.2" />
+            <svg class="map-vehicle-marker" viewBox="-24 -24 48 48" aria-hidden="true">
+              <!-- inner group leans with roll to hint the bank angle -->
+              <g transform={`skewX(${clamp(-rollDeg * 0.35, -20, 20)})`}>
+                {#if selectedVehicleType === 'fixedwing'}
+                  <path
+                    class="map-vehicle-body"
+                    d="M0 -19 L2.4 -7 L19 3 L19 6 L2.4 -1.5 L2.4 10 L9 15 L9 17 L0 14 L-9 17 L-9 15 L-2.4 10 L-2.4 -1.5 L-19 6 L-19 3 L-2.4 -7 Z"
+                  />
+                  <circle class="map-vehicle-nose" cx="0" cy="-16" r="2.1" />
+                {:else}
+                  <line class="map-vehicle-arm" x1="-12" y1="-12" x2="12" y2="12" />
+                  <line class="map-vehicle-arm" x1="12" y1="-12" x2="-12" y2="12" />
+                  <circle class="map-vehicle-rotor front" cx="-12" cy="-12" r="5" />
+                  <circle class="map-vehicle-rotor front" cx="12" cy="-12" r="5" />
+                  <circle class="map-vehicle-rotor" cx="-12" cy="12" r="5" />
+                  <circle class="map-vehicle-rotor" cx="12" cy="12" r="5" />
+                  <circle class="map-vehicle-hub" cx="0" cy="0" r="3.4" />
+                {/if}
+              </g>
             </svg>
           </div>
           <div class="map-scale">50 m</div>
         </div>
       {:else}
-        <IndoorScene pose={pose} attitude={attitude} localizationQuality={vehicle.localization.quality} />
+        <IndoorScene
+          {pose}
+          {attitude}
+          {controls}
+          {motors}
+          localizationQuality={vehicle.localization.quality}
+          {theme}
+          bind:vehicleType={selectedVehicleType}
+        />
       {/if}
+    </section>
+
+    <section class="panel deflect-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>Control Surfaces</h2>
+          <p>deflection · top &amp; rear</p>
+        </div>
+        <Gauge size={20} />
+      </div>
+      <DeflectionView {attitude} controls={deflectionControls} {motors} {theme} bind:vehicleType={selectedVehicleType} />
     </section>
 
     <section class="panel command-panel">
@@ -595,28 +1038,46 @@
       <div class="panel-heading">
         <div>
           <h2>Manual Link</h2>
-          <p>native · standby</p>
+          <p>{manualBridgeStatus}</p>
         </div>
         <Radio size={20} />
       </div>
 
-      <div class="manual-service">
-        {#each manualLinks as [label, value]}
-          <div>
-            <span>{label}</span>
-            <strong>{value}</strong>
-          </div>
-        {/each}
-      </div>
+      {#if $isGroundStation}
+        <div class="button-row manual-actions">
+          <button
+            type="button"
+            class="icon-button"
+            class:primary={!manualBridgeRunning}
+            class:danger={manualBridgeRunning}
+            onclick={() => void toggleManualBridge()}
+            disabled={manualBridgeBusy}
+            title="Start/stop publishing this gamepad as manual_control over Zenoh"
+          >
+            {#if manualBridgeRunning}
+              <Square size={18} />
+              <span>Stop</span>
+            {:else}
+              <CirclePlay size={18} />
+              <span>Start</span>
+            {/if}
+          </button>
+        </div>
+      {/if}
 
-      <div class="channel-strip" aria-label="PPM channel map">
-        {#each manualChannels as [label, channel]}
-          <div>
-            <span>{label}</span>
-            <strong>{channel}</strong>
-          </div>
-        {/each}
-      </div>
+      <ManualLinkView manual={manualControl} {theme} />
+
+      {#if $isGroundStation}
+        <div class="manual-service">
+          {#each manualLinks as [label, value]}
+            <div>
+              <span>{label}</span>
+              <strong>{value}</strong>
+            </div>
+          {/each}
+        </div>
+
+      {/if}
     </section>
 
     <section class="panel attitude-panel">
@@ -628,77 +1089,89 @@
         <Activity size={20} />
       </div>
 
-      <div class="metrics hud-metrics">
-        <div class="metric">
-          <span>Altitude</span>
-          <strong>{format(pose?.altM)} m</strong>
-        </div>
-        <div class="metric">
-          <span>Speed</span>
-          <strong>{format(vehicle.velocity?.groundSpeedMps)} m/s</strong>
-        </div>
-        <div class="metric">
-          <span>Yaw</span>
-          <strong>{format(attitude?.yawDeg, 0)} deg</strong>
-        </div>
-        <div class="metric">
-          <span>Quality</span>
-          <strong>{format(vehicle.localization.quality * 100, 0)}%</strong>
-        </div>
-      </div>
-
       <div class="attitude-display">
-        <svg class="attitude-instrument" viewBox="0 0 260 260" role="img" aria-label="Attitude indicator">
+        <svg class="hud-svg" viewBox="0 0 560 500" role="img" aria-label="Head-up display">
           <defs>
-            <clipPath id="attitude-face">
-              <circle cx="130" cy="130" r="90" />
-            </clipPath>
-            <radialGradient id="attitude-glass" cx="36%" cy="18%" r="78%">
-              <stop offset="0%" stop-color="#ffffff" stop-opacity="0.12" />
-              <stop offset="45%" stop-color="#ffffff" stop-opacity="0.03" />
-              <stop offset="100%" stop-color="#000000" stop-opacity="0.18" />
-            </radialGradient>
+            <clipPath id="hud-field"><rect x="150" y="94" width="260" height="304" /></clipPath>
+            <clipPath id="hud-heading-clip"><rect x="150" y="40" width="260" height="36" /></clipPath>
           </defs>
 
-          <rect class="instrument-plate" x="24" y="24" width="212" height="212" rx="18" />
-          <circle class="mount-screw" cx="51" cy="51" r="4.8" />
-          <circle class="mount-screw" cx="209" cy="51" r="4.8" />
-          <circle class="mount-screw" cx="51" cy="209" r="4.8" />
-          <circle class="mount-screw" cx="209" cy="209" r="4.8" />
-          <circle class="bezel-outer" cx="130" cy="130" r="112" />
-          <circle class="bezel-inner" cx="130" cy="130" r="96" />
+          <rect class="hud-frame" x="10" y="10" width="540" height="480" rx="16" />
 
-          <g clip-path="url(#attitude-face)" transform={`rotate(${rollDeg} 130 130)`}>
-            <g transform={`translate(0 ${pitchOffset})`}>
-              <rect class="sky" x="0" y="-80" width="260" height="210" />
-              <rect class="ground" x="0" y="130" width="260" height="230" />
-              <line class="horizon-line" x1="35" y1="130" x2="225" y2="130" />
-              {#each pitchMarks as mark}
-                <g class="pitch-mark" transform={`translate(0 ${-mark * 3})`}>
-                  <line x1={Math.abs(mark) % 20 === 0 ? 84 : 99} y1="130" x2={Math.abs(mark) % 20 === 0 ? 176 : 161} y2="130" />
-                  <text x={Math.abs(mark) % 20 === 0 ? 71 : 88} y="134">{Math.abs(mark)}</text>
-                  <text x={Math.abs(mark) % 20 === 0 ? 183 : 166} y="134">{Math.abs(mark)}</text>
+          <!-- heading tape -->
+          <g clip-path="url(#hud-heading-clip)">
+            <line class="hud-line thin" x1="150" y1="70" x2="410" y2="70" />
+            {#each headingTicks as t}
+              <line class="hud-line" x1={t.x} y1="70" x2={t.x} y2={t.major ? 60 : 65} />
+              {#if t.label}
+                <text class="hud-text sm" x={t.x} y="54" text-anchor="middle">{t.label}</text>
+              {/if}
+            {/each}
+          </g>
+          <!-- heading index + boxed readout -->
+          <path class="hud-fill" d="M280 74 l-6 -9 h12 Z" />
+          <rect class="hud-box" x="252" y="16" width="56" height="26" rx="2" />
+          <text class="hud-text lg" x="280" y="37" text-anchor="middle">{hudHeadingText}</text>
+
+          <!-- attitude world (rotates with roll, translates with pitch) -->
+          <g clip-path="url(#hud-field)">
+            <g transform={`rotate(${-rollDeg} 280 250)`}>
+              <!-- roll scale (moving) -->
+              {#each rollTicks as tick}
+                <line
+                  class="hud-line"
+                  transform={`rotate(${tick} 280 250)`}
+                  x1="280"
+                  y1="122"
+                  x2="280"
+                  y2={tick === 0 || Math.abs(tick) === 30 || Math.abs(tick) === 60 ? 111 : 116}
+                />
+              {/each}
+              <!-- horizon line with center gap -->
+              <line class="hud-line horizon" x1="150" y1={horizonY} x2="252" y2={horizonY} />
+              <line class="hud-line horizon" x1="308" y1={horizonY} x2="410" y2={horizonY} />
+              <!-- pitch ladder -->
+              {#each pitchRungs as m}
+                {@const yy = 250 - (m - pitchDeg) * 4.2}
+                {@const tick = m > 0 ? 8 : -8}
+                <g class:hud-dash={m < 0}>
+                  <line class="hud-line" x1="196" y1={yy} x2="250" y2={yy} />
+                  <line class="hud-line" x1="310" y1={yy} x2="364" y2={yy} />
+                  <line class="hud-line" x1="250" y1={yy} x2="250" y2={yy + tick} />
+                  <line class="hud-line" x1="310" y1={yy} x2="310" y2={yy + tick} />
                 </g>
+                <text class="hud-text num" x="190" y={yy + 4} text-anchor="end">{Math.abs(m)}</text>
+                <text class="hud-text num" x="370" y={yy + 4} text-anchor="start">{Math.abs(m)}</text>
               {/each}
             </g>
           </g>
 
-          <circle class="face-shadow" cx="130" cy="130" r="91" />
-          <g class="roll-scale">
-            {#each rollTicks as tick}
-              <line class:major={Math.abs(tick) === 30 || tick === 0} x1="130" y1="28" x2="130" y2={Math.abs(tick) === 30 || tick === 0 ? 48 : 40} transform={`rotate(${tick} 130 130)`} />
-            {/each}
+          <!-- fixed roll pointer -->
+          <path class="hud-fill" d="M280 124 l-7 -12 h14 Z" />
+
+          <!-- fixed flight-path / boresight symbol -->
+          <g class="hud-line">
+            <circle cx="280" cy="250" r="9" fill="none" />
+            <line x1="271" y1="250" x2="252" y2="250" />
+            <line x1="289" y1="250" x2="308" y2="250" />
+            <line x1="280" y1="241" x2="280" y2="230" />
           </g>
-          <path class="top-index" d="M130 42 L121 60 H139 Z" />
-          <g class="bank-pointer" transform={`rotate(${bankPointerDeg} 130 130)`}>
-            <path d="M130 61 L121 77 H139 Z" />
-            <line x1="130" y1="54" x2="130" y2="65" />
-          </g>
-          <g class="aircraft-reference">
-            <path d="M88 133 H116 L124 124 L130 145 L136 124 L144 133 H172" />
-            <circle cx="130" cy="133" r="3.5" />
-          </g>
-          <circle class="glass" cx="130" cy="130" r="91" />
+
+          <!-- airspeed box -->
+          <path class="hud-box" d="M44 236 H100 L112 250 L100 264 H44 Z" />
+          <text class="hud-text lg" x="70" y="256" text-anchor="middle">{Math.round(hudSpeedMps)}</text>
+          <text class="hud-text sm dim" x="44" y="282" text-anchor="start">M/S</text>
+
+          <!-- altitude box -->
+          <path class="hud-box" d="M516 236 H460 L448 250 L460 264 H516 Z" />
+          <text class="hud-text lg" x="490" y="256" text-anchor="middle">{Math.round(hudAltMeters)}</text>
+          <text class="hud-text sm dim" x="516" y="282" text-anchor="end">M</text>
+          <!-- vertical speed -->
+          <text class="hud-text sm" x="516" y="228" text-anchor="end">{hudClimbMps >= 0 ? '+' : ''}{hudClimbMps.toFixed(1)}</text>
+
+          <!-- status line -->
+          <text class="hud-text sm dim" x="34" y="472" text-anchor="start">CEREBRI · FLIGHT CONTROL</text>
+          <text class="hud-text sm" x="526" y="472" text-anchor="end">{vehicle.mode.armed ? 'ARM' : 'STBY'} · {vehicle.mode.name} · Q {hudQualityPct.toFixed(0)}</text>
         </svg>
       </div>
     </section>
@@ -765,7 +1238,7 @@
       <div class="panel-heading">
         <div>
           <h2>Logging</h2>
-          <p>{recordingCount} frames</p>
+          <p>{recordingCount} frames · all topics · Stop saves .sylg</p>
         </div>
         <Download size={20} />
       </div>
@@ -904,7 +1377,61 @@
         {/each}
       </div>
     </section>
+
+    <section class="panel discovery-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>Discovery</h2>
+          <p>
+            {#if topicCatalog}
+              {topicCatalog.topics.length} discovered · {topicCatalog.connected ? 'zenoh live' : 'zenoh offline'}
+              {#if topicCatalog.endpoint}· {topicCatalog.endpoint}{/if}
+            {:else}
+              connect over Zenoh to discover
+            {/if}
+          </p>
+        </div>
+        <Radio size={20} />
+      </div>
+
+      <div class="topic-table discovery-table">
+        <div class="topic-row discovery-row header">
+          <span>Recv</span>
+          <span>Key</span>
+          <span>Schema</span>
+          <span>Rate</span>
+          <span>Bytes</span>
+        </div>
+        {#each (topicCatalog?.topics ?? []) as topic (topic.key)}
+          <div class="topic-row discovery-row">
+            <span>
+              <input
+                type="checkbox"
+                checked={topic.selected}
+                onchange={() => toggleTopicSubscription(topic.key)}
+                title={topic.selected ? 'Streaming — click to stop' : 'Click to stream this topic'}
+              />
+            </span>
+            <span title={topic.key}>{topic.key}</span>
+            <span class:ok={topic.decodable} title={topic.decodable ? 'Decoded to fields' : 'Raw bytes only'}>
+              {topic.schema}
+            </span>
+            <span>{topic.rateHz.toFixed(1)} Hz</span>
+            <span>{topic.lastBytes} B</span>
+          </div>
+        {:else}
+          <div class="empty-row">
+            {topicCatalog ? 'No topics on the network yet' : 'Connect over Zenoh to discover topics'}
+          </div>
+        {/each}
+      </div>
+    </section>
   </div>
+  {:else if activePage === 'firmware'}
+    <AutopilotProfilePanel {theme} />
+  {:else}
+    <SimulationPanel {theme} {zenohEndpoint} />
+  {/if}
 </main>
 
 <style>
@@ -931,7 +1458,7 @@
   }
 
   .topbar,
-  .status-strip,
+  .ground-nav,
   .panel {
     border: 1px solid #d9dee3;
     background: #ffffff;
@@ -946,6 +1473,63 @@
     padding: 14px;
   }
 
+  .ground-nav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(110px, 1fr));
+    gap: 0;
+    overflow: hidden;
+    margin-top: 10px;
+    border: 1px solid #d9dee3;
+    border-radius: 8px;
+    background: #ffffff;
+  }
+
+  .ground-nav button {
+    min-height: 42px;
+    border: 0;
+    border-left: 1px solid #d9dee3;
+    background: transparent;
+    color: #5c6873;
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 820;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .ground-nav button:first-child {
+    border-left: 0;
+  }
+
+  .ground-nav button.active {
+    background: #12171b;
+    color: #ffffff;
+  }
+
+  .config-panel {
+    margin-top: 10px;
+  }
+
+  .config-panel summary {
+    display: flex;
+    align-items: center;
+    min-height: 42px;
+    padding: 0 12px;
+    border: 1px solid #d9dee3;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #5c6873;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 820;
+    text-transform: uppercase;
+  }
+
+  .config-panel > :global(*:not(summary)) {
+    margin-top: 10px;
+  }
+
   .brand {
     display: flex;
     align-items: center;
@@ -955,22 +1539,29 @@
 
   .brand-mark {
     display: flex;
-    width: 76px;
-    height: 42px;
+    height: 46px;
     align-items: center;
     justify-content: center;
     overflow: hidden;
-    padding: 5px 6px;
-    place-items: center;
-    border-radius: 8px;
-    background: #11161b;
   }
 
   .brand-mark img {
     display: block;
-    width: 100%;
     height: 100%;
+    width: auto;
     object-fit: contain;
+  }
+
+  .brand-meta h1 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   h1,
@@ -996,7 +1587,7 @@
 
   .mode-control {
     display: grid;
-    grid-template-columns: repeat(4, minmax(78px, 1fr));
+    grid-template-columns: repeat(2, minmax(78px, 1fr));
     min-height: 38px;
     overflow: hidden;
     border: 1px solid #cfd6dd;
@@ -1080,26 +1671,6 @@
     color: #ffffff;
   }
 
-  .status-strip {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(120px, 1fr));
-    gap: 10px;
-    margin-top: 12px;
-    padding: 10px;
-  }
-
-  .strip-item {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    min-height: 36px;
-    border-radius: 8px;
-    background: #f2f5f7;
-    color: #58636e;
-    text-transform: capitalize;
-  }
-
   .ok {
     color: #147660;
   }
@@ -1151,11 +1722,11 @@
 
   .map-view-control {
     display: grid;
-    grid-template-columns: repeat(3, minmax(58px, 1fr));
+    grid-template-columns: repeat(2, minmax(58px, 1fr));
     overflow: hidden;
     min-height: 32px;
     border: 1px solid #cdd5dc;
-    border-radius: 8px;
+    border-radius: 3px;
     background: #f5f7f8;
   }
 
@@ -1213,9 +1784,6 @@
     margin-top: 10px;
   }
 
-  .hud-metrics {
-    margin-bottom: 10px;
-  }
 
   .metric {
     display: grid;
@@ -1238,6 +1806,87 @@
     font-size: 1.18rem;
   }
 
+  .mode-readout {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 12px;
+    padding: 10px;
+    border: 1px solid #e0e5ea;
+    border-radius: 8px;
+    background: #fafbfc;
+  }
+
+  .mode-readout span,
+  .mode-readout em {
+    color: #6b7680;
+    font-size: 0.78rem;
+    font-style: normal;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .mode-readout strong {
+    color: #171b1f;
+    font-size: 1.25rem;
+    font-weight: 820;
+    text-transform: uppercase;
+  }
+
+  .mode-readout strong.on {
+    color: #e35f0c;
+  }
+
+  .io-group {
+    display: grid;
+    gap: 6px;
+  }
+
+  .io-group + .io-group {
+    margin-top: 12px;
+  }
+
+  .io-group h3 {
+    margin: 0;
+    color: #6b7680;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .io-row {
+    display: grid;
+    gap: 2px;
+    padding: 8px 10px;
+    border: 1px solid #e0e5ea;
+    border-radius: 8px;
+    background: #fafbfc;
+  }
+
+  .io-row span {
+    display: flex;
+    justify-content: space-between;
+    color: #6b7680;
+    font-size: 0.78rem;
+  }
+
+  .io-row span em {
+    font-style: normal;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .io-row strong {
+    overflow-wrap: anywhere;
+    font-size: 0.98rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .io-row strong.on {
+    color: #e35f0c;
+  }
+
   .map-canvas {
     position: relative;
     overflow: hidden;
@@ -1252,64 +1901,20 @@
     background-size: 28px 28px, 28px 28px, auto, auto;
   }
 
-  .mission-line {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-  }
-
-  .mission-line path {
-    fill: none;
-    stroke: #2e6fba;
-    stroke-dasharray: 4 5;
-    stroke-linecap: round;
-    stroke-width: 1.8;
-  }
-
   .vehicle-marker {
     position: absolute;
     display: grid;
     width: 42px;
     height: 42px;
     place-items: center;
-    border-radius: 50%;
-    background: #11161b;
+    background: transparent;
     color: #54d0b5;
-    box-shadow: 0 8px 22px rgba(21, 33, 41, 0.24);
   }
 
-  .map-axes-marker {
+  .map-vehicle-marker {
     width: 100%;
     height: 100%;
     overflow: visible;
-  }
-
-  .map-axes-marker line {
-    stroke-linecap: round;
-    stroke-width: 3.6;
-  }
-
-  .map-axes-marker circle {
-    fill: #f9fffc;
-    stroke: #11161b;
-    stroke-width: 1.4;
-  }
-
-  .map-axis-forward {
-    stroke: #f9fffc;
-  }
-
-  .map-axis-right {
-    stroke: #61a8ff;
-  }
-
-  #map-axis-forward path {
-    fill: #f9fffc;
-  }
-
-  #map-axis-right path {
-    fill: #61a8ff;
   }
 
   .map-home,
@@ -1431,6 +2036,15 @@
     gap: 8px;
   }
 
+  .topic-row.discovery-row {
+    grid-template-columns: 36px minmax(120px, 1.4fr) 92px 66px 60px;
+  }
+
+  .discovery-row input[type='checkbox'] {
+    cursor: pointer;
+    margin: 0;
+  }
+
   .topic-row.header {
     background: #ffffff;
     color: #697580;
@@ -1471,7 +2085,6 @@
     }
 
     .mode-control,
-    .status-strip,
     .dashboard {
       grid-template-columns: 1fr;
     }
@@ -1523,7 +2136,6 @@
   }
 
   .topbar,
-  .status-strip,
   .panel {
     border: 1px solid #263239;
     border-radius: 8px;
@@ -1537,9 +2149,28 @@
     grid-template-columns: minmax(240px, 1fr) minmax(360px, auto) auto;
     min-height: 72px;
     padding: 10px 12px;
-    background:
-      linear-gradient(90deg, rgba(66, 232, 196, 0.08), transparent 28%),
-      rgba(14, 20, 22, 0.96);
+    background: rgba(14, 20, 22, 0.96);
+  }
+
+  .ground-nav {
+    background: rgba(14, 20, 22, 0.96);
+  }
+
+  .ground-nav button {
+    border-left-color: #263239;
+    color: #8fa09a;
+  }
+
+  .ground-nav button.active {
+    background: #dfe9e4;
+    color: #0a1111;
+  }
+
+  .config-panel summary {
+    border-color: #263239;
+    border-radius: 8px;
+    background: rgba(14, 20, 22, 0.96);
+    color: #8fa09a;
   }
 
   .brand {
@@ -1547,12 +2178,10 @@
   }
 
   .brand-mark {
-    width: 76px;
-    height: 42px;
-    border: 1px solid rgba(66, 232, 196, 0.44);
-    border-radius: 8px;
-    background: #050808;
-    box-shadow: 0 0 28px rgba(66, 232, 196, 0.16);
+    height: 46px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
   }
 
   h1 {
@@ -1575,10 +2204,10 @@
   }
 
   .mode-control {
-    grid-template-columns: repeat(4, minmax(82px, 1fr));
+    grid-template-columns: repeat(2, minmax(82px, 1fr));
     min-height: 42px;
     border: 1px solid #2d3a41;
-    border-radius: 8px;
+    border-radius: 3px;
     background: #0b1012;
   }
 
@@ -1603,7 +2232,7 @@
   .command-button {
     min-height: 42px;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: 3px;
     font-size: 0.88rem;
     font-weight: 720;
     transition:
@@ -1621,9 +2250,9 @@
 
   .icon-button.primary,
   .command-button.primary {
-    border-color: rgba(66, 232, 196, 0.34);
-    background: #0aa98d;
-    color: #031211;
+    border-color: rgba(253, 119, 25, 0.5);
+    background: #fd7719;
+    color: #1a0d02;
   }
 
   .icon-button.quiet,
@@ -1641,33 +2270,8 @@
     color: #fff5f6;
   }
 
-  .status-strip {
-    grid-template-columns: repeat(4, minmax(150px, 1fr));
-    gap: 8px;
-    margin-top: 10px;
-    padding: 8px;
-    background: rgba(10, 15, 16, 0.92);
-  }
-
-  .strip-item {
-    justify-content: flex-start;
-    min-height: 44px;
-    padding: 0 14px;
-    border: 1px solid #243137;
-    border-radius: 8px;
-    background: #11191c;
-    color: #a8b8b2;
-    font-size: 0.88rem;
-    font-weight: 720;
-    text-transform: uppercase;
-  }
-
-  .strip-item :global(svg) {
-    color: currentColor;
-  }
-
   .ok {
-    color: #42e8c4;
+    color: #3ad29a;
   }
 
   .warn {
@@ -1750,7 +2354,7 @@
     position: absolute;
     inset: 0 0 auto;
     height: 2px;
-    background: linear-gradient(90deg, #42e8c4, rgba(97, 168, 255, 0.7), transparent 76%);
+    background: linear-gradient(90deg, #fd7719, rgba(253, 119, 25, 0.55), transparent 78%);
     content: "";
     opacity: 0.62;
   }
@@ -1820,6 +2424,11 @@
   .manual-service {
     display: grid;
     gap: 8px;
+    margin-top: 8px;
+  }
+
+  .manual-actions {
+    margin-bottom: 10px;
   }
 
   .manual-service > div {
@@ -1832,8 +2441,7 @@
     background: #0c1214;
   }
 
-  .manual-service span,
-  .channel-strip span {
+  .manual-service span {
     color: #91a39c;
     font-size: 0.7rem;
     font-weight: 760;
@@ -1844,28 +2452,6 @@
     color: #edf6f1;
     overflow-wrap: anywhere;
     font-size: 0.9rem;
-  }
-
-  .channel-strip {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 6px;
-    margin-top: 8px;
-  }
-
-  .channel-strip > div {
-    display: grid;
-    gap: 4px;
-    min-height: 48px;
-    place-items: center;
-    border: 1px solid #27343a;
-    border-radius: 8px;
-    background: #11191c;
-  }
-
-  .channel-strip strong {
-    color: #42e8c4;
-    font-size: 1rem;
   }
 
   input,
@@ -1880,8 +2466,8 @@
 
   input:focus,
   select:focus {
-    border-color: rgba(66, 232, 196, 0.72);
-    box-shadow: 0 0 0 3px rgba(66, 232, 196, 0.13);
+    border-color: rgba(253, 119, 25, 0.72);
+    box-shadow: 0 0 0 3px rgba(253, 119, 25, 0.13);
   }
 
   select {
@@ -1892,10 +2478,6 @@
     gap: 8px;
   }
 
-  .hud-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin-bottom: 10px;
-  }
 
   .metric {
     min-height: 82px;
@@ -1913,6 +2495,45 @@
     text-transform: uppercase;
   }
 
+  .io-group h3 {
+    color: #84938d;
+  }
+
+  .mode-readout {
+    border: 1px solid #27343a;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent),
+      #0e1517;
+  }
+
+  .mode-readout span,
+  .mode-readout em {
+    color: #84938d;
+  }
+
+  .mode-readout strong {
+    color: #f3fbf7;
+  }
+
+  .mode-readout strong.on {
+    color: #fd7719;
+  }
+
+  .io-row {
+    border: 1px solid #27343a;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent),
+      #0e1517;
+  }
+
+  .io-row span {
+    color: #84938d;
+  }
+
+  .io-row strong.on {
+    color: #fd7719;
+  }
+
   .metric strong {
     color: #f3fbf7;
     font-size: 1.42rem;
@@ -1926,7 +2547,7 @@
     background:
       linear-gradient(90deg, rgba(99, 178, 161, 0.12) 1px, transparent 1px),
       linear-gradient(rgba(99, 178, 161, 0.12) 1px, transparent 1px),
-      linear-gradient(135deg, rgba(66, 232, 196, 0.18), transparent 34%),
+      linear-gradient(135deg, rgba(253, 119, 25, 0.18), transparent 34%),
       linear-gradient(155deg, #162124, #10181b 58%, #0d1315);
     background-size: 30px 30px, 30px 30px, auto, auto;
   }
@@ -1937,48 +2558,45 @@
     min-height: 420px;
   }
 
-  .mission-line path {
-    stroke: #61a8ff;
-    stroke-dasharray: 3 7;
-    stroke-linecap: round;
-    stroke-width: 2.2;
-  }
-
   .vehicle-marker {
     width: 46px;
     height: 46px;
-    border: 1px solid rgba(66, 232, 196, 0.46);
-    border-radius: 50%;
-    background: #050808;
-    color: #42e8c4;
-    box-shadow:
-      0 0 0 8px rgba(66, 232, 196, 0.06),
-      0 0 34px rgba(66, 232, 196, 0.22);
+    background: transparent;
+    color: #fd7719;
   }
 
-  .map-axes-marker line {
-    stroke-width: 3.8;
-  }
-
-  .map-axes-marker circle {
-    fill: #edf6f1;
+  .map-vehicle-body {
+    fill: #fd7719;
     stroke: #050808;
+    stroke-width: 1.1;
+    stroke-linejoin: round;
   }
 
-  .map-axis-forward {
-    stroke: #edf6f1;
+  .map-vehicle-nose {
+    fill: #f9fffc;
   }
 
-  .map-axis-right {
-    stroke: #61a8ff;
+  .map-vehicle-arm {
+    stroke: #d3ddd7;
+    stroke-width: 3;
+    stroke-linecap: round;
   }
 
-  #map-axis-forward path {
-    fill: #edf6f1;
+  .map-vehicle-rotor {
+    fill: rgba(211, 221, 215, 0.28);
+    stroke: #d3ddd7;
+    stroke-width: 1.6;
   }
 
-  #map-axis-right path {
-    fill: #61a8ff;
+  .map-vehicle-rotor.front {
+    fill: rgba(253, 119, 25, 0.5);
+    stroke: #fd7719;
+  }
+
+  .map-vehicle-hub {
+    fill: #050808;
+    stroke: #fd7719;
+    stroke-width: 1.6;
   }
 
   .map-home,
@@ -1999,127 +2617,101 @@
   }
 
   .attitude-display {
-    min-height: 320px;
-    height: calc(100% - 178px);
+    min-height: 360px;
+    height: calc(100% - 78px);
     padding: 10px;
     border: 1px solid #2a383f;
     border-radius: 8px;
-    background: linear-gradient(180deg, #10191b, #0a0f10);
+    background: radial-gradient(circle at 50% 42%, #0c1614, #05090a 78%);
   }
 
-  .attitude-instrument {
-    width: min(100%, 330px);
-    height: min(100%, 330px);
-    max-height: 330px;
-    filter: drop-shadow(0 22px 38px rgba(0, 0, 0, 0.45));
+  /* Symbolic head-up display — phosphor-orange strokes on a dark combiner. */
+  .hud-svg {
+    --hud: #ff8324;
+    width: 100%;
+    height: 100%;
+    max-width: 540px;
+    max-height: 100%;
+    filter: drop-shadow(0 0 3px rgba(255, 131, 36, 0.5));
   }
 
-  .instrument-plate {
-    fill: #293332;
-    stroke: #53615c;
-    stroke-opacity: 0.7;
+  .hud-line {
+    fill: none;
+    stroke: var(--hud);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .hud-line.thin {
     stroke-width: 1.4;
   }
 
-  .mount-screw {
-    fill: #152022;
-    stroke: #94a29d;
-    stroke-opacity: 0.62;
-    stroke-width: 1.5;
-  }
-
-  .bezel-outer {
-    fill: #050708;
-    stroke: #161f22;
-    stroke-width: 18;
-  }
-
-  .bezel-inner {
-    fill: #0b0f10;
-    stroke: #202b2f;
-    stroke-width: 8;
-  }
-
-  .sky {
-    fill: #79d7f5;
-  }
-
-  .ground {
-    fill: #9a6732;
-  }
-
-  .horizon-line {
-    stroke: #f7faf7;
-    stroke-width: 2.2;
-  }
-
-  .pitch-mark line {
-    stroke: rgba(255, 255, 255, 0.78);
-    stroke-linecap: round;
-    stroke-width: 1.9;
-  }
-
-  .pitch-mark text {
-    fill: rgba(255, 255, 255, 0.84);
-    font-size: 10px;
-    font-weight: 760;
-    text-anchor: middle;
-  }
-
-  .face-shadow {
-    fill: none;
-    stroke: rgba(0, 0, 0, 0.48);
-    stroke-width: 3;
-  }
-
-  .roll-scale line {
-    stroke: #f5faf7;
-    stroke-linecap: round;
+  .hud-line.horizon {
     stroke-width: 2.6;
   }
 
-  .roll-scale line.major {
-    stroke-width: 4;
+  .hud-dash .hud-line {
+    stroke-dasharray: 7 6;
   }
 
-  .top-index {
-    fill: #dff7ff;
-    stroke: #0d2025;
-    stroke-width: 1.4;
+  .hud-fill {
+    fill: var(--hud);
+    stroke: none;
   }
 
-  .bank-pointer path {
-    fill: #e9fff9;
-    stroke: #071314;
-    stroke-linejoin: round;
-    stroke-width: 1.5;
+  .hud-box {
+    fill: rgba(5, 9, 10, 0.55);
+    stroke: var(--hud);
+    stroke-width: 2;
   }
 
-  .bank-pointer line {
-    stroke: #42e8c4;
-    stroke-linecap: round;
-    stroke-width: 2.2;
-  }
-
-  .aircraft-reference path {
+  .hud-frame {
     fill: none;
-    stroke: #fff8e8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    stroke-width: 4.5;
+    stroke: var(--hud);
+    stroke-width: 1.4;
+    stroke-opacity: 0.35;
   }
 
-  .aircraft-reference circle {
-    fill: #fff8e8;
-    stroke: #19120b;
-    stroke-width: 1.3;
+  .hud-text {
+    fill: var(--hud);
+    font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
+    font-weight: 600;
   }
 
-  .glass {
-    fill: url("#attitude-glass");
-    stroke: rgba(255, 255, 255, 0.05);
-    stroke-width: 1;
-    pointer-events: none;
+  .hud-text.sm {
+    font-size: 13px;
+    letter-spacing: 0.5px;
+  }
+
+  .hud-text.num {
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .hud-text.lg {
+    font-size: 21px;
+    font-weight: 700;
+    letter-spacing: 1px;
+  }
+
+  .hud-text.dim {
+    fill-opacity: 0.6;
+  }
+
+  /* Light theme — dark-orange strokes on a pale combiner, no phosphor glow. */
+  :global(html[data-theme='light']) .attitude-display {
+    border-color: #d9dee3;
+    background: radial-gradient(circle at 50% 42%, #f6f2ec, #eef1f4 78%);
+  }
+
+  :global(html[data-theme='light']) .hud-svg {
+    --hud: #c2510a;
+    filter: none;
+  }
+
+  :global(html[data-theme='light']) .hud-box {
+    fill: rgba(255, 255, 255, 0.7);
   }
 
   .battery-bar {
@@ -2130,14 +2722,14 @@
   }
 
   .battery-bar span {
-    background: linear-gradient(90deg, #42e8c4, #ffbf57);
+    background: linear-gradient(90deg, #fd7719, #ffbf57);
   }
 
   .range,
   input[type="range"] {
     min-width: 0;
     width: 100%;
-    accent-color: #42e8c4;
+    accent-color: #fd7719;
   }
 
   .plot {
@@ -2316,8 +2908,7 @@
     }
 
     .topbar,
-    .dashboard,
-    .status-strip {
+    .dashboard {
       grid-template-columns: 1fr;
     }
 
@@ -2327,19 +2918,6 @@
 
     .mode-control {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .mode-control label:nth-child(3) {
-      border-left: 0;
-      border-top: 1px solid #2d3a41;
-    }
-
-    .mode-control label:nth-child(4) {
-      border-top: 1px solid #2d3a41;
-    }
-
-    .status-strip {
-      gap: 6px;
     }
 
     .dashboard {
@@ -2387,7 +2965,19 @@
   .connection-panel {
     grid-area: auto;
     grid-column: 1;
-    grid-row: span 22;
+    grid-row: span 30;
+  }
+
+  .autopilot-panel {
+    grid-area: auto;
+    grid-column: 1;
+    grid-row: span 42;
+  }
+
+  .io-panel {
+    grid-area: auto;
+    grid-column: 3;
+    grid-row: 1 / span 106;
   }
 
   .command-panel {
@@ -2398,8 +2988,8 @@
 
   .manual-panel {
     grid-area: auto;
-    grid-column: 1;
-    grid-row: span 29;
+    grid-column: 3;
+    grid-row: 107 / span 60;
   }
 
   .replay-panel {
@@ -2423,13 +3013,13 @@
 
   .attitude-panel {
     grid-area: auto;
-    grid-column: 3;
-    grid-row: span 68;
+    grid-column: 1;
+    grid-row: 1 / span 68;
   }
 
   .power-panel {
     grid-area: auto;
-    grid-column: 3;
+    grid-column: 1;
     grid-row: span 25;
   }
 
@@ -2445,20 +3035,33 @@
     grid-row: span 70;
   }
 
+  .deflect-panel {
+    grid-area: auto;
+    grid-column: 2;
+    grid-row: span 55;
+  }
+
   .events-panel {
     grid-area: auto;
-    grid-column: 3;
+    grid-column: 1;
     grid-row: span 18;
   }
 
   .topics-panel {
     grid-area: auto;
-    grid-column: 3;
+    grid-column: 1;
     grid-row: span 35;
   }
 
+  .discovery-panel {
+    grid-area: auto;
+    grid-column: 2;
+    grid-row: span 30;
+  }
+
   .events-panel .event-list,
-  .topics-panel .topic-table {
+  .topics-panel .topic-table,
+  .discovery-panel .discovery-table {
     max-height: calc(100% - 42px);
     overflow: auto;
     padding-right: 2px;
@@ -2472,25 +3075,45 @@
     }
 
     .connection-panel,
+    .autopilot-panel,
     .command-panel,
-    .manual-panel,
     .replay-panel,
     .recording-panel {
       grid-column: 1;
     }
 
+    .attitude-panel {
+      grid-column: 1;
+      grid-row: 1 / span 68;
+    }
+
     .vehicle-panel,
-    .attitude-panel,
+    .io-panel,
+    .manual-panel,
     .power-panel,
     .plot-panel,
     .map-panel,
+    .deflect-panel,
     .events-panel,
-    .topics-panel {
+    .topics-panel,
+    .discovery-panel {
       grid-column: 2;
     }
 
     .map-panel {
       grid-row: span 55;
+    }
+
+    .io-panel {
+      grid-row: 1 / span 106;
+    }
+
+    .manual-panel {
+      grid-row: 107 / span 60;
+    }
+
+    .deflect-panel {
+      grid-row: span 52;
     }
 
     .plot-panel {
@@ -2506,6 +3129,8 @@
     }
 
     .connection-panel,
+    .autopilot-panel,
+    .io-panel,
     .command-panel,
     .manual-panel,
     .replay-panel,
@@ -2515,15 +3140,30 @@
     .power-panel,
     .plot-panel,
     .map-panel,
+    .deflect-panel,
     .events-panel,
-    .topics-panel {
+    .topics-panel,
+    .discovery-panel {
       grid-column: 1;
       grid-row: auto;
       height: auto;
     }
 
+    .attitude-panel {
+      order: -30;
+    }
+
+    .io-panel {
+      order: -20;
+    }
+
+    .manual-panel {
+      order: -19;
+    }
+
     .events-panel .event-list,
-    .topics-panel .topic-table {
+    .topics-panel .topic-table,
+    .discovery-panel .discovery-table {
       max-height: none;
       overflow: visible;
     }
@@ -2540,7 +3180,292 @@
 
     .map-view-control {
       flex: 1;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+  }
+
+  /* Light theme — matches the light electrode logo (orange accent on near-white) */
+  :global(html[data-theme='light']) {
+    background: linear-gradient(180deg, #eef1f3 0%, #f4f6f8 52%, #e9edf0 100%);
+    color: #12171b;
+  }
+
+  :global(html[data-theme='light'] body) {
+    background: #eef1f3;
+  }
+
+  :global(html[data-theme='light']) .shell {
+    background:
+      linear-gradient(90deg, rgba(20, 30, 40, 0.03) 1px, transparent 1px),
+      linear-gradient(rgba(20, 30, 40, 0.025) 1px, transparent 1px),
+      linear-gradient(180deg, #eef1f3, #f4f6f8 48%, #e9edf0);
+    background-size: 36px 36px, 36px 36px, auto;
+  }
+
+  :global(html[data-theme='light']) .topbar,
+  :global(html[data-theme='light']) .ground-nav,
+  :global(html[data-theme='light']) .panel {
+    border-color: #d9dee3;
+    background: #ffffff;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.6),
+      0 10px 26px rgba(20, 30, 40, 0.06);
+  }
+
+  :global(html[data-theme='light']) .topbar {
+    background: #ffffff;
+  }
+
+  :global(html[data-theme='light']) .ground-nav {
+    background: #ffffff;
+  }
+
+  :global(html[data-theme='light']) .ground-nav button {
+    border-left-color: #d9dee3;
+    color: #5c6873;
+  }
+
+  :global(html[data-theme='light']) .ground-nav button.active {
+    background: #12171b;
+    color: #ffffff;
+  }
+
+  :global(html[data-theme='light']) .config-panel summary {
+    border-color: #d9dee3;
+    background: #ffffff;
+    color: #5c6873;
+  }
+
+  :global(html[data-theme='light']) h1,
+  :global(html[data-theme='light']) h2 {
+    color: #12171b;
+  }
+
+  :global(html[data-theme='light']) p {
+    color: #5c6873;
+  }
+
+  :global(html[data-theme='light']) .mode-control {
+    border-color: #cfd6dd;
+    background: #f5f7f8;
+  }
+
+  :global(html[data-theme='light']) .mode-control label {
+    color: #5c6873;
+  }
+
+  :global(html[data-theme='light']) .mode-control label + label {
+    border-left-color: #cfd6dd;
+  }
+
+  :global(html[data-theme='light']) .mode-control label.active {
+    background: #12171b;
+    color: #ffffff;
+  }
+
+  :global(html[data-theme='light']) .icon-button.quiet,
+  :global(html[data-theme='light']) .file-button,
+  :global(html[data-theme='light']) .command-button {
+    border-color: #d3dade;
+    background: #eef2f4;
+    color: #263039;
+  }
+
+  :global(html[data-theme='light']) .icon-button.primary,
+  :global(html[data-theme='light']) .command-button.primary {
+    border-color: rgba(227, 95, 12, 0.5);
+    background: #e35f0c;
+    color: #ffffff;
+  }
+
+  :global(html[data-theme='light']) .icon-button.danger,
+  :global(html[data-theme='light']) .command-button.danger {
+    border-color: rgba(194, 59, 72, 0.4);
+    background: #c23b48;
+    color: #ffffff;
+  }
+
+  :global(html[data-theme='light']) .ok {
+    color: #12885c;
+  }
+
+  :global(html[data-theme='light']) .warn {
+    color: #b7791f;
+  }
+
+  :global(html[data-theme='light']) .danger {
+    color: #c23b48;
+  }
+
+  :global(html[data-theme='light']) .panel::before {
+    background: linear-gradient(90deg, #e35f0c, rgba(227, 95, 12, 0.5), transparent 78%);
+    opacity: 0.5;
+  }
+
+  :global(html[data-theme='light']) .panel-heading > :global(svg) {
+    color: #97a2ab;
+  }
+
+  :global(html[data-theme='light']) .map-view-control {
+    border-color: #cdd5dc;
+    background: #f5f7f8;
+  }
+
+  :global(html[data-theme='light']) .map-view-control button {
+    color: #53606a;
+  }
+
+  :global(html[data-theme='light']) .map-view-control button + button {
+    border-left-color: #cdd5dc;
+  }
+
+  :global(html[data-theme='light']) .map-view-control button.active {
+    background: #12171b;
+    color: #ffffff;
+  }
+
+  :global(html[data-theme='light']) .field {
+    color: #5c6873;
+  }
+
+  :global(html[data-theme='light']) .transport-readout {
+    border-color: #e0e5ea;
+    background: #f5f7f8;
+  }
+
+  :global(html[data-theme='light']) .transport-readout span {
+    color: #6b7680;
+  }
+
+  :global(html[data-theme='light']) .transport-readout strong {
+    color: #263039;
+  }
+
+  :global(html[data-theme='light']) .manual-service > div {
+    border-color: #e0e5ea;
+    background: #f5f7f8;
+  }
+
+  :global(html[data-theme='light']) .manual-service span {
+    color: #6b7680;
+  }
+
+  :global(html[data-theme='light']) .manual-service strong {
+    color: #263039;
+  }
+
+  :global(html[data-theme='light']) input,
+  :global(html[data-theme='light']) select {
+    border-color: #cfd6dd;
+    background: #ffffff;
+    color: #1d252c;
+  }
+
+  :global(html[data-theme='light']) input:focus,
+  :global(html[data-theme='light']) select:focus {
+    border-color: rgba(227, 95, 12, 0.7);
+    box-shadow: 0 0 0 3px rgba(227, 95, 12, 0.14);
+  }
+
+  :global(html[data-theme='light']) select {
+    color-scheme: light;
+  }
+
+  :global(html[data-theme='light']) .metric {
+    border-color: #e0e5ea;
+    background: linear-gradient(180deg, #ffffff, #f7fafc);
+  }
+
+  :global(html[data-theme='light']) .metric span {
+    color: #6b7680;
+  }
+
+  :global(html[data-theme='light']) .metric strong {
+    color: #12171b;
+  }
+
+  :global(html[data-theme='light']) .mode-readout {
+    border-color: #e0e5ea;
+    background: linear-gradient(180deg, #ffffff, #f7fafc);
+  }
+
+  :global(html[data-theme='light']) .mode-readout span,
+  :global(html[data-theme='light']) .mode-readout em {
+    color: #6b7680;
+  }
+
+  :global(html[data-theme='light']) .mode-readout strong {
+    color: #12171b;
+  }
+
+  :global(html[data-theme='light']) .mode-readout strong.on {
+    color: #e35f0c;
+  }
+
+  :global(html[data-theme='light']) .map-canvas {
+    border-color: #cdd5dc;
+    background:
+      linear-gradient(90deg, rgba(31, 72, 61, 0.1) 1px, transparent 1px),
+      linear-gradient(rgba(31, 72, 61, 0.1) 1px, transparent 1px),
+      linear-gradient(135deg, #edf4ef, #eef2f6 62%, #f8f9f6);
+    background-size: 30px 30px, 30px 30px, auto;
+  }
+
+  :global(html[data-theme='light']) .vehicle-marker {
+    background: transparent;
+    color: #fd7719;
+  }
+
+  :global(html[data-theme='light']) .map-home,
+  :global(html[data-theme='light']) .map-scale {
+    border-color: #cdd5dc;
+    background: rgba(255, 255, 255, 0.86);
+    color: #47535f;
+  }
+
+  :global(html[data-theme='light']) .battery-bar {
+    border-color: #d3dade;
+    background: #e7ecef;
+  }
+
+  :global(html[data-theme='light']) .plot {
+    border-color: #d8dee4;
+    background:
+      linear-gradient(90deg, rgba(20, 30, 40, 0.05) 1px, transparent 1px),
+      linear-gradient(rgba(20, 30, 40, 0.04) 1px, transparent 1px),
+      #ffffff;
+    background-size: 32px 32px, 32px 32px, auto;
+  }
+
+  :global(html[data-theme='light']) .plot-grid-line {
+    stroke: rgba(20, 30, 40, 0.08);
+  }
+
+  :global(html[data-theme='light']) .plot-empty,
+  :global(html[data-theme='light']) .plot-trace-control label span,
+  :global(html[data-theme='light']) .plot-legend > div {
+    color: #6b7680;
+  }
+
+  :global(html[data-theme='light']) .plot-legend strong {
+    color: #12171b;
+  }
+
+  :global(html[data-theme='light']) .event-row,
+  :global(html[data-theme='light']) .topic-row,
+  :global(html[data-theme='light']) .empty-row {
+    border-color: #e0e5ea;
+    background: #f6f8fa;
+    color: #35424b;
+  }
+
+  :global(html[data-theme='light']) .topic-row.header {
+    border-color: transparent;
+    background: transparent;
+    color: #6b7680;
+  }
+
+  :global(html[data-theme='light']) .empty-row {
+    color: #6b7680;
   }
 </style>

@@ -1,4 +1,4 @@
-export type RuntimeMode = 'simulator' | 'zenoh' | 'bridge' | 'replay';
+export type RuntimeMode = 'zenoh' | 'replay';
 export type Priority = 'low' | 'normal' | 'high' | 'critical';
 export type Severity = 'info' | 'warning' | 'error';
 
@@ -50,6 +50,40 @@ export interface Attitude {
   rollDeg: number;
   pitchDeg: number;
   yawDeg: number;
+}
+
+/**
+ * Normalized control inputs driving the vehicle. Roll/pitch/yaw are bipolar
+ * stick/surface commands in [-1, 1]; throttle is [0, 1]. Populated from the
+ * live `synapse/v1/topic/manual_control_command` axes (or, in the future, controller surface
+ * commands) so the 3D vehicle view can animate control-surface deflection.
+ */
+export interface ControlInputs {
+  aileron: number;
+  elevator: number;
+  rudder: number;
+  throttle: number;
+}
+
+/**
+ * Full decoded `synapse/v1/topic/manual_control_command` frame: the raw transmitter stick axes
+ * plus the arm/kill/mode switches. Unlike {@link ControlInputs} (which is
+ * remapped to control-surface names for the 3D view), this preserves the
+ * pilot-facing roll/pitch/yaw/throttle stick values and switch states so the
+ * RC transmitter view can mirror what the physical sticks are commanding.
+ * Roll/pitch/yaw are bipolar in [-1, 1]; throttle is [0, 1].
+ */
+export interface ManualControlState {
+  roll: number;
+  pitch: number;
+  yaw: number;
+  throttle: number;
+  flightMode: number;
+  armSwitch: boolean;
+  killSwitch: boolean;
+  active: boolean;
+  valid: boolean;
+  updatedAtMs: number;
 }
 
 export interface Battery {
@@ -123,6 +157,10 @@ export interface VehicleState {
   pose: Pose | null;
   velocity: Velocity | null;
   attitude: Attitude | null;
+  controls: ControlInputs | null;
+  manualControl: ManualControlState | null;
+  radioControl: number[] | null;
+  motors: number[] | null;
   battery: Battery | null;
   link: LinkStatus | null;
   mode: ModeState;
@@ -130,6 +168,12 @@ export interface VehicleState {
   events: EventMessage[];
   topics: Record<string, TopicSnapshot>;
   commandHistory: CommandResult[];
+  /**
+   * Last mocap sample (ENU metres + wall-clock ms), retained so the adapter can
+   * derive velocity by finite-differencing successive mocap pose frames.
+   * positions. Internal to the state store; not published.
+   */
+  lastMocap: { tMs: number; xM: number; yM: number; altM: number } | null;
 }
 
 export type CommandName =

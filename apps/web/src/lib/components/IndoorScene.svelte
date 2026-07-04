@@ -1,28 +1,119 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { Attitude, Pose } from '@electrode/sdk';
+  import type { Attitude, ControlInputs, Pose } from '@electrode/sdk';
   import * as three from 'three';
   import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-  import type { BufferGeometry, Group, Material, Object3D, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
+  import type { BufferGeometry, Group, Line, Material, Object3D, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
+  import { loadVehicleRig, type VehicleKind, type VehicleRig } from '$lib/vehicle/vehicleRig';
 
   export let pose: Pose | null = null;
   export let attitude: Attitude | null = null;
+  export let controls: ControlInputs | null = null;
+  export let motors: number[] | null = null;
   export let localizationQuality = 0;
+  export let theme: 'light' | 'dark' = 'dark';
+  export let vehicleType: VehicleKind = 'fixedwing';
+
+  // Local mocap metres are compressed into scene units for the room view. Keep
+  // the vehicle on the same scale: fixed wing is 2 ft wingspan in local metres.
+  const LOCAL_METERS_TO_SCENE = 0.09;
+  const VEHICLE_FIT = 0.6096 * LOCAL_METERS_TO_SCENE;
+  const CAMERA_TARGET = new three.Vector3(0, 0.24, 0);
+  const CAMERA_START = new three.Vector3(1.15, 0.78, 1.25);
+  // ENU/body yaw convention: yaw 0 faces +X (east), yaw +90 faces +Y (north).
+  // The rig is authored/displayed with its nose along scene -Z, so rotate it
+  // -90 deg at zero yaw to make the visual nose line up with +X.
+  const YAW_ZERO_EAST_OFFSET_RAD = -Math.PI / 2;
+  const MAX_TRAIL = 900;
+
+  let rig: VehicleRig | null = null;
+  let rigLoadToken = 0;
+  let trail: Line | null = null;
+  let trailPositions: Float32Array | null = null;
+  let trailCount = 0;
+  let mounted = false;
 
   let container: HTMLDivElement;
   let canvas: HTMLCanvasElement;
   let renderer: WebGLRenderer | null = null;
   let scene: Scene | null = null;
   let camera: PerspectiveCamera | null = null;
-  let controls: OrbitControls | null = null;
+  let orbit: OrbitControls | null = null;
   let vehicleGroup: Group | null = null;
+  let frameGroup: Group | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let animationFrame = 0;
+
+  type ScenePalette = {
+    bg: number;
+    clear: number;
+    floor: number;
+    floorOpacity: number;
+    gridCenter: number;
+    gridLine: number;
+    fineA: number;
+    fineB: number;
+    ink: number;
+    forward: number;
+    xAxis: number;
+    up: number;
+    labelX: string;
+    labelY: string;
+    labelZ: string;
+    labelShadow: string;
+  };
+
+  function paletteFor(name: 'light' | 'dark'): ScenePalette {
+    if (name === 'light') {
+      return {
+        bg: 0xeef1f3,
+        clear: 0xeef1f3,
+        floor: 0xf2f5f7,
+        floorOpacity: 0.5,
+        gridCenter: 0xe35f0c,
+        gridLine: 0xbcc6cc,
+        fineA: 0xccd4d9,
+        fineB: 0xdee3e6,
+        ink: 0x141a1f,
+        forward: 0x141a1f,
+        xAxis: 0xe35f0c,
+        up: 0xc4831c,
+        labelX: '#e35f0c',
+        labelY: '#141a1f',
+        labelZ: '#b0761a',
+        labelShadow: '#ffffff'
+      };
+    }
+    return {
+      bg: 0x0a1113,
+      clear: 0x091012,
+      floor: 0x0d1718,
+      floorOpacity: 0.62,
+      gridCenter: 0xfd7719,
+      gridLine: 0x203a3a,
+      fineA: 0x1d5b55,
+      fineB: 0x142827,
+      ink: 0xe9fff9,
+      forward: 0xf4fbf7,
+      xAxis: 0xfd7719,
+      up: 0xffc35a,
+      labelX: '#fd7719',
+      labelY: '#f4fbf7',
+      labelZ: '#ffc35a',
+      labelShadow: '#000000'
+    };
+  }
+
+  let pal: ScenePalette = paletteFor('dark');
 
   $: localX = pose?.xM ?? 0;
   $: localY = pose?.yM ?? 0;
   $: localAlt = pose?.altM ?? 0;
   $: updateVehicle(pose, attitude);
+  $: applyTheme(theme);
+  $: if (mounted && scene) {
+    void loadVehicle(vehicleType);
+  }
 
   onMount(() => {
     let disposed = false;
@@ -37,6 +128,8 @@
       resizeObserver.observe(container);
       resize();
       animate();
+      mounted = true;
+      void loadVehicle(vehicleType);
     });
 
     return () => {
@@ -46,44 +139,45 @@
   });
 
   function initScene(): void {
+    pal = paletteFor(theme);
     scene = new three.Scene();
-    scene.background = new three.Color(0x0a1113);
-    scene.fog = new three.Fog(0x0a1113, 26, 54);
+    scene.background = new three.Color(pal.bg);
+    scene.fog = new three.Fog(pal.bg, 26, 54);
 
-    camera = new three.PerspectiveCamera(46, 1, 0.1, 80);
-    camera.position.set(8.8, 6.4, 9.6);
-    camera.lookAt(0, 0.45, 0);
+    camera = new three.PerspectiveCamera(42, 1, 0.03, 28);
+    camera.position.copy(CAMERA_START);
+    camera.lookAt(CAMERA_TARGET);
 
     renderer = new three.WebGLRenderer({ canvas, antialias: true, alpha: false, preserveDrawingBuffer: true });
-    renderer.setClearColor(0x091012, 1);
+    renderer.setClearColor(pal.clear, 1);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.11;
-    controls.enableRotate = true;
-    controls.enablePan = true;
-    controls.enableZoom = true;
-    controls.screenSpacePanning = false;
-    controls.minPolarAngle = 0.18;
-    controls.maxPolarAngle = Math.PI * 0.48;
-    controls.minDistance = 4.8;
-    controls.maxDistance = 34;
-    controls.rotateSpeed = 0.58;
-    controls.zoomSpeed = 0.78;
-    controls.panSpeed = 0.82;
-    controls.target.set(0, 0.45, 0);
-    controls.mouseButtons = {
+    orbit = new OrbitControls(camera, renderer.domElement);
+    orbit.enableDamping = true;
+    orbit.dampingFactor = 0.11;
+    orbit.enableRotate = true;
+    orbit.enablePan = true;
+    orbit.enableZoom = true;
+    orbit.screenSpacePanning = false;
+    orbit.minPolarAngle = 0.18;
+    orbit.maxPolarAngle = Math.PI * 0.48;
+    orbit.minDistance = 0.18;
+    orbit.maxDistance = 8;
+    orbit.rotateSpeed = 0.58;
+    orbit.zoomSpeed = 0.78;
+    orbit.panSpeed = 0.82;
+    orbit.target.copy(CAMERA_TARGET);
+    orbit.mouseButtons = {
       LEFT: three.MOUSE.PAN,
       MIDDLE: three.MOUSE.DOLLY,
       RIGHT: three.MOUSE.ROTATE
     };
-    controls.touches = {
+    orbit.touches = {
       ONE: three.TOUCH.PAN,
       TWO: three.TOUCH.DOLLY_PAN
     };
-    controls.addEventListener('change', clampCameraControls);
-    controls.update();
+    orbit.addEventListener('change', clampCameraControls);
+    orbit.update();
 
     const ambient = new three.AmbientLight(0xbffaf0, 0.78);
     scene.add(ambient);
@@ -92,65 +186,142 @@
     keyLight.position.set(7, 12, 8);
     scene.add(keyLight);
 
-    const fillLight = new three.PointLight(0x42e8c4, 3.8, 24);
+    const fillLight = new three.PointLight(0xfd7719, 3.8, 24);
     fillLight.position.set(-7, 4, -6);
     scene.add(fillLight);
 
-    addLocalFrame();
+    frameGroup = buildFrame();
+    scene.add(frameGroup);
 
     vehicleGroup = createVehicleMarker();
     scene.add(vehicleGroup);
 
+    trailPositions = new Float32Array(MAX_TRAIL * 3);
+    trailCount = 0;
+    const trailGeometry = new three.BufferGeometry();
+    trailGeometry.setAttribute('position', new three.BufferAttribute(trailPositions, 3));
+    trailGeometry.setDrawRange(0, 0);
+    trail = new three.Line(
+      trailGeometry,
+      new three.LineBasicMaterial({ color: pal.xAxis, transparent: true, opacity: 0.7 })
+    );
+    scene.add(trail);
+
     updateVehicle(pose, attitude);
   }
 
-  function addLocalFrame(): void {
-    if (!scene) {
+  async function loadVehicle(kind: VehicleKind): Promise<void> {
+    if (!scene || !vehicleGroup) {
       return;
     }
+    if (rig && rig.kind === kind) {
+      return;
+    }
+    const token = ++rigLoadToken;
+
+    let nextRig: VehicleRig;
+    try {
+      nextRig = await loadVehicleRig(kind, VEHICLE_FIT);
+    } catch (error) {
+      console.error('IndoorScene: vehicle model load failed', error);
+      return;
+    }
+
+    if (token !== rigLoadToken || !vehicleGroup) {
+      nextRig.dispose();
+      return;
+    }
+
+    // Replace the placeholder arrow marker (or the previous model) in place.
+    while (vehicleGroup.children.length > 0) {
+      const child = vehicleGroup.children[0];
+      vehicleGroup.remove(child);
+      disposeObject(child);
+    }
+    rig?.dispose();
+    rig = nextRig;
+    vehicleGroup.add(rig.root);
+    // Reset the trail so it doesn't jump across a vehicle swap.
+    trailCount = 0;
+    if (trail) {
+      trail.geometry.setDrawRange(0, 0);
+    }
+  }
+
+  function applyTheme(name: 'light' | 'dark'): void {
+    if (!scene || !renderer) {
+      return;
+    }
+
+    pal = paletteFor(name);
+    if (scene.background instanceof three.Color) {
+      scene.background.set(pal.bg);
+    }
+    if (scene.fog) {
+      (scene.fog as three.Fog).color.set(pal.bg);
+    }
+    renderer.setClearColor(pal.clear, 1);
+
+    if (frameGroup) {
+      scene.remove(frameGroup);
+      disposeObject(frameGroup);
+    }
+    frameGroup = buildFrame();
+    scene.add(frameGroup);
+
+    // The vehicle model keeps its own GLB materials across themes; only recolor
+    // the flight trail to the theme accent.
+    if (trail) {
+      (trail.material as three.LineBasicMaterial).color.set(pal.xAxis);
+    }
+
+    updateVehicle(pose, attitude);
+  }
+
+  function buildFrame(): Group {
+    const group = new three.Group();
 
     const floor = new three.Mesh(
       new three.PlaneGeometry(22, 22),
       new three.MeshBasicMaterial({
-        color: 0x0d1718,
+        color: pal.floor,
         transparent: true,
-        opacity: 0.62,
+        opacity: pal.floorOpacity,
         side: three.DoubleSide
       })
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -0.015;
-    scene.add(floor);
+    group.add(floor);
 
-    const grid = new three.GridHelper(22, 22, 0x42e8c4, 0x203a3a);
+    const grid = new three.GridHelper(22, 22, pal.gridCenter, pal.gridLine);
     grid.position.y = 0;
-    scene.add(grid);
+    group.add(grid);
 
-    const fineGrid = new three.GridHelper(22, 44, 0x1d5b55, 0x142827);
+    const fineGrid = new three.GridHelper(22, 44, pal.fineA, pal.fineB);
     fineGrid.position.y = 0.006;
-    scene.add(fineGrid);
+    group.add(fineGrid);
 
     const origin = new three.Mesh(
       new three.SphereGeometry(0.13, 18, 12),
-      new three.MeshBasicMaterial({ color: 0xe9fff9 })
+      new three.MeshBasicMaterial({ color: pal.ink })
     );
     origin.position.y = 0.08;
-    scene.add(origin);
+    group.add(origin);
 
     const axisOrigin = new three.Vector3(0, 0.08, 0);
-    scene.add(new three.ArrowHelper(new three.Vector3(1, 0, 0), axisOrigin, 6.2, 0x42e8c4, 0.38, 0.19));
-    scene.add(new three.ArrowHelper(new three.Vector3(0, 0, -1), axisOrigin, 6.2, 0x61a8ff, 0.38, 0.19));
-    scene.add(new three.ArrowHelper(new three.Vector3(0, 1, 0), axisOrigin, 2.9, 0xffc35a, 0.34, 0.17));
+    group.add(new three.ArrowHelper(new three.Vector3(1, 0, 0), axisOrigin, 6.2, pal.xAxis, 0.38, 0.19));
+    group.add(new three.ArrowHelper(new three.Vector3(0, 0, -1), axisOrigin, 6.2, pal.forward, 0.38, 0.19));
+    group.add(new three.ArrowHelper(new three.Vector3(0, 1, 0), axisOrigin, 2.9, pal.up, 0.34, 0.17));
 
-    addAxisLabel('X', '#42e8c4', new three.Vector3(6.85, 0.34, 0));
-    addAxisLabel('Y', '#61a8ff', new three.Vector3(0, 0.34, -6.85));
-    addAxisLabel('Z', '#ffc35a', new three.Vector3(0.35, 3.35, 0));
+    addAxisLabel(group, 'X', pal.labelX, new three.Vector3(6.85, 0.34, 0));
+    addAxisLabel(group, 'Y', pal.labelY, new three.Vector3(0, 0.34, -6.85));
+    addAxisLabel(group, 'Z', pal.labelZ, new three.Vector3(0.35, 3.35, 0));
+
+    return group;
   }
 
-  function addAxisLabel(text: string, color: string, position: Vector3): void {
-    if (!scene) {
-      return;
-    }
+  function addAxisLabel(group: Group, text: string, color: string, position: Vector3): void {
     const labelCanvas = document.createElement('canvas');
     labelCanvas.width = 128;
     labelCanvas.height = 72;
@@ -163,7 +334,7 @@
     context.font = '700 44px Inter, system-ui, sans-serif';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    context.shadowColor = '#000000';
+    context.shadowColor = pal.labelShadow;
     context.shadowBlur = 10;
     context.fillStyle = color;
     context.fillText(text, labelCanvas.width / 2, labelCanvas.height / 2);
@@ -178,7 +349,7 @@
     const sprite = new three.Sprite(material);
     sprite.position.copy(position);
     sprite.scale.set(0.72, 0.4, 1);
-    scene.add(sprite);
+    group.add(sprite);
   }
 
   function createVehicleMarker(): Group {
@@ -187,14 +358,32 @@
     const bodyOrigin = new three.Vector3(0, 0, 0);
     const origin = new three.Mesh(
       new three.SphereGeometry(0.12, 18, 12),
-      new three.MeshBasicMaterial({ color: 0xe9fff9 })
+      new three.MeshBasicMaterial({ color: pal.ink })
     );
     group.add(origin);
-    group.add(new three.ArrowHelper(new three.Vector3(0, 0, -1), bodyOrigin, 1.28, 0xe9fff9, 0.24, 0.12));
-    group.add(new three.ArrowHelper(new three.Vector3(1, 0, 0), bodyOrigin, 1.02, 0x61a8ff, 0.2, 0.1));
-    group.add(new three.ArrowHelper(new three.Vector3(0, 1, 0), bodyOrigin, 0.86, 0xffc35a, 0.18, 0.09));
+    group.add(new three.ArrowHelper(new three.Vector3(0, 0, -1), bodyOrigin, 1.28, pal.ink, 0.24, 0.12));
+    group.add(new three.ArrowHelper(new three.Vector3(1, 0, 0), bodyOrigin, 1.02, pal.forward, 0.2, 0.1));
+    group.add(new three.ArrowHelper(new three.Vector3(0, 1, 0), bodyOrigin, 0.86, pal.up, 0.18, 0.09));
 
     return group;
+  }
+
+  function disposeObject(root: Object3D): void {
+    root.traverse((object: Object3D) => {
+      const renderable = object as Object3D & {
+        geometry?: BufferGeometry;
+        material?: Material | Material[];
+      };
+      renderable.geometry?.dispose();
+      if (renderable.material) {
+        const materials = Array.isArray(renderable.material) ? renderable.material : [renderable.material];
+        for (const material of materials) {
+          const materialWithMap = material as Material & { map?: { dispose: () => void } };
+          materialWithMap.map?.dispose();
+          material.dispose();
+        }
+      }
+    });
   }
 
   function updateVehicle(nextPose: Pose | null, nextAttitude: Attitude | null): void {
@@ -206,16 +395,31 @@
     vehicleGroup.position.copy(vehiclePosition);
     vehicleGroup.rotation.set(
       three.MathUtils.degToRad(nextAttitude?.pitchDeg ?? 0),
-      -three.MathUtils.degToRad(nextAttitude?.yawDeg ?? 0),
+      three.MathUtils.degToRad(nextAttitude?.yawDeg ?? 0) + YAW_ZERO_EAST_OFFSET_RAD,
       -three.MathUtils.degToRad(nextAttitude?.rollDeg ?? 0)
     );
+    recordTrail(vehiclePosition);
+  }
+
+  function recordTrail(position: Vector3): void {
+    if (!trail || !trailPositions) {
+      return;
+    }
+    const index = trailCount % MAX_TRAIL;
+    trailPositions[index * 3] = position.x;
+    trailPositions[index * 3 + 1] = position.y;
+    trailPositions[index * 3 + 2] = position.z;
+    trailCount++;
+    const attribute = trail.geometry.getAttribute('position') as three.BufferAttribute;
+    attribute.needsUpdate = true;
+    trail.geometry.setDrawRange(0, Math.min(trailCount, MAX_TRAIL));
   }
 
   function localPositionToScene(nextPose: Pose): Vector3 {
     return new three.Vector3(
-      clamp(nextPose.xM * 0.09, -9.8, 9.8),
+      clamp(nextPose.xM * LOCAL_METERS_TO_SCENE, -9.8, 9.8),
       localAltitudeSceneY(nextPose.altM),
-      clamp(-nextPose.yM * 0.09, -9.8, 9.8)
+      clamp(-nextPose.yM * LOCAL_METERS_TO_SCENE, -9.8, 9.8)
     );
   }
 
@@ -240,15 +444,18 @@
     if (!renderer || !scene || !camera) {
       return;
     }
-    controls?.update();
+    rig?.update(controls, motors);
+    orbit?.update();
     renderer.render(scene, camera);
   }
 
   function disposeScene(): void {
     cancelAnimationFrame(animationFrame);
     resizeObserver?.disconnect();
-    controls?.removeEventListener('change', clampCameraControls);
-    controls?.dispose();
+    orbit?.removeEventListener('change', clampCameraControls);
+    orbit?.dispose();
+    rig?.dispose();
+    rig = null;
     renderer?.dispose();
     scene?.traverse((object: Object3D) => {
       const maybeRenderable = object as Object3D & {
@@ -268,19 +475,22 @@
     renderer = null;
     scene = null;
     camera = null;
-    controls = null;
+    orbit = null;
     vehicleGroup = null;
+    frameGroup = null;
+    trail = null;
+    trailPositions = null;
     resizeObserver = null;
   }
 
   function clampCameraControls(): void {
-    if (!controls) {
+    if (!orbit) {
       return;
     }
 
     const min = new three.Vector3(-13, 0.05, -13);
     const max = new three.Vector3(13, 4.6, 13);
-    controls.target.clamp(min, max);
+    orbit.target.clamp(min, max);
   }
 
   function clamp(value: number, min: number, max: number): number {
@@ -298,6 +508,7 @@
 
 <div
   class="indoor-scene"
+  class:light={theme === 'light'}
   bind:this={container}
   role="application"
   aria-label="Indoor local navigation map"
@@ -338,6 +549,11 @@
     touch-action: none;
   }
 
+  .indoor-scene.light {
+    border-color: #cdd5dc;
+    background: #eef1f3;
+  }
+
   canvas {
     display: block;
     width: 100%;
@@ -366,7 +582,7 @@
     gap: 3px;
     min-width: 0;
     padding: 7px 8px;
-    border: 1px solid rgba(66, 232, 196, 0.2);
+    border: 1px solid rgba(253, 119, 25, 0.2);
     border-radius: 8px;
     background: rgba(5, 8, 8, 0.74);
     backdrop-filter: blur(5px);
@@ -389,6 +605,19 @@
     font-weight: 760;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .indoor-scene.light .indoor-readout > div {
+    border-color: rgba(227, 95, 12, 0.28);
+    background: rgba(255, 255, 255, 0.82);
+  }
+
+  .indoor-scene.light .indoor-readout span {
+    color: #5c6873;
+  }
+
+  .indoor-scene.light .indoor-readout strong {
+    color: #12171b;
   }
 
   @media (max-width: 820px) {

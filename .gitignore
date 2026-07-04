@@ -8,3 +8,8 @@ pkg/
 .DS_Store
 .env
 
+
+# Local ground-station runtime configs (machine-specific paths)
+/electrode-autopilot.json
+/electrode-simulation.json
+/electrode-mapping.json

@@ -9,11 +9,14 @@ repository.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 electrode-web-core = { path = "../electrode-web-core" }
+flatbuffers.workspace = true
 futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+synapse_fbs.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+zenoh.workspace = true
 

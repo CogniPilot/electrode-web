@@ -1,7 +1,9 @@
 use clap::Parser;
-use flatbuffers::root;
-use synapse_fbs::topic::ManualControl;
+use synapse_fbs::topic::{ManualControlData, ManualControlFlags};
 use thiserror::Error;
+
+/// Wire size of a bare `synapse.topic.ManualControlData` struct.
+const MANUAL_CONTROL_PAYLOAD_SIZE: usize = 40;
 use zenoh::{config::Config, Wait};
 
 #[derive(Debug, Parser)]
@@ -15,7 +17,7 @@ struct Cli {
         long = "zenoh-connect",
         env = "ZENOH_CONNECT",
         value_name = "LOCATOR",
-        default_value = "tcp/127.0.0.1:7447",
+        default_value = "udp/127.0.0.1:7447",
         help = "Zenoh router locator"
     )]
     zenoh_connect: String,
@@ -25,8 +27,8 @@ struct Cli {
         alias = "zenoh-topic",
         env = "ZENOH_TOPIC",
         value_name = "KEYEXPR",
-        default_value = "synapse/manual_control",
-        help = "Zenoh key expression for synapse.topic.ManualControl payloads"
+        default_value = "synapse/v1/topic/manual_control_command",
+        help = "Zenoh key expression for synapse.topic.ManualControlData bare structs"
     )]
     topic: String,
 }
@@ -35,8 +37,8 @@ struct Cli {
 enum DumpError {
     #[error("zenoh error: {0}")]
     Zenoh(String),
-    #[error("flatbuffer decode error: {0}")]
-    Flatbuffer(String),
+    #[error("manual control payload is {actual} bytes, expected {expected}")]
+    PayloadSize { expected: usize, actual: usize },
 }
 
 type Result<T> = std::result::Result<T, DumpError>;
@@ -56,26 +58,30 @@ fn main() -> Result<()> {
             .recv()
             .map_err(|error| DumpError::Zenoh(error.to_string()))?;
         let payload = sample.payload().to_bytes();
-        let message = root::<ManualControl>(&payload)
-            .map_err(|error| DumpError::Flatbuffer(error.to_string()))?;
-        let Some(data) = message.data() else {
-            return Err(DumpError::Flatbuffer(
-                "ManualControl.data is missing".to_string(),
-            ));
-        };
-        let axes = data.axes();
+        // 0.3.0 transmits ManualControlData as a bare fixed-layout struct.
+        if payload.len() != MANUAL_CONTROL_PAYLOAD_SIZE {
+            return Err(DumpError::PayloadSize {
+                expected: MANUAL_CONTROL_PAYLOAD_SIZE,
+                actual: payload.len(),
+            });
+        }
+        // Safety: fixed-layout structs are repr(transparent) byte arrays with
+        // unaligned accessors, and the size check above covers the struct.
+        let data = unsafe { <ManualControlData as flatbuffers::Follow>::follow(&payload, 0) };
+        let flags = ManualControlFlags::from_bits_retain(data.flags());
+        let milli = |value: i16| f32::from(value) / 1000.0;
 
         println!(
             "roll={:+.3} pitch={:+.3} yaw={:+.3} throttle={:.3} mode={} arm={} kill={} active={} valid={} timestamp_us={}",
-            axes.roll(),
-            axes.pitch(),
-            axes.yaw(),
-            axes.throttle(),
+            milli(data.roll_milli()),
+            milli(data.pitch_milli()),
+            milli(data.yaw_milli()),
+            milli(data.throttle_milli()),
             data.flight_mode(),
-            data.arm_switch(),
-            data.kill_switch(),
-            data.active(),
-            data.valid(),
+            flags.contains(ManualControlFlags::ArmSwitch),
+            flags.contains(ManualControlFlags::KillSwitch),
+            flags.contains(ManualControlFlags::Active),
+            flags.contains(ManualControlFlags::Valid),
             data.timestamp_us(),
         );
     }

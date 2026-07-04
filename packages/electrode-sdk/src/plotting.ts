@@ -149,59 +149,88 @@ const ELECTRODE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
 
 const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
   {
-    topic: 'synapse/manual_control',
-    schema: 'synapse.topic.ManualControl',
+    topic: 'synapse/v1/topic/manual_control_command',
+    schema: 'synapse.topic.ManualControlCommand',
     label: 'ManualControl',
     source: 'synapse_fbs',
     fields: [
       numberField('data.timestamp_us', 'Timestamp', 'us'),
       ...manualAxes('data.axes'),
-      ...auxFields('data.aux'),
+      ...auxArrayFields('data.aux', 6),
       numberField('data.flight_mode', 'Flight mode', ''),
       booleanField('data.arm_switch', 'Arm switch'),
       booleanField('data.kill_switch', 'Kill switch'),
       booleanField('data.active', 'Active'),
-      booleanField('data.valid', 'Valid')
+      booleanField('data.valid', 'Valid'),
+      numberField('data.buttons', 'Buttons', '')
     ]
   },
   {
-    topic: 'synapse/flight_snapshot',
-    schema: 'synapse.topic.FlightSnapshot',
-    label: 'FlightSnapshot',
+    topic: 'synapse/v1/topic/attitude_estimate',
+    schema: 'synapse.topic.AttitudeEstimate',
+    label: 'AttitudeEstimate',
     source: 'synapse_fbs',
     fields: [
-      ...vec3Fields('gyro', 'Gyro', 'rad/s'),
-      ...vec3Fields('accel', 'Accel', 'm/s^2'),
-      ...rcChannelFields('rc'),
-      ...controlStatusFields('status'),
-      ...attitudeFields('attitude', 'Attitude'),
-      ...attitudeFields('attitude_desired', 'Attitude desired'),
-      ...rateFields('rate_desired', 'Rate desired'),
-      ...rateFields('rate_cmd', 'Rate command'),
-      numberField('main_loop_latency_us', 'Main loop latency', 'us')
+      numberField('data.timestamp_us', 'Timestamp', 'us'),
+      ...quatFields('data.attitude', 'Attitude'),
+      ...rateFields('data.angular_velocity', 'Angular velocity'),
+      booleanField('data.attitude_valid', 'Attitude valid'),
+      booleanField('data.rates_valid', 'Rates valid')
     ]
   },
   {
-    topic: 'synapse/motor_output',
-    schema: 'synapse.topic.MotorOutput',
-    label: 'MotorOutput',
+    topic: 'synapse/v1/topic/vehicle_health',
+    schema: 'synapse.topic.VehicleHealth',
+    label: 'VehicleHealth',
     source: 'synapse_fbs',
     fields: [
-      ...motorFields('motors', 'Motor', ''),
-      ...motorFields('raw', 'Raw motor', 'us'),
-      booleanField('armed', 'Armed'),
-      booleanField('test_mode', 'Test mode')
+      numberField('data.timestamp_us', 'Timestamp', 'us'),
+      numberField('data.flight_mode', 'Flight mode', ''),
+      numberField('data.link_quality_pct', 'Link quality', '%'),
+      numberField('data.voltage_battery_v', 'Voltage', 'V'),
+      numberField('data.current_battery_a', 'Current', 'A'),
+      numberField('data.battery_remaining_pct', 'Battery remaining', '%'),
+      booleanField('data.armed', 'Armed'),
+      booleanField('data.failsafe', 'Failsafe'),
+      numberField('data.system_state', 'System state', ''),
+      numberField('data.load_pct', 'Load', '%')
     ]
   },
   {
-    topic: 'synapse/control_output',
-    schema: 'synapse.topic.RcChannels16',
-    label: 'RcChannels16',
+    topic: 'synapse/v1/topic/power_status',
+    schema: 'synapse.topic.PowerStatus',
+    label: 'PowerStatus',
+    source: 'synapse_fbs',
+    fields: [
+      numberField('data.timestamp_us', 'Timestamp', 'us'),
+      numberField('data.voltage_v', 'Voltage', 'V'),
+      numberField('data.current_a', 'Current', 'A'),
+      numberField('data.remaining_pct', 'Remaining', '%'),
+      booleanField('data.connected', 'Connected'),
+      numberField('data.temperature_c', 'Temperature', 'C')
+    ]
+  },
+  {
+    topic: 'synapse/v1/topic/pwm_signal_outputs',
+    schema: 'synapse.topic.PwmSignalOutputs',
+    label: 'PwmSignalOutputs',
+    source: 'synapse_fbs',
+    fields: [
+      numberField('data.timestamp_us', 'Timestamp', 'us'),
+      numberField('data.active_mask', 'Active mask', ''),
+      numberField('data.port', 'Port', ''),
+      ...motorFields('motors', 'Motor', 'us')
+    ]
+  },
+  {
+    topic: 'synapse/v1/topic/radio_control',
+    schema: 'synapse.topic.RadioControl',
+    label: 'RadioControl',
     source: 'synapse_fbs',
     fields: rcChannelFields('')
   },
   {
-    topic: 'synapse/mocap/frame',
+    topic: 'synapse/mocap/rigid_body/cub1/pose',
     schema: 'synapse.topic.MocapFrame',
     label: 'MocapFrame',
     source: 'synapse_fbs',
@@ -217,9 +246,9 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     ]
   },
   {
-    topic: 'synapse/optical_flow',
-    schema: 'synapse.topic.VehicleOpticalFlow',
-    label: 'VehicleOpticalFlow',
+    topic: 'synapse/v1/topic/optical_flow',
+    schema: 'synapse.topic.OpticalFlow',
+    label: 'OpticalFlow',
     source: 'synapse_fbs',
     fields: [
       numberField('data.timestamp_us', 'Timestamp', 'us'),
@@ -234,9 +263,9 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     ]
   },
   {
-    topic: 'synapse/optical_flow_vel',
-    schema: 'synapse.topic.VehicleOpticalFlowVel',
-    label: 'VehicleOpticalFlowVel',
+    topic: 'synapse/v1/topic/optical_flow_velocity',
+    schema: 'synapse.topic.OpticalFlowVelocity',
+    label: 'OpticalFlowVelocity',
     source: 'synapse_fbs',
     fields: [
       numberField('data.timestamp_us', 'Timestamp', 'us'),
@@ -248,7 +277,7 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     ]
   },
   {
-    topic: 'synapse/sim/input',
+    topic: 'synapse/v1/sil/sim_input',
     schema: 'synapse.sil.SimInput',
     label: 'SimInput',
     source: 'synapse_fbs',
@@ -429,10 +458,6 @@ function quatFields(prefix: string, label: string): PlotFieldDefinition[] {
   return ['x', 'y', 'z', 'w'].map((axis) => numberField(pathJoin(prefix, axis), `${label} ${axis.toUpperCase()}`, ''));
 }
 
-function attitudeFields(prefix: string, label: string): PlotFieldDefinition[] {
-  return ['roll', 'pitch', 'yaw'].map((axis) => numberField(pathJoin(prefix, axis), `${label} ${axis}`, 'rad'));
-}
-
 function rateFields(prefix: string, label: string): PlotFieldDefinition[] {
   return ['roll', 'pitch', 'yaw'].map((axis) => numberField(pathJoin(prefix, axis), `${label} ${axis}`, 'rad/s'));
 }
@@ -446,26 +471,12 @@ function manualAxes(prefix: string): PlotFieldDefinition[] {
   ];
 }
 
-function auxFields(prefix: string): PlotFieldDefinition[] {
-  return Array.from({ length: 8 }, (_, index) => numberField(pathJoin(prefix, `aux${index}`), `Aux ${index}`, ''));
+function auxArrayFields(prefix: string, count: number): PlotFieldDefinition[] {
+  return Array.from({ length: count }, (_, index) => numberField(pathJoin(prefix, String(index)), `Aux ${index}`, ''));
 }
 
 function rcChannelFields(prefix: string): PlotFieldDefinition[] {
   return Array.from({ length: 16 }, (_, index) => numberField(pathJoin(prefix, `ch${index}`), `RC ch${index}`, 'us'));
-}
-
-function controlStatusFields(prefix: string): PlotFieldDefinition[] {
-  return [
-    numberField(pathJoin(prefix, 'rc_stamp_ms'), 'RC stamp', 'ms'),
-    numberField(pathJoin(prefix, 'throttle_us'), 'Throttle', 'us'),
-    numberField(pathJoin(prefix, 'rc_link_quality'), 'RC quality', ''),
-    numberField(pathJoin(prefix, 'flight_mode'), 'Flight mode', ''),
-    booleanField(pathJoin(prefix, 'armed'), 'Armed'),
-    booleanField(pathJoin(prefix, 'rc_valid'), 'RC valid'),
-    booleanField(pathJoin(prefix, 'rc_stale'), 'RC stale'),
-    booleanField(pathJoin(prefix, 'imu_ok'), 'IMU OK'),
-    booleanField(pathJoin(prefix, 'arm_switch'), 'Arm switch')
-  ];
 }
 
 function motorFields(prefix: string, label: string, units: string): PlotFieldDefinition[] {

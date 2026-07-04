@@ -40,11 +40,8 @@ export function makeSimulatedTelemetryBundle(options: SimulationOptions): Teleme
   const xM = Math.cos(t / 8) * radiusM;
   const yM = Math.sin(t / 8) * radiusM;
   const altM = 18 + Math.sin(t / 5) * 3;
-  const lat = 40.4237 + yM / 111_111;
-  const lon = -86.9212 + xM / (111_111 * Math.cos((40.4237 * Math.PI) / 180));
   const northMps = Math.cos(t / 4) * 1.8;
   const eastMps = -Math.sin(t / 4) * 1.8;
-  const downMps = Math.cos(t / 3) * 0.2;
   const rollDeg = Math.sin(t * 1.3) * 12;
   const pitchDeg = Math.cos(t * 0.9) * 8;
   const yawDeg = ((t * 18) % 360 + 360) % 360;
@@ -53,23 +50,6 @@ export function makeSimulatedTelemetryBundle(options: SimulationOptions): Teleme
   const localizationQuality = 0.91 + Math.sin(t / 6) * 0.05;
   const armed = options.armed ?? true;
   let sequence = options.sequenceStart;
-
-  const frame = <TPayload>(key: keyof typeof TOPIC_DEFINITIONS, payload: TPayload, ttlMs = 1000): TelemetryFrame<TPayload> => {
-    const definition = TOPIC_DEFINITIONS[key];
-    return {
-      kind: 'telemetry',
-      topic: resolveTopic(definition.topic, vehicleId),
-      header: makeHeader({
-        vehicleId,
-        sequence: sequence++,
-        nowMs,
-        ttlMs,
-        messageType: definition.schema,
-        streamId: definition.key
-      }),
-      payload
-    };
-  };
 
   const synapseFrame = <TPayload>(topic: string, messageType: string, streamId: string, payload: TPayload, ttlMs = 1000): TelemetryFrame<TPayload> => ({
     kind: 'telemetry',
@@ -101,35 +81,57 @@ export function makeSimulatedTelemetryBundle(options: SimulationOptions): Teleme
   ].map(clamp01);
   const timestampUs = Math.round(nowMs * 1000);
 
+  // Motor mix normalized 0..1 mapped to PWM microseconds (1000..2000 us), the
+  // wire units of `pwm_signal_outputs` (matching hardware and the sim stepper).
+  const motorPwm = motorMix.map((value) => Math.round(1000 + value * 1000));
+  const remainingPct = Math.max(22, 94 - t * 0.05);
+  const linkQualityPct = Math.round(localizationQuality * 100);
+  const flightMode = modeToSynapseFlightMode(options.mode ?? 'hold');
+
+  // Publish only the raw Synapse wire topics real hardware emits; the state
+  // store's adapter derives pose/attitude/velocity/mode/battery/etc. from them.
   return [
-    frame('pose', { lat, lon, altM, xM, yM, zM: -altM }, 250),
-    frame(
-      'velocity',
-      {
-        northMps,
-        eastMps,
-        downMps,
-        groundSpeedMps: 1.8
-      },
-      250
-    ),
-    frame(
-      'attitude',
-      {
-        rollDeg,
-        pitchDeg,
-        yawDeg
-      },
-      220
-    ),
-    frame('battery', { voltageV, currentA, remainingPct: Math.max(22, 94 - t * 0.05) }, 2500),
-    frame('link', { rssiDbm: -49 - Math.sin(t / 4) * 5, latencyMs: 23 + Math.sin(t / 2) * 5, packetLossPct: Math.max(0, Math.sin(t / 5) * 1.8) }, 2500),
-    frame('mode', { name: options.mode ?? 'hold', armed, failsafe: false }, 2500),
-    frame('localization', { source: 'mocap+ekf', fresh: true, quality: localizationQuality, updatedAtMs: nowMs }, 1200),
     synapseFrame(
-      'synapse/manual_control',
-      'synapse.topic.ManualControl',
-      'synapse_manual_control',
+      'synapse/v1/topic/power_status',
+      'synapse.topic.PowerStatus',
+      'synapse_power_status',
+      {
+        data: {
+          timestamp_us: timestampUs,
+          voltage_v: voltageV,
+          current_a: currentA,
+          remaining_pct: remainingPct,
+          connected: true,
+          cells_mv: [],
+          temperature_c: 0
+        }
+      },
+      2500
+    ),
+    synapseFrame(
+      'synapse/v1/topic/vehicle_health',
+      'synapse.topic.VehicleHealth',
+      'synapse_vehicle_health',
+      {
+        data: {
+          timestamp_us: timestampUs,
+          flight_mode: flightMode,
+          link_quality_pct: linkQualityPct,
+          voltage_battery_v: voltageV,
+          current_battery_a: currentA,
+          battery_remaining_pct: Math.round(remainingPct),
+          armed,
+          failsafe: false,
+          system_state: 0,
+          load_pct: Math.round(30 + Math.sin(t * 2.1) * 8)
+        }
+      },
+      2500
+    ),
+    synapseFrame(
+      'synapse/v1/topic/manual_control_command',
+      'synapse.topic.ManualControlCommand',
+      'synapse_manual_control_command',
       {
         data: {
           timestamp_us: timestampUs,
@@ -140,67 +142,55 @@ export function makeSimulatedTelemetryBundle(options: SimulationOptions): Teleme
             throttle: throttleInput
           },
           aux: makeAux(t),
-          flight_mode: modeToSynapseFlightMode(options.mode ?? 'hold'),
+          flight_mode: flightMode,
           arm_switch: armed,
           kill_switch: false,
           active: true,
-          valid: true
+          valid: true,
+          buttons: 0
         }
       },
       180
     ),
     synapseFrame(
-      'synapse/flight_snapshot',
-      'synapse.topic.FlightSnapshot',
-      'synapse_flight_snapshot',
+      'synapse/v1/topic/attitude_estimate',
+      'synapse.topic.AttitudeEstimate',
+      'synapse_attitude_estimate',
       {
-        gyro: {
-          x: degToRad(Math.cos(t * 1.3) * 15.6),
-          y: degToRad(-Math.sin(t * 0.9) * 7.2),
-          z: degToRad(18)
-        },
-        accel: {
-          x: Math.sin(pitchRad) * 9.81,
-          y: -Math.sin(rollRad) * 9.81,
-          z: -Math.cos(rollRad) * Math.cos(pitchRad) * 9.81
-        },
-        rc,
-        status: {
-          rc_stamp_ms: nowMs,
-          throttle_us: rc.ch2,
-          rc_link_quality: Math.round(localizationQuality * 100),
-          flight_mode: modeToSynapseFlightMode(options.mode ?? 'hold'),
-          armed,
-          rc_valid: true,
-          rc_stale: false,
-          imu_ok: true,
-          arm_switch: armed
-        },
-        attitude: { roll: rollRad, pitch: pitchRad, yaw: yawRad },
-        attitude_desired: { roll: rollInput * 0.55, pitch: pitchInput * 0.45, yaw: yawRad },
-        rate_desired: { roll: rollInput * 1.8, pitch: pitchInput * 1.6, yaw: yawInput * 1.2 },
-        rate_cmd: { roll: rollInput * 1.5, pitch: pitchInput * 1.35, yaw: yawInput },
-        main_loop_latency_us: Math.round(900 + Math.sin(t * 2.1) * 140)
+        data: {
+          timestamp_us: timestampUs,
+          attitude: eulerToQuaternion(rollRad, pitchRad, yawRad),
+          angular_velocity: {
+            roll: degToRad(Math.cos(t * 1.3) * 15.6),
+            pitch: degToRad(-Math.sin(t * 0.9) * 7.2),
+            yaw: degToRad(18)
+          },
+          attitude_valid: true,
+          rates_valid: true
+        }
       },
       180
     ),
     synapseFrame(
-      'synapse/motor_output',
-      'synapse.topic.MotorOutput',
-      'synapse_motor_output',
+      'synapse/v1/topic/pwm_signal_outputs',
+      'synapse.topic.PwmSignalOutputs',
+      'synapse_pwm_signal_outputs',
       {
-        motors: motorMixObject(motorMix),
-        raw: motorMixObject(motorMix.map((value) => Math.round(1000 + value * 1000))),
-        armed,
-        test_mode: false
+        data: {
+          timestamp_us: timestampUs,
+          active_mask: armed ? 0b1111 : 0,
+          port: 0,
+          outputs_us: [...motorPwm, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        },
+        motors: motorMixObject(motorPwm)
       },
       180
     ),
-    synapseFrame('synapse/control_output', 'synapse.topic.RcChannels16', 'synapse_control_output', rc, 180),
+    synapseFrame('synapse/v1/topic/radio_control', 'synapse.topic.RadioControl', 'synapse_radio_control', rc, 180),
     synapseFrame(
-      'synapse/mocap/frame',
+      'synapse/mocap/rigid_body/cub1/pose',
       'synapse.topic.MocapFrame',
-      'synapse_mocap_frame',
+      'synapse_mocap_rigid_body_cub1_pose',
       {
         timestamp_us: timestampUs,
         frame_number: Math.floor(options.elapsedMs / 10),
@@ -226,8 +216,8 @@ export function makeSimulatedTelemetryBundle(options: SimulationOptions): Teleme
       180
     ),
     synapseFrame(
-      'synapse/optical_flow',
-      'synapse.topic.VehicleOpticalFlow',
+      'synapse/v1/topic/optical_flow',
+      'synapse.topic.OpticalFlow',
       'synapse_optical_flow',
       {
         data: {
@@ -245,9 +235,9 @@ export function makeSimulatedTelemetryBundle(options: SimulationOptions): Teleme
       180
     ),
     synapseFrame(
-      'synapse/optical_flow_vel',
-      'synapse.topic.VehicleOpticalFlowVel',
-      'synapse_optical_flow_vel',
+      'synapse/v1/topic/optical_flow_velocity',
+      'synapse.topic.OpticalFlowVelocity',
+      'synapse_optical_flow_velocity',
       {
         data: {
           timestamp_us: timestampUs,
@@ -261,7 +251,7 @@ export function makeSimulatedTelemetryBundle(options: SimulationOptions): Teleme
       180
     ),
     synapseFrame(
-      'synapse/sim/input',
+      'synapse/v1/sil/sim_input',
       'synapse.sil.SimInput',
       'synapse_sim_input',
       {
@@ -307,17 +297,15 @@ function makeRcChannels(roll: number, pitch: number, yaw: number, throttle: numb
   };
 }
 
-function makeAux(t: number): Record<string, number> {
-  return {
-    aux0: Math.sin(t * 0.31),
-    aux1: Math.cos(t * 0.29),
-    aux2: Math.sin(t * 0.19) * 0.5,
-    aux3: Math.cos(t * 0.17) * 0.5,
-    aux4: 0,
-    aux5: 0,
-    aux6: 0,
-    aux7: 0
-  };
+function makeAux(t: number): number[] {
+  return [
+    Math.sin(t * 0.31),
+    Math.cos(t * 0.29),
+    Math.sin(t * 0.19) * 0.5,
+    Math.cos(t * 0.17) * 0.5,
+    0,
+    0
+  ];
 }
 
 function motorMixObject(values: number[]): Record<string, number> {
@@ -350,7 +338,8 @@ function pwmFromBipolar(value: number): number {
 }
 
 function modeToSynapseFlightMode(mode: string): number {
-  return ['hold', 'manual', 'mission', 'return', 'land'].indexOf(mode) + 1 || 1;
+  // cubs2 convention (producer-defined field): 0 = manual, 1 = auto.
+  return mode === 'manual' ? 0 : 1;
 }
 
 function degToRad(degrees: number): number {
