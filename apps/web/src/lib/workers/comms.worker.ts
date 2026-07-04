@@ -27,9 +27,7 @@ import {
   type TransportMessage,
   type VehicleState
 } from '@electrode/sdk';
-// Bundler-resolved URL so the wasm is fetched with the correct application/wasm
-// MIME type (the glue's own import.meta.url guess breaks under Vite optimization).
-import zenohWasmUrl from '@cognipilot/zenoh-wasm/zenoh_wasm_bg.wasm?url';
+import zenohWasmUrl from '../zenohWasmUrl';
 
 type WorkerIn =
   | { type: 'connect'; mode: RuntimeMode; url: string; vehicleId: string }

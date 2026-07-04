@@ -16,7 +16,7 @@ const ALLOWED_COMMANDS: &[&str] = &[
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CommandIntent {
+pub(crate) struct CommandIntent {
     pub kind: String,
     pub command_id: String,
     pub command: String,
@@ -30,7 +30,7 @@ pub struct CommandIntent {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CommandAck {
+pub(crate) struct CommandAck {
     pub kind: &'static str,
     pub command_id: String,
     pub command: String,
@@ -40,7 +40,7 @@ pub struct CommandAck {
     pub received_at_ms: u64,
 }
 
-pub fn handle_command(state: &AppState, intent: CommandIntent, now_ms: u64) -> CommandAck {
+pub(crate) fn handle_command(state: &AppState, intent: CommandIntent, now_ms: u64) -> CommandAck {
     let rejected = |reason: String| CommandAck {
         kind: "commandAck",
         command_id: intent.command_id.clone(),

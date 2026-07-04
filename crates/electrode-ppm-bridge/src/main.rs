@@ -3,13 +3,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{ArgAction, Parser};
 use electrode_ppm_bridge::{
-    ChannelInversions, ChannelMap, FAILSAFE_CHANNELS, PpmChannels, WireOverrides, build_packet,
-    channel_inversions_from_slice, channel_map_from_slice, channels_to_pwm_signal_outputs_payload,
-    channels_to_wire, manual_control_to_channels, pwm_signal_outputs_to_channels,
+    build_packet, channel_inversions_from_slice, channel_map_from_slice,
+    channels_to_pwm_signal_outputs_payload, channels_to_wire, manual_control_to_channels,
+    pwm_signal_outputs_to_channels, ChannelInversions, ChannelMap, PpmChannels, WireOverrides,
+    FAILSAFE_CHANNELS,
 };
 use synapse_fbs::topic::{ManualControlData, ManualControlFlags, RadioControlData};
 use thiserror::Error;
-use zenoh::{Wait, config::Config};
+use zenoh::{config::Config, Wait};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -232,72 +233,11 @@ fn run(
         .declare_subscriber(cli.zenoh.control_output_topic.clone())
         .wait()
         .map_err(|error| BridgeError::Zenoh(error.to_string()))?;
-    let radio_publisher = if cli.zenoh.radio_output_topic.trim().is_empty() {
-        None
-    } else if cli.zenoh.radio_output_topic == cli.zenoh.manual_topic {
-        return Err(BridgeError::OutputTopicCollision {
-            kind: "radio",
-            topic: cli.zenoh.radio_output_topic.clone(),
-            subscribed: cli.zenoh.manual_topic.clone(),
-        });
-    } else {
-        Some(
-            session
-                .declare_publisher(cli.zenoh.radio_output_topic.clone())
-                .wait()
-                .map_err(|error| BridgeError::Zenoh(error.to_string()))?,
-        )
-    };
-    let pwm_publisher = if cli.zenoh.pwm_output_topic.trim().is_empty() {
-        None
-    } else if cli.zenoh.pwm_output_topic == cli.zenoh.manual_topic {
-        return Err(BridgeError::OutputTopicCollision {
-            kind: "pwm",
-            topic: cli.zenoh.pwm_output_topic.clone(),
-            subscribed: cli.zenoh.manual_topic.clone(),
-        });
-    } else if cli.zenoh.pwm_output_topic == cli.zenoh.control_output_topic {
-        return Err(BridgeError::OutputTopicCollision {
-            kind: "pwm",
-            topic: cli.zenoh.pwm_output_topic.clone(),
-            subscribed: cli.zenoh.control_output_topic.clone(),
-        });
-    } else {
-        Some(
-            session
-                .declare_publisher(cli.zenoh.pwm_output_topic.clone())
-                .wait()
-                .map_err(|error| BridgeError::Zenoh(error.to_string()))?,
-        )
-    };
+    let radio_publisher = declare_radio_publisher(&session, &cli.zenoh)?;
+    let pwm_publisher = declare_pwm_publisher(&session, &cli.zenoh)?;
+    let mut serial = open_serial(&cli.serial)?;
 
-    let mut serial = if cli.serial.no_serial {
-        None
-    } else {
-        Some(
-            serialport::new(&cli.serial.serial_device, cli.serial.baud_rate)
-                .timeout(Duration::from_millis(cli.serial.serial_timeout_ms))
-                .open()?,
-        )
-    };
-
-    println!(
-        "listening on manual={} control_output={} pwm_output={} radio_output={} serial={} baud={} channel_map={:?} channel_invert={:?} force_idle_throttle={} force_stabilizing_mode={}",
-        cli.zenoh.manual_topic,
-        cli.zenoh.control_output_topic,
-        cli.zenoh.pwm_output_topic,
-        cli.zenoh.radio_output_topic,
-        if cli.serial.no_serial {
-            "disabled"
-        } else {
-            cli.serial.serial_device.as_str()
-        },
-        cli.serial.baud_rate,
-        channel_map.0,
-        channel_invert.0,
-        overrides.force_idle_throttle,
-        overrides.force_stabilizing_mode,
-    );
+    print_runtime_config(&cli, channel_map, channel_invert, overrides);
 
     let mut manual_mode = ManualMode::Failsafe;
     let mut manual_channels = PpmChannels(FAILSAFE_CHANNELS);
@@ -364,6 +304,88 @@ fn run(
             serial.write_all(&build_packet(wire_channels))?;
         }
     }
+}
+
+fn declare_radio_publisher<'a>(
+    session: &'a zenoh::Session,
+    args: &ZenohArgs,
+) -> Result<Option<zenoh::pubsub::Publisher<'a>>> {
+    if args.radio_output_topic.trim().is_empty() {
+        return Ok(None);
+    }
+    if args.radio_output_topic == args.manual_topic {
+        return Err(BridgeError::OutputTopicCollision {
+            kind: "radio",
+            topic: args.radio_output_topic.clone(),
+            subscribed: args.manual_topic.clone(),
+        });
+    }
+    declare_publisher(session, &args.radio_output_topic).map(Some)
+}
+
+fn declare_pwm_publisher<'a>(
+    session: &'a zenoh::Session,
+    args: &ZenohArgs,
+) -> Result<Option<zenoh::pubsub::Publisher<'a>>> {
+    if args.pwm_output_topic.trim().is_empty() {
+        return Ok(None);
+    }
+    for subscribed in [&args.manual_topic, &args.control_output_topic] {
+        if args.pwm_output_topic == *subscribed {
+            return Err(BridgeError::OutputTopicCollision {
+                kind: "pwm",
+                topic: args.pwm_output_topic.clone(),
+                subscribed: (*subscribed).clone(),
+            });
+        }
+    }
+    declare_publisher(session, &args.pwm_output_topic).map(Some)
+}
+
+fn declare_publisher<'a>(
+    session: &'a zenoh::Session,
+    topic: &str,
+) -> Result<zenoh::pubsub::Publisher<'a>> {
+    session
+        .declare_publisher(topic.to_string())
+        .wait()
+        .map_err(|error| BridgeError::Zenoh(error.to_string()))
+}
+
+fn open_serial(args: &SerialArgs) -> Result<Option<Box<dyn serialport::SerialPort>>> {
+    if args.no_serial {
+        return Ok(None);
+    }
+    Ok(Some(
+        serialport::new(&args.serial_device, args.baud_rate)
+            .timeout(Duration::from_millis(args.serial_timeout_ms))
+            .open()?,
+    ))
+}
+
+fn print_runtime_config(
+    cli: &Cli,
+    channel_map: ChannelMap,
+    channel_invert: ChannelInversions,
+    overrides: WireOverrides,
+) {
+    println!(
+        "listening on manual={} control_output={} pwm_output={} radio_output={} serial={} baud={} channel_map={:?} channel_invert={:?} force_idle_throttle={} force_stabilizing_mode={}",
+        cli.zenoh.manual_topic,
+        cli.zenoh.control_output_topic,
+        cli.zenoh.pwm_output_topic,
+        cli.zenoh.radio_output_topic,
+        if cli.serial.no_serial {
+            "disabled"
+        } else {
+            cli.serial.serial_device.as_str()
+        },
+        cli.serial.baud_rate,
+        channel_map.0,
+        channel_invert.0,
+        overrides.force_idle_throttle,
+        overrides.force_stabilizing_mode,
+    );
 }
 
 #[derive(Debug, Clone, Copy)]

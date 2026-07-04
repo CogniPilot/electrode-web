@@ -1,0 +1,89 @@
+name: CI and Pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  js:
+    name: JavaScript
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+
+      - uses: DeterminateSystems/flakehub-cache-action@v3
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: npm-${{ runner.os }}-
+
+      - run: nix flake check
+      - run: nix develop --command npm ci
+      - run: nix develop --command npm run lint
+      - run: nix develop --command npm run test
+      - run: nix develop --command npm run check
+      - run: nix develop --command npm run build
+      - run: nix develop --command npm run verify:pages
+
+      - name: Configure Pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/configure-pages@v6
+
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: apps/web/build
+
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+
+      - uses: DeterminateSystems/flakehub-cache-action@v3
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: nix flake check
+      - run: nix develop --command cargo fmt --all -- --check
+      - run: nix develop --command cargo clippy --workspace --all-targets -- -D warnings
+      - run: nix develop --command cargo test --workspace --all-targets
+
+  pages:
+    name: Deploy Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [js, rust]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pages: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

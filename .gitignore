@@ -7,6 +7,7 @@ pkg/
 *.log
 .DS_Store
 .env
+.direnv/
 
 
 # Local ground-station runtime configs (machine-specific paths)

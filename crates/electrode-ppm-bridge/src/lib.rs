@@ -20,19 +20,10 @@ pub struct ChannelMap(pub [usize; NUM_CHANNELS]);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelInversions(pub [bool; NUM_CHANNELS]);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WireOverrides {
     pub force_idle_throttle: bool,
     pub force_stabilizing_mode: bool,
-}
-
-impl Default for WireOverrides {
-    fn default() -> Self {
-        Self {
-            force_idle_throttle: false,
-            force_stabilizing_mode: false,
-        }
-    }
 }
 
 impl Default for ChannelMap {
@@ -252,7 +243,11 @@ fn centered_to_pwm(value: f32) -> u16 {
 }
 
 fn stabilization_to_pwm(active: bool) -> u16 {
-    if active { 2000 } else { 1000 }
+    if active {
+        2000
+    } else {
+        1000
+    }
 }
 
 fn scale_to_pwm(value: f32, in_min: f32, in_max: f32, out_min: f32, out_max: f32) -> u16 {

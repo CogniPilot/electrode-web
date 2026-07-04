@@ -3,11 +3,11 @@
 //! which stick/button (independent of any mapping).
 
 use std::io::Read;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
-use axum::extract::Query;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::Query;
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -20,7 +20,7 @@ const JS_EVENT_AXIS: u8 = 0x02;
 const JS_EVENT_INIT: u8 = 0x80;
 
 #[derive(Deserialize)]
-pub struct JoystickQuery {
+pub(crate) struct JoystickQuery {
     pub device: String,
 }
 
@@ -34,7 +34,10 @@ struct Snapshot {
     buttons: Vec<u8>,
 }
 
-pub async fn joystick_ws(ws: WebSocketUpgrade, Query(query): Query<JoystickQuery>) -> Response {
+pub(crate) async fn joystick_ws(
+    ws: WebSocketUpgrade,
+    Query(query): Query<JoystickQuery>,
+) -> Response {
     ws.on_upgrade(move |socket| stream(socket, query.device))
 }
 

@@ -13,7 +13,7 @@
     "typescript": "^5.9.0"
   },
   "dependencies": {
-    "@cognipilot/zenoh-wasm": "file:../../vendor/zenoh-wasm",
+    "@cognipilot/zenoh-wasm": "1.9.0-wasm.1",
     "@electrode/flatbuffers": "0.1.0",
     "flatbuffers": "25.9.23"
   }

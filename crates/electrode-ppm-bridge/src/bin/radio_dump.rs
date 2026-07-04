@@ -1,7 +1,7 @@
 use clap::Parser;
 use synapse_fbs::topic::RadioControlData;
 use thiserror::Error;
-use zenoh::{Wait, config::Config};
+use zenoh::{config::Config, Wait};
 
 /// Wire size of a bare `synapse.topic.RadioControlData` struct.
 const RADIO_CONTROL_PAYLOAD_SIZE: usize = 48;

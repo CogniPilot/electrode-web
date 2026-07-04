@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 description = "Fake flying vehicle that publishes Synapse FlatBuffers over Zenoh for testing electrode"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "electrode-fake-sim"
 path = "src/main.rs"

@@ -1,8 +1,9 @@
+import { fileURLToPath } from 'node:url';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 
-const cesiumSource = new URL('../../node_modules/cesium/Build/Cesium', import.meta.url).pathname;
+const cesiumSource = fileURLToPath(new URL('../../node_modules/cesium/Build/Cesium', import.meta.url));
 const cesiumBaseUrl = 'cesium';
 
 // In dev, proxy the Ground Station API to the local daemon so the SAME hot-

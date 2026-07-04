@@ -33,7 +33,7 @@ const CUB1_MOCAP_TOPIC: &str = "synapse/mocap/rigid_body/cub1/pose";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AutopilotRunStatus {
+pub(crate) struct AutopilotRunStatus {
     pub running: bool,
     pub pid: Option<u32>,
     pub started_at_ms: Option<u128>,
@@ -61,18 +61,18 @@ struct LinkChild {
 }
 
 /// Supervises the autopilot process plus its Zenoh link as one unit.
-pub struct AutopilotLink {
+pub(crate) struct AutopilotLink {
     inner: Mutex<Option<LinkChild>>,
 }
 
 impl AutopilotLink {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: Mutex::new(None),
         }
     }
 
-    pub fn status(&self) -> AutopilotRunStatus {
+    pub(crate) fn status(&self) -> AutopilotRunStatus {
         let mut guard = self.inner.lock().expect("autopilot link lock poisoned");
         match guard.as_mut() {
             Some(link) => match link.child.try_wait() {
@@ -114,51 +114,12 @@ impl AutopilotLink {
         }
     }
 
-    pub fn start(&self, profile: &AutopilotProfile) -> anyhow::Result<AutopilotRunStatus> {
+    pub(crate) fn start(&self, profile: &AutopilotProfile) -> anyhow::Result<AutopilotRunStatus> {
         self.stop();
 
-        let binary = profile.native_binary.trim().to_string();
-        if binary.is_empty() {
-            anyhow::bail!("autopilot native binary is not configured");
-        }
-        if !Path::new(&binary).exists() {
-            anyhow::bail!(
-                "autopilot binary not found: {binary} — build it with \
-                 `west build -b native_sim -d build-native_sim cerebri_cubs2`"
-            );
-        }
-
-        // Capture firmware console output for diagnosis.
-        let log_path = profile.native_log_path();
-        if let Some(parent) = Path::new(&log_path).parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let log = std::fs::File::create(&log_path)?;
-        let log_err = log.try_clone()?;
-
-        // Zenoh side of the link: peer on the same network as the viewer,
-        // the sim, and the RC bridge.
-        let mut zconfig = zenoh::Config::default();
-        zconfig
-            .insert_json5("mode", "\"peer\"")
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        let endpoints = autopilot_zenoh_endpoints(profile);
-        if !endpoints.is_empty() {
-            let endpoints_json = endpoints
-                .iter()
-                .map(|endpoint| format!("\"{endpoint}\""))
-                .collect::<Vec<_>>()
-                .join(",");
-            zconfig
-                .insert_json5("connect/endpoints", &format!("[{endpoints_json}]"))
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        }
-        let session = zenoh::open(zconfig)
-            .wait()
-            .map_err(|e| anyhow::anyhow!("zenoh open failed: {e}"))?;
-
-        // UDP sockets. The firmware sends to udp_tx_port and listens on
-        // udp_rx_port (csyn CONFIG_CSYN_NATIVE_UDP_{TX,RX}_PORT).
+        let binary = validate_native_binary(profile)?;
+        let (log_path, log, log_err) = create_log_files(profile)?;
+        let session = open_autopilot_session(profile)?;
         let rx = UdpSocket::bind(("127.0.0.1", profile.udp_tx_port))?;
         rx.set_read_timeout(Some(Duration::from_millis(200)))?;
         let tx = UdpSocket::new_target(profile.udp_rx_port)?;
@@ -167,84 +128,15 @@ impl AutopilotLink {
         let frames_out = Arc::new(AtomicU64::new(0));
         let frames_in = Arc::new(AtomicU64::new(0));
 
-        // autopilot → Zenoh.
-        let out_session = session.clone();
-        let out_stop = stop.clone();
-        let out_count = frames_out.clone();
-        let udp_to_zenoh = std::thread::spawn(move || {
-            let mut buf = [0_u8; MAX_FRAME];
-            while !out_stop.load(Ordering::Relaxed) {
-                let len = match rx.recv(&mut buf) {
-                    Ok(len) => len,
-                    Err(err)
-                        if err.kind() == ErrorKind::WouldBlock
-                            || err.kind() == ErrorKind::TimedOut =>
-                    {
-                        continue;
-                    }
-                    Err(_) => break,
-                };
-                let Some((id, payload)) = parse_frame(&buf[..len]) else {
-                    continue;
-                };
-                let Some(topic) = synapse_fbs::topic_catalog::TOPICS
-                    .iter()
-                    .find(|topic| topic.id == id)
-                else {
-                    continue;
-                };
-                if out_session.put(topic.key, payload.to_vec()).wait().is_ok() {
-                    out_count.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        });
-
-        // Zenoh → autopilot, one subscriber per whitelisted inbound topic.
-        let mut subscribers = Vec::new();
-        for spec in profile.inbound_topics() {
-            let Some(topic) = resolve_inbound_topic(&spec) else {
-                tracing::warn!(spec, "unknown inbound topic; skipping");
-                continue;
-            };
-            let tx = tx.try_clone()?;
-            let count = frames_in.clone();
-            let id = topic.id;
-            let key = topic.key.clone();
-            let callback_key = key.clone();
-            let logged = Arc::new(AtomicBool::new(false));
-            let callback_logged = logged.clone();
-            let subscriber = session
-                .declare_subscriber(key.clone())
-                .callback(move |sample| {
-                    let payload = sample.payload().to_bytes();
-                    if !callback_logged.swap(true, Ordering::Relaxed) {
-                        tracing::info!(
-                            key = %callback_key,
-                            id,
-                            bytes = payload.len(),
-                            "autopilot inbound sample"
-                        );
-                    }
-                    let frame_payload = payload.to_vec();
-                    let frame = build_frame(id, &frame_payload);
-                    if tx.send(&frame).is_ok() {
-                        count.fetch_add(1, Ordering::Relaxed);
-                    }
-                })
-                .wait()
-                .map_err(|e| anyhow::anyhow!("zenoh subscribe {key} failed: {e}"))?;
-            subscribers.push(subscriber);
-        }
+        let udp_to_zenoh =
+            spawn_udp_to_zenoh(rx, session.clone(), stop.clone(), frames_out.clone());
+        let subscribers = declare_inbound_subscribers(profile, &session, &tx, frames_in.clone())?;
 
         // The firmware last: everything it may immediately talk to is ready.
         // Do not put this in a separate process group. Earlier versions tried
         // to kill the whole group during Stop; on this workstation that has
         // proven unsafe enough to crash the host.
-        let mut command = Command::new(&binary);
-        command
-            .stdout(Stdio::from(log))
-            .stderr(Stdio::from(log_err));
-        let child = command.spawn()?;
+        let child = spawn_native_binary(&binary, log, log_err)?;
 
         *self.inner.lock().expect("autopilot link lock poisoned") = Some(LinkChild {
             child,
@@ -261,7 +153,7 @@ impl AutopilotLink {
         Ok(self.status())
     }
 
-    pub fn stop(&self) -> AutopilotRunStatus {
+    pub(crate) fn stop(&self) -> AutopilotRunStatus {
         let link = self
             .inner
             .lock()
@@ -275,6 +167,174 @@ impl AutopilotLink {
 struct InboundTopic {
     key: String,
     id: u16,
+}
+
+enum UdpRead {
+    Frame(usize),
+    Timeout,
+    Closed,
+}
+
+fn validate_native_binary(profile: &AutopilotProfile) -> anyhow::Result<String> {
+    let binary = profile.native_binary.trim().to_string();
+    if binary.is_empty() {
+        anyhow::bail!("autopilot native binary is not configured");
+    }
+    if !Path::new(&binary).exists() {
+        anyhow::bail!(
+            "autopilot binary not found: {binary} — build it with \
+             `west build -b native_sim -d build-native_sim cerebri_cubs2`"
+        );
+    }
+    Ok(binary)
+}
+
+fn create_log_files(
+    profile: &AutopilotProfile,
+) -> anyhow::Result<(String, std::fs::File, std::fs::File)> {
+    let log_path = profile.native_log_path();
+    if let Some(parent) = Path::new(&log_path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let log = std::fs::File::create(&log_path)?;
+    let log_err = log.try_clone()?;
+    Ok((log_path, log, log_err))
+}
+
+fn open_autopilot_session(profile: &AutopilotProfile) -> anyhow::Result<zenoh::Session> {
+    let mut config = zenoh::Config::default();
+    config
+        .insert_json5("mode", "\"peer\"")
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+    let endpoints = autopilot_zenoh_endpoints(profile);
+    if !endpoints.is_empty() {
+        let endpoints_json = endpoints
+            .iter()
+            .map(|endpoint| format!("\"{endpoint}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        config
+            .insert_json5("connect/endpoints", &format!("[{endpoints_json}]"))
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    }
+
+    zenoh::open(config)
+        .wait()
+        .map_err(|error| anyhow::anyhow!("zenoh open failed: {error}"))
+}
+
+fn spawn_udp_to_zenoh(
+    rx: UdpSocket,
+    session: zenoh::Session,
+    stop: Arc<AtomicBool>,
+    count: Arc<AtomicU64>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut buf = [0_u8; MAX_FRAME];
+        while !stop.load(Ordering::Relaxed) {
+            match read_udp(&rx, &mut buf) {
+                UdpRead::Frame(len) => forward_udp_frame(&session, &count, &buf[..len]),
+                UdpRead::Timeout => {}
+                UdpRead::Closed => break,
+            }
+        }
+    })
+}
+
+fn read_udp(rx: &UdpSocket, buf: &mut [u8]) -> UdpRead {
+    match rx.recv(buf) {
+        Ok(len) => UdpRead::Frame(len),
+        Err(err) if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut => {
+            UdpRead::Timeout
+        }
+        Err(_) => UdpRead::Closed,
+    }
+}
+
+fn forward_udp_frame(session: &zenoh::Session, count: &AtomicU64, bytes: &[u8]) {
+    let Some((id, payload)) = parse_frame(bytes) else {
+        return;
+    };
+    let Some(topic) = synapse_fbs::topic_catalog::TOPICS
+        .iter()
+        .find(|topic| topic.id == id)
+    else {
+        return;
+    };
+    if session.put(topic.key, payload.to_vec()).wait().is_ok() {
+        count.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn declare_inbound_subscribers(
+    profile: &AutopilotProfile,
+    session: &zenoh::Session,
+    tx: &UdpSocket,
+    count: Arc<AtomicU64>,
+) -> anyhow::Result<Vec<zenoh::pubsub::Subscriber<()>>> {
+    let mut subscribers = Vec::new();
+    for spec in profile.inbound_topics() {
+        let Some(topic) = resolve_inbound_topic(&spec) else {
+            tracing::warn!(spec, "unknown inbound topic; skipping");
+            continue;
+        };
+        subscribers.push(declare_inbound_subscriber(
+            session,
+            tx,
+            count.clone(),
+            topic,
+        )?);
+    }
+    Ok(subscribers)
+}
+
+fn declare_inbound_subscriber(
+    session: &zenoh::Session,
+    tx: &UdpSocket,
+    count: Arc<AtomicU64>,
+    topic: InboundTopic,
+) -> anyhow::Result<zenoh::pubsub::Subscriber<()>> {
+    let tx = tx.try_clone()?;
+    let id = topic.id;
+    let key = topic.key;
+    let callback_key = key.clone();
+    let logged = Arc::new(AtomicBool::new(false));
+    session
+        .declare_subscriber(key.clone())
+        .callback(move |sample| {
+            let payload = sample.payload().to_bytes();
+            log_inbound_once(&logged, &callback_key, id, payload.len());
+            send_inbound_frame(&tx, &count, id, &payload);
+        })
+        .wait()
+        .map_err(|error| anyhow::anyhow!("zenoh subscribe {key} failed: {error}"))
+}
+
+fn log_inbound_once(logged: &AtomicBool, key: &str, id: u16, bytes: usize) {
+    if logged.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    tracing::info!(key, id, bytes, "autopilot inbound sample");
+}
+
+fn send_inbound_frame(tx: &UdpSocket, count: &AtomicU64, id: u16, payload: &[u8]) {
+    let frame = build_frame(id, payload);
+    if tx.send(&frame).is_ok() {
+        count.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn spawn_native_binary(
+    binary: &str,
+    log: std::fs::File,
+    log_err: std::fs::File,
+) -> anyhow::Result<Child> {
+    let mut command = Command::new(binary);
+    command
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err));
+    Ok(command.spawn()?)
 }
 
 fn autopilot_zenoh_endpoints(profile: &AutopilotProfile) -> Vec<String> {

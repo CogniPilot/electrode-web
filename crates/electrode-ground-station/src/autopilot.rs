@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AutopilotProfile {
+pub(crate) struct AutopilotProfile {
     pub stack_name: String,
     pub stack_path: String,
     pub firmware_source: FirmwareSource,
@@ -59,7 +59,7 @@ fn default_inbound_topics() -> Vec<String> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum FirmwareSource {
+pub(crate) enum FirmwareSource {
     LocalBuild,
     ReleaseArtifact,
     CiArtifact,
@@ -68,7 +68,7 @@ pub enum FirmwareSource {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum FlashMethod {
+pub(crate) enum FlashMethod {
     UsbBootloader,
     Dfu,
     SerialBootloader,
@@ -78,7 +78,7 @@ pub enum FlashMethod {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum RuntimeTransport {
+pub(crate) enum RuntimeTransport {
     Zenoh,
     MavlinkSerial,
     MavlinkUdp,
@@ -87,14 +87,14 @@ pub enum RuntimeTransport {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum RuntimeProtocol {
+pub(crate) enum RuntimeProtocol {
     SynapseZenoh,
     Mavlink,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FirmwareInstallRequest {
+pub(crate) struct FirmwareInstallRequest {
     pub device: String,
     #[serde(default)]
     pub confirmed: bool,
@@ -102,7 +102,7 @@ pub struct FirmwareInstallRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FirmwareInstallStatus {
+pub(crate) struct FirmwareInstallStatus {
     pub job_id: String,
     pub status: InstallState,
     pub message: String,
@@ -113,7 +113,7 @@ pub struct FirmwareInstallStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum InstallState {
+pub(crate) enum InstallState {
     Planned,
     Rejected,
 }
@@ -142,7 +142,7 @@ impl Default for AutopilotProfile {
 
 impl AutopilotProfile {
     /// Inbound topic suffixes with whitespace/empties filtered out.
-    pub fn inbound_topics(&self) -> Vec<String> {
+    pub(crate) fn inbound_topics(&self) -> Vec<String> {
         self.inbound_topics
             .iter()
             .map(|suffix| suffix.trim().to_string())
@@ -152,7 +152,7 @@ impl AutopilotProfile {
 
     /// Firmware console log written by the autopilot link, next to the binary
     /// so it lands in the firmware build tree (`.../zephyr/autopilot.log`).
-    pub fn native_log_path(&self) -> String {
+    pub(crate) fn native_log_path(&self) -> String {
         let binary = Path::new(self.native_binary.trim());
         binary
             .parent()
@@ -163,7 +163,7 @@ impl AutopilotProfile {
     }
 
     /// Load a profile from disk, falling back to a Cerebri-oriented default.
-    pub fn load_or_default(path: &Path) -> Self {
+    pub(crate) fn load_or_default(path: &Path) -> Self {
         std::fs::read_to_string(path)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
@@ -171,7 +171,7 @@ impl AutopilotProfile {
     }
 
     /// Persist the profile as pretty JSON.
-    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+    pub(crate) fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -179,7 +179,7 @@ impl AutopilotProfile {
         std::fs::write(path, text)
     }
 
-    pub fn install_plan(&self, request: FirmwareInstallRequest) -> FirmwareInstallStatus {
+    pub(crate) fn install_plan(&self, request: FirmwareInstallRequest) -> FirmwareInstallStatus {
         let artifact = self.firmware_artifact.trim();
         let device = request.device.trim();
         let mut steps = vec![

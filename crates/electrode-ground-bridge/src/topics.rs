@@ -2,7 +2,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TopicDefinition {
+pub(crate) struct TopicDefinition {
     pub topic: String,
     pub schema: &'static str,
     pub expected_rate_hz: f32,
@@ -10,7 +10,7 @@ pub struct TopicDefinition {
     pub loggable: bool,
 }
 
-pub fn topic_definitions(vehicle_id: &str) -> Vec<TopicDefinition> {
+pub(crate) fn topic_definitions(vehicle_id: &str) -> Vec<TopicDefinition> {
     let prefix = format!("vehicle/{vehicle_id}");
     vec![
         TopicDefinition {
