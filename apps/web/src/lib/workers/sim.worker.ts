@@ -29,15 +29,10 @@ type StartMessage = {
 
 type IncomingMessage = StartMessage | { type: 'stop' };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let rumoca: any = null;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let stepper: any = null;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let zenoh: any = null;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let session: any = null;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let subscriber: any = null;
 
 let stepTimer: ReturnType<typeof setInterval> | null = null;
@@ -51,7 +46,6 @@ let mocapTopic = 'electrode/sim/rumoca/mocap_frame';
 // until the autopilot publishes. Matches the model's ail/elev/thr/rud_pwm inputs.
 const pwm = { ail_pwm: 1500, elev_pwm: 1500, thr_pwm: 1000, rud_pwm: 1500 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function post(message: any): void {
   self.postMessage(message);
 }
@@ -69,7 +63,6 @@ function applyMotorOutput(payload: Uint8Array): void {
   try {
     const decoded = decode('synapse/v1/topic/pwm_signal_outputs', payload);
     // `motors` carries the first four PWM outputs in microseconds.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const motors = (decoded.payload as any)?.motors;
     if (motors) {
       pwm.ail_pwm = Number(motors.m0);

@@ -99,6 +99,24 @@ export async function loadVehicleRig(kind: VehicleKind, targetSize?: number): Pr
   const gltf = await new GLTFLoader().loadAsync(config.url);
   const model = gltf.scene;
 
+  configureModelMeshes(model);
+  fitModelToSize(model, targetSize ?? config.fitSize);
+
+  const root = createAlignedRoot(model);
+  const byName = collectNodesByName(model);
+  const surfaces = rigSurfaces(config.surfaces, byName);
+  const rotors = rigRotors(config.rotors, byName);
+  const update = createRigUpdater(surfaces, rotors);
+
+  return {
+    kind,
+    root,
+    update,
+    dispose: () => disposeRoot(root)
+  };
+}
+
+function configureModelMeshes(model: three.Object3D): void {
   model.traverse((object) => {
     const mesh = object as three.Mesh;
     if (mesh.isMesh) {
@@ -106,38 +124,43 @@ export async function loadVehicleRig(kind: VehicleKind, targetSize?: number): Pr
       mesh.receiveShadow = false;
     }
   });
+}
 
-  // Center on the bounding box and scale so the largest dimension matches the
-  // target, so both vehicles frame consistently wherever they are shown.
+function fitModelToSize(model: three.Object3D, targetSize: number): void {
   const box = new three.Box3().setFromObject(model);
   const size = new three.Vector3();
   const center = new three.Vector3();
   box.getSize(size);
   box.getCenter(center);
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
-  const scale = (targetSize ?? config.fitSize) / maxDim;
+  const scale = targetSize / maxDim;
   // Scale first, then offset by the scaled center so the model is centered on
   // the root origin (the offset lives in the parent frame, so it must be scaled
   // to match the now-scaled geometry — otherwise the model sits off-center).
   model.scale.setScalar(scale);
   model.position.copy(center).multiplyScalar(-scale);
+}
 
-  // Alignment wrapper: authored nose +Z / up +Y -> display nose -Z / up +Y (a
-  // 180deg yaw), matching the IndoorScene attitude convention (order YXZ,
-  // forward -Z) so roll/pitch/yaw read correctly wherever the rig is used.
+function createAlignedRoot(model: three.Object3D): three.Group {
   const root = new three.Group();
   root.rotation.y = Math.PI;
   root.add(model);
   // Bring world matrices up to date before measuring hinge/rotor centers below.
   root.updateMatrixWorld(true);
+  return root;
+}
 
+function collectNodesByName(model: three.Object3D): Record<string, three.Object3D> {
   const byName: Record<string, three.Object3D> = {};
   model.traverse((object) => {
     byName[object.name] = object;
   });
+  return byName;
+}
 
+function rigSurfaces(rigs: SurfaceRig[], byName: Record<string, three.Object3D>): RiggedSurface[] {
   const surfaces: RiggedSurface[] = [];
-  for (const rig of config.surfaces) {
+  for (const rig of rigs) {
     const pivot = byName[rig.pivot];
     const mesh = byName[rig.mesh];
     if (!pivot || !mesh) {
@@ -153,10 +176,13 @@ export async function loadVehicleRig(kind: VehicleKind, targetSize?: number): Pr
       driver: rig.driver
     });
   }
+  return surfaces;
+}
 
+function rigRotors(config: VehicleConfig['rotors'], byName: Record<string, three.Object3D>): RiggedRotor[] {
   const rotors: RiggedRotor[] = [];
-  if (config.rotors) {
-    config.rotors.names.forEach((name, index) => {
+  if (config) {
+    config.names.forEach((name, index) => {
       const rotor = byName[name];
       const parent = rotor?.parent;
       if (!rotor || !parent) {
@@ -171,14 +197,17 @@ export async function loadVehicleRig(kind: VehicleKind, targetSize?: number): Pr
       pivot.position.copy(parent.worldToLocal(rotorCenter.clone()));
       parent.add(pivot);
       (pivot as three.Object3D & { attach: (o: three.Object3D) => void }).attach(rotor);
-      rotors.push({ node: pivot, spinSign: config.rotors?.spinSigns[index] ?? -1 });
+      rotors.push({ node: pivot, spinSign: config.spinSigns[index] ?? -1 });
     });
   }
+  return rotors;
+}
 
+function createRigUpdater(surfaces: RiggedSurface[], rotors: RiggedRotor[]): VehicleRig['update'] {
   let propSpin = 0;
   const q = new three.Quaternion();
 
-  const update = (controls: ControlInputs | null, motors: number[] | null): void => {
+  return (controls: ControlInputs | null, motors: number[] | null): void => {
     const aileron = controls?.aileron ?? 0;
     const elevator = controls?.elevator ?? 0;
     const rudder = controls?.rudder ?? 0;
@@ -201,22 +230,20 @@ export async function loadVehicleRig(kind: VehicleKind, targetSize?: number): Pr
       rotor.node.rotation.y += rotor.spinSign * (ROTOR_IDLE_STEP + command * ROTOR_GAIN_STEP);
     });
   };
+}
 
-  const dispose = (): void => {
-    root.traverse((object) => {
-      const renderable = object as three.Mesh;
-      renderable.geometry?.dispose();
-      const material = renderable.material;
-      if (material) {
-        const list = Array.isArray(material) ? material : [material];
-        for (const entry of list) {
-          const withMap = entry as three.Material & { map?: { dispose: () => void } };
-          withMap.map?.dispose();
-          entry.dispose();
-        }
+function disposeRoot(root: three.Object3D): void {
+  root.traverse((object) => {
+    const renderable = object as three.Mesh;
+    renderable.geometry?.dispose();
+    const material = renderable.material;
+    if (material) {
+      const list = Array.isArray(material) ? material : [material];
+      for (const entry of list) {
+        const withMap = entry as three.Material & { map?: { dispose: () => void } };
+        withMap.map?.dispose();
+        entry.dispose();
       }
-    });
-  };
-
-  return { kind, root, update, dispose };
+    }
+  });
 }

@@ -7,13 +7,13 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 
-pub struct Supervisor {
+pub(crate) struct Supervisor {
     bin: PathBuf,
     child: Mutex<Option<Child>>,
 }
 
 impl Supervisor {
-    pub fn manual_control() -> Self {
+    pub(crate) fn manual_control() -> Self {
         Self {
             bin: resolve_sibling_bin(
                 "ELECTRODE_MANUAL_BRIDGE_BIN",
@@ -23,7 +23,7 @@ impl Supervisor {
         }
     }
 
-    pub fn ppm_bridge() -> Self {
+    pub(crate) fn ppm_bridge() -> Self {
         Self {
             bin: resolve_sibling_bin("ELECTRODE_PPM_BRIDGE_BIN", "electrode-ppm-bridge"),
             child: Mutex::new(None),
@@ -31,12 +31,12 @@ impl Supervisor {
     }
 
     /// Path to the bridge binary this supervisor will launch.
-    pub fn bin_display(&self) -> String {
+    pub(crate) fn bin_display(&self) -> String {
         self.bin.display().to_string()
     }
 
     /// Whether a bridge child is currently running (reaps it if it has exited).
-    pub fn running(&self) -> bool {
+    pub(crate) fn running(&self) -> bool {
         let mut guard = self.child.lock().expect("supervisor lock poisoned");
         match guard.as_mut() {
             Some(child) => match child.try_wait() {
@@ -52,7 +52,7 @@ impl Supervisor {
     }
 
     /// Launch (or relaunch) the bridge with the given arguments.
-    pub fn start(&self, args: &[String]) -> std::io::Result<()> {
+    pub(crate) fn start(&self, args: &[String]) -> std::io::Result<()> {
         self.stop();
         let child = Command::new(&self.bin).args(args).spawn()?;
         *self.child.lock().expect("supervisor lock poisoned") = Some(child);
@@ -60,7 +60,7 @@ impl Supervisor {
     }
 
     /// Stop the bridge if running.
-    pub fn stop(&self) {
+    pub(crate) fn stop(&self) {
         if let Some(mut child) = self.child.lock().expect("supervisor lock poisoned").take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -69,7 +69,7 @@ impl Supervisor {
 
     /// If a bridge is currently running, relaunch it with fresh args (used when
     /// the mapping changes live); otherwise do nothing.
-    pub fn restart_if_running(&self, args: &[String]) -> std::io::Result<()> {
+    pub(crate) fn restart_if_running(&self, args: &[String]) -> std::io::Result<()> {
         if self.running() {
             self.start(args)?;
         }

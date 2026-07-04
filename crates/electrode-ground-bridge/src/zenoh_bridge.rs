@@ -25,7 +25,7 @@ use crate::synapse_decode;
 
 /// Runtime knobs for the Zenoh subscriber, sourced from the environment.
 #[derive(Debug, Clone)]
-pub struct ZenohConfig {
+pub(crate) struct ZenohConfig {
     /// Zenoh session mode: `client` (dial a router/peer) or `peer` (host the
     /// network so hardware bridges can connect directly into the ground station).
     pub mode: String,
@@ -49,7 +49,7 @@ pub struct ZenohConfig {
 }
 
 impl ZenohConfig {
-    pub fn from_env(vehicle_id: String) -> Self {
+    pub(crate) fn from_env(vehicle_id: String) -> Self {
         let mode = std::env::var("ELECTRODE_ZENOH_MODE")
             .unwrap_or_else(|_| "client".to_string())
             .to_lowercase();
@@ -96,7 +96,7 @@ impl ZenohConfig {
 
     /// The locator to show in logs/status: the listen endpoint when hosting the
     /// network, otherwise the router we dial.
-    pub fn endpoint_label(&self) -> &str {
+    pub(crate) fn endpoint_label(&self) -> &str {
         self.listen.as_deref().unwrap_or(&self.connect)
     }
 }
@@ -110,7 +110,6 @@ struct TopicStat {
     prev_count: u64,
     last_bytes: usize,
     rate_hz: f32,
-    first_seen_ms: u64,
     last_seen_ms: u64,
 }
 
@@ -129,7 +128,7 @@ struct CatalogEntry {
 }
 
 /// Shared state between the Zenoh thread, catalog emitter, and WebSocket clients.
-pub struct ZenohShared {
+pub(crate) struct ZenohShared {
     registry: Mutex<HashMap<String, TopicStat>>,
     selected: RwLock<std::collections::HashSet<String>>,
     tx: broadcast::Sender<String>,
@@ -141,7 +140,7 @@ pub struct ZenohShared {
 }
 
 impl ZenohShared {
-    pub fn new(config: &ZenohConfig, tx: broadcast::Sender<String>) -> Arc<Self> {
+    pub(crate) fn new(config: &ZenohConfig, tx: broadcast::Sender<String>) -> Arc<Self> {
         Arc::new(Self {
             registry: Mutex::new(HashMap::new()),
             selected: RwLock::new(std::collections::HashSet::new()),
@@ -155,13 +154,13 @@ impl ZenohShared {
     }
 
     /// A client just connected: replace its subscription selection.
-    pub fn set_selection<I: IntoIterator<Item = String>>(&self, keys: I) {
+    pub(crate) fn set_selection<I: IntoIterator<Item = String>>(&self, keys: I) {
         let mut selected = self.selected.write().expect("selected lock poisoned");
         *selected = keys.into_iter().collect();
     }
 
     /// Serialize the current discovery catalog as a `topicCatalog` message.
-    pub fn catalog_message(&self) -> String {
+    pub(crate) fn catalog_message(&self) -> String {
         let selected = self.selected.read().expect("selected lock poisoned");
         let registry = self.registry.lock().expect("registry lock poisoned");
         let mut entries: Vec<CatalogEntry> = registry
@@ -193,12 +192,7 @@ impl ZenohShared {
         let now = now_ms();
         let mut registry = self.registry.lock().expect("registry lock poisoned");
         let stat = registry.entry(key.to_string()).or_insert_with(|| {
-            // Auto-select decodable topics on first sight so data flows immediately.
-            if self.auto_select_known && schema != "Raw" {
-                if let Ok(mut selected) = self.selected.write() {
-                    selected.insert(key.to_string());
-                }
-            }
+            self.auto_select_topic(key, schema);
             TopicStat {
                 schema,
                 decodable: schema != "Raw",
@@ -206,13 +200,22 @@ impl ZenohShared {
                 prev_count: 0,
                 last_bytes: 0,
                 rate_hz: 0.0,
-                first_seen_ms: now,
                 last_seen_ms: now,
             }
         });
         stat.count += 1;
         stat.last_bytes = bytes.len();
         stat.last_seen_ms = now;
+    }
+
+    fn auto_select_topic(&self, key: &str, schema: &str) {
+        // Auto-select decodable topics on first sight so data flows immediately.
+        if !self.auto_select_known || schema == "Raw" {
+            return;
+        }
+        if let Ok(mut selected) = self.selected.write() {
+            selected.insert(key.to_string());
+        }
     }
 
     fn is_selected(&self, key: &str) -> bool {
@@ -258,7 +261,7 @@ impl ZenohShared {
 const CATALOG_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Spawn the Zenoh subscriber thread and the periodic catalog emitter.
-pub fn spawn(shared: Arc<ZenohShared>, config: ZenohConfig) {
+pub(crate) fn spawn(shared: Arc<ZenohShared>, config: ZenohConfig) {
     let subscriber_shared = Arc::clone(&shared);
     thread::Builder::new()
         .name("zenoh-subscriber".to_string())
@@ -324,7 +327,11 @@ fn run_subscriber(shared: Arc<ZenohShared>, config: ZenohConfig) {
             );
             return;
         }
-        tracing::warn!(?unbound, attempt, "Zenoh listener(s) not bound; closing and retrying");
+        tracing::warn!(
+            ?unbound,
+            attempt,
+            "Zenoh listener(s) not bound; closing and retrying"
+        );
         let _ = session.close().wait();
         std::thread::sleep(std::time::Duration::from_millis(400 * attempt));
     };

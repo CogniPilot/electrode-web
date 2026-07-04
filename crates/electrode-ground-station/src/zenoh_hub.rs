@@ -8,7 +8,7 @@
 use zenoh::Wait;
 
 #[derive(Debug, Clone)]
-pub struct ZenohHubConfig {
+pub(crate) struct ZenohHubConfig {
     pub enabled: bool,
     pub mode: String,
     pub listen: String,
@@ -17,7 +17,7 @@ pub struct ZenohHubConfig {
 }
 
 impl ZenohHubConfig {
-    pub fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         let enabled = std::env::var("ELECTRODE_GCS_ZENOH_HUB")
             .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
             .unwrap_or(true);
@@ -53,13 +53,13 @@ impl ZenohHubConfig {
     }
 }
 
-pub struct ZenohHub {
+pub(crate) struct ZenohHub {
     _session: Option<zenoh::Session>,
     listeners: Vec<String>,
 }
 
 impl ZenohHub {
-    pub fn start(config: ZenohHubConfig) -> anyhow::Result<Self> {
+    pub(crate) fn start(config: ZenohHubConfig) -> anyhow::Result<Self> {
         if !config.enabled {
             tracing::info!("ground-station Zenoh hub disabled");
             return Ok(Self {
@@ -116,14 +116,18 @@ impl ZenohHub {
             );
         }
 
-        tracing::info!(?listeners, ?connections, "ground-station Zenoh hub listening");
+        tracing::info!(
+            ?listeners,
+            ?connections,
+            "ground-station Zenoh hub listening"
+        );
         Ok(Self {
             _session: Some(session),
             listeners,
         })
     }
 
-    pub fn listeners(&self) -> &[String] {
+    pub(crate) fn listeners(&self) -> &[String] {
         &self.listeners
     }
 }

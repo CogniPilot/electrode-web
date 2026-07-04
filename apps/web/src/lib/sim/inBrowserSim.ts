@@ -1,7 +1,7 @@
 // Controller for the in-browser rumoca flight sim. Spawns the sim worker,
 // hands it the Zenoh endpoint + Modelica source, and relays status. The worker
 // runs Rumoca WASM behind Ground Station's private sim wrapper topics.
-import zenohWasmUrl from '@cognipilot/zenoh-wasm/zenoh_wasm_bg.wasm?url';
+import zenohWasmUrl from '../zenohWasmUrl';
 
 export type SimPhase = 'compiling' | 'compiled' | 'connecting' | 'running' | 'stopped';
 

@@ -396,15 +396,6 @@
     background: rgba(255, 255, 255, 0.04);
   }
 
-  .grid {
-    display: grid;
-    gap: 8px;
-  }
-
-  .grid.two {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .model-row,
   .actions {
     display: grid;
@@ -606,7 +597,6 @@
   }
 
   @media (max-width: 620px) {
-    .grid.two,
     .model-row,
     .actions,
     .editor-actions {

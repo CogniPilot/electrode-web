@@ -15,7 +15,7 @@ use crate::sim_bridge::SimBridgeCounts;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct SimulationProfile {
+pub(crate) struct SimulationProfile {
     pub backend: SimulationBackend,
     pub mode: SimulationMode,
     pub vehicle_kind: SimulationVehicleKind,
@@ -47,27 +47,27 @@ pub struct SimulationProfile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum SimulationBackend {
+pub(crate) enum SimulationBackend {
     Rumoca,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum SimulationMode {
+pub(crate) enum SimulationMode {
     WithAutopilot,
     DirectCommands,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum SimulationVehicleKind {
+pub(crate) enum SimulationVehicleKind {
     FixedWing,
     Quadrotor,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SimulationStatus {
+pub(crate) struct SimulationStatus {
     pub running: bool,
     pub pid: Option<u32>,
     pub started_at_ms: Option<u128>,
@@ -78,7 +78,7 @@ pub struct SimulationStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ModelicaFile {
+pub(crate) struct ModelicaFile {
     pub path: String,
     pub text: String,
     pub editable: bool,
@@ -87,14 +87,14 @@ pub struct ModelicaFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ModelicaFileSave {
+pub(crate) struct ModelicaFileSave {
     pub path: String,
     pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SimulationCheckResult {
+pub(crate) struct SimulationCheckResult {
     pub ok: bool,
     pub status: Option<i32>,
     pub command_line: Vec<String>,
@@ -102,7 +102,7 @@ pub struct SimulationCheckResult {
     pub stderr: String,
 }
 
-pub struct SimulationSupervisor {
+pub(crate) struct SimulationSupervisor {
     child: Mutex<Option<SimChild>>,
 }
 
@@ -160,13 +160,13 @@ fn default_asset_dir() -> String {
 }
 
 impl SimulationProfile {
-    pub fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self) -> Self {
         self.normalize();
         self
     }
 
     /// Load a profile from disk, falling back to a Rumoca-oriented default.
-    pub fn load_or_default(path: &Path) -> Self {
+    pub(crate) fn load_or_default(path: &Path) -> Self {
         let mut profile: Self = std::fs::read_to_string(path)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
@@ -176,7 +176,7 @@ impl SimulationProfile {
     }
 
     /// Persist the profile as pretty JSON.
-    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+    pub(crate) fn save(&self, path: &Path) -> std::io::Result<()> {
         let mut profile = self.clone();
         profile.normalize();
         if let Some(parent) = path.parent() {
@@ -186,7 +186,7 @@ impl SimulationProfile {
         std::fs::write(path, text)
     }
 
-    pub fn read_model_file(&self) -> std::io::Result<ModelicaFile> {
+    pub(crate) fn read_model_file(&self) -> std::io::Result<ModelicaFile> {
         let profile = self.clone().normalized();
         let path = profile.model_file_path()?;
         Ok(ModelicaFile {
@@ -197,7 +197,7 @@ impl SimulationProfile {
         })
     }
 
-    pub fn save_model_file(&self, file: ModelicaFileSave) -> std::io::Result<ModelicaFile> {
+    pub(crate) fn save_model_file(&self, file: ModelicaFileSave) -> std::io::Result<ModelicaFile> {
         let profile = self.clone().normalized();
         if !profile.model_editable {
             return Err(std::io::Error::new(
@@ -215,7 +215,7 @@ impl SimulationProfile {
         })
     }
 
-    pub fn check_config(&self) -> std::io::Result<SimulationCheckResult> {
+    pub(crate) fn check_config(&self) -> std::io::Result<SimulationCheckResult> {
         let config_path = self.write_generated_config()?;
         let command_line = vec![
             self.executable.clone(),
@@ -238,7 +238,7 @@ impl SimulationProfile {
         })
     }
 
-    pub fn write_generated_config(&self) -> std::io::Result<PathBuf> {
+    pub(crate) fn write_generated_config(&self) -> std::io::Result<PathBuf> {
         let mut profile = self.clone();
         profile.normalize();
         let path = PathBuf::from(&profile.generated_config_path);
@@ -466,13 +466,13 @@ impl SimulationProfile {
 }
 
 impl SimulationSupervisor {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             child: Mutex::new(None),
         }
     }
 
-    pub fn status(&self) -> SimulationStatus {
+    pub(crate) fn status(&self) -> SimulationStatus {
         let mut guard = self.child.lock().expect("simulation lock poisoned");
         match guard.as_mut() {
             Some(sim) => match sim.child.try_wait() {
@@ -516,7 +516,7 @@ impl SimulationSupervisor {
         }
     }
 
-    pub fn start(&self, profile: &SimulationProfile) -> std::io::Result<SimulationStatus> {
+    pub(crate) fn start(&self, profile: &SimulationProfile) -> std::io::Result<SimulationStatus> {
         self.stop();
         let config_path = profile.write_generated_config()?;
         let mut command = Command::new(&profile.executable);
@@ -556,7 +556,7 @@ impl SimulationSupervisor {
         Ok(self.status())
     }
 
-    pub fn stop(&self) -> SimulationStatus {
+    pub(crate) fn stop(&self) -> SimulationStatus {
         if let Some(mut sim) = self.child.lock().expect("simulation lock poisoned").take() {
             let command_line = sim.command_line.clone();
             let _ = sim.child.kill();
@@ -573,7 +573,7 @@ impl SimulationSupervisor {
         self.status()
     }
 
-    pub fn restart(&self, profile: &SimulationProfile) -> std::io::Result<SimulationStatus> {
+    pub(crate) fn restart(&self, profile: &SimulationProfile) -> std::io::Result<SimulationStatus> {
         self.stop();
         self.start(profile)
     }
@@ -866,9 +866,11 @@ mod tests {
     /// selected post-arbitration PWM stream.
     #[test]
     fn normalize_migrates_legacy_topics() {
-        let mut profile = SimulationProfile::default();
-        profile.command_input_topic = "synapse/v1/topic/pwm_signal_outputs".to_string();
-        profile.telemetry_output_topic = "synapse/mocap/frame".to_string();
+        let mut profile = SimulationProfile {
+            command_input_topic: "synapse/v1/topic/pwm_signal_outputs".to_string(),
+            telemetry_output_topic: "synapse/mocap/frame".to_string(),
+            ..Default::default()
+        };
         profile.normalize();
         assert_eq!(profile.command_input_topic, "synapse/motor_output");
         assert_eq!(

@@ -63,7 +63,7 @@ fn main() -> anyhow::Result<()> {
                     "wsprobe: SAMPLE key={} bytes={} {}",
                     sample.key_expr(),
                     bytes.len(),
-                    decode_sample(&sample.key_expr().to_string(), &bytes)
+                    decode_sample(sample.key_expr().as_ref(), &bytes)
                 );
             }
             Err(err) => {

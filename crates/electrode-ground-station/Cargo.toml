@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 description = "Electrode Ground Station daemon: serves the Viewer app locally and exposes hardware (gcs/*) capabilities"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "electrode-ground-station"
 path = "src/main.rs"

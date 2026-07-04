@@ -11,8 +11,14 @@
     "dev": "npm --workspace apps/web run dev",
     "preview": "npm --workspace apps/web run preview",
     "build": "npm run build:packages && npm --workspace apps/web run build",
-    "build:packages": "npm run schemas:assets && npm --workspace @electrode/flatbuffers run build && npm --workspace @electrode/sdk run build",
+    "build:packages": "npm --workspace @electrode/flatbuffers run build && npm --workspace @electrode/sdk run build",
     "check": "npm run build:packages && npm --workspace apps/web run check",
+    "lint": "npm run lint:js && npm run lint:rust-files",
+    "lint:js": "eslint .",
+    "lint:rust-files": "node scripts/check-rust-file-lines.mjs",
+    "test": "vitest run",
+    "verify:pages": "node -e \"const fs=require('node:fs'); const files=fs.readdirSync('apps/web/build',{recursive:true}).map(String); if (!files.includes('index.html')) throw new Error('apps/web/build/index.html missing'); if (!files.some((file)=>/zenoh_wasm_bg.*\\.wasm$/.test(file))) throw new Error('zenoh wasm asset missing from static build');\"",
+    "ci": "npm run lint && npm run test && npm run check && npm run build && npm run verify:pages",
     "station": "npm run build && ELECTRODE_GCS_ZENOH_CONNECT=udp/192.168.10.2:7447 cargo run -p electrode-ground-station --",
     "ground-station": "ELECTRODE_GCS_ZENOH_CONNECT=udp/192.168.10.2:7447 cargo run -p electrode-ground-station --",
     "bridge": "cargo run -p electrode-ground-bridge",
@@ -20,12 +26,18 @@
     "manual:bridge": "cargo run -p electrode-manual-control-bridge --bin electrode-manual-control-bridge --",
     "manual:dump": "cargo run -p electrode-manual-control-bridge --bin electrode-manual-control-dump --",
     "ppm:bridge": "cargo run -p electrode-ppm-bridge --bin electrode-ppm-bridge --",
-    "schemas:assets": "node scripts/generate-log-schema-assets.mjs",
-    "schemas:generate": "node scripts/generate-flatbuffers.mjs",
-    "synapse:fbs": "node scripts/generate-synapse-fbs.mjs",
     "build:gcs": "cargo build && npm run build"
   },
   "dependencies": {
     "@cognipilot/synapse-fbs": "^0.3.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.0",
+    "eslint": "^10.6.0",
+    "eslint-plugin-svelte": "^3.20.0",
+    "globals": "^17.7.0",
+    "typescript-eslint": "^8.62.1",
+    "vitest": "^4.1.9"
   }
 }

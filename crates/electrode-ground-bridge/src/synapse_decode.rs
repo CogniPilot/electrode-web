@@ -19,17 +19,15 @@ use synapse_fbs::topic::{
 };
 
 /// A payload decoded (or passed through) from a Zenoh sample.
-pub struct Decoded {
+pub(crate) struct Decoded {
     /// Human-facing message type, e.g. `AttitudeEstimate` or `Raw`.
     pub schema: &'static str,
     /// JSON payload forwarded to the browser.
     pub payload: Value,
-    /// True when we decoded a known Synapse topic, false for raw fallback.
-    pub decoded: bool,
 }
 
 /// Classify a Zenoh key into the Synapse schema we expect on it.
-pub fn classify(key: &str) -> &'static str {
+pub(crate) fn classify(key: &str) -> &'static str {
     // Resolve the canonical topic through the catalog when the key is on the
     // `synapse/v1/topic/<suffix>` scheme (handles namespaces and instances).
     if let Some(topic) = synapse_fbs::topic_catalog::topic_by_key(key) {
@@ -65,7 +63,7 @@ fn schema_for_suffix(suffix: &str) -> Option<&'static str> {
 }
 
 /// Decode a Zenoh sample by key, falling back to a raw preview.
-pub fn decode(key: &str, bytes: &[u8]) -> Decoded {
+pub(crate) fn decode(key: &str, bytes: &[u8]) -> Decoded {
     match classify(key) {
         "MocapFrame" => decode_or_raw("MocapFrame", bytes, decode_mocap_frame),
         "ManualControl" => decode_or_raw("ManualControl", bytes, decode_manual_control),
@@ -77,7 +75,6 @@ pub fn decode(key: &str, bytes: &[u8]) -> Decoded {
         schema => Decoded {
             schema,
             payload: raw_payload(bytes),
-            decoded: false,
         },
     }
 }
@@ -88,15 +85,10 @@ fn decode_or_raw(
     decoder: fn(&[u8]) -> Option<Value>,
 ) -> Decoded {
     match decoder(bytes) {
-        Some(payload) => Decoded {
-            schema,
-            payload,
-            decoded: true,
-        },
+        Some(payload) => Decoded { schema, payload },
         None => Decoded {
             schema,
             payload: raw_payload(bytes),
-            decoded: false,
         },
     }
 }

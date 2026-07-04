@@ -104,7 +104,11 @@ fn locator_is_bound(locator: &str) -> bool {
         None => return true, // unrecognized shape: don't block startup
     };
     let addr = rest.split('?').next().unwrap_or(rest);
-    let port = match addr.rsplit(':').next().and_then(|p| p.trim().parse::<u16>().ok()) {
+    let port = match addr
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.trim().parse::<u16>().ok())
+    {
         Some(port) => port,
         None => return true,
     };
@@ -135,7 +139,7 @@ fn proc_has_port(files: &[&str], hex_port: &str, want_state: Option<&str>) -> bo
                 continue;
             };
             if port.eq_ignore_ascii_case(hex_port)
-                && want_state.map_or(true, |s| state.eq_ignore_ascii_case(s))
+                && want_state.is_none_or(|s| state.eq_ignore_ascii_case(s))
             {
                 return true;
             }

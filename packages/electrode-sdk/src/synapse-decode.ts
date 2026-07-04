@@ -2,9 +2,9 @@
 //
 // This is a faithful TypeScript port of the native ground-bridge decoder
 // (`crates/electrode-ground-bridge/src/synapse_decode.rs`) so that direct Zenoh
-// connections produce byte-identical telemetry frames to the bridge. Readers are
-// generated from the published `@cognipilot/synapse-fbs` schemas — see
-// `scripts/generate-synapse-fbs.mjs` (`npm run synapse:fbs`).
+// connections produce byte-identical telemetry frames to the bridge. The
+// committed readers were generated from the published `@cognipilot/synapse-fbs`
+// schemas; normal development and CI do not require `flatc`.
 //
 // Wire encoding (synapse_fbs 0.3.0): every topic is `table X { data: XData; }`
 // EXCEPT fixed-layout structs, which are transmitted as the *bare* `*Data`
@@ -125,11 +125,11 @@ function decodeOrRaw(
   bytes: Uint8Array,
   decoder: (bytes: Uint8Array) => unknown | null
 ): Decoded {
-  let payload: unknown | null = null;
+  let payload: unknown | null;
   try {
     payload = decoder(bytes);
   } catch {
-    payload = null;
+    return { schema, payload: rawPayload(bytes), decoded: false };
   }
   return payload === null
     ? { schema, payload: rawPayload(bytes), decoded: false }

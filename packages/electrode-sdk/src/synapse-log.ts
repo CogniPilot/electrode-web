@@ -511,13 +511,12 @@ function decodeGcsFramePayload(bytes: Uint8Array): GcsFrame | null {
   if (payloadType === GcsPayload.TelemetryJson) {
     const header = decodeHeaderTable(bb, payload, 4);
     const json = readStringField(bb, payload, 6);
-    let decoded: unknown = null;
     try {
-      decoded = json ? JSON.parse(json) : null;
+      const decoded = json ? JSON.parse(json) : null;
+      return telemetryFrame(topic, header, decoded);
     } catch {
       return null;
     }
-    return telemetryFrame(topic, header, decoded);
   }
 
   if (payloadType === GcsPayload.Event) {

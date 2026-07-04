@@ -22,7 +22,9 @@ Replay feeds recorded envelopes into the same worker and state store used by liv
 
 ## Logs
 
-Ground-station recordings use the Synapse log container from `synapse_fbs/fbs/synapse_log.fbs`.
+Ground-station recordings use committed schema assets from
+`@electrode/flatbuffers`. Live Synapse topic schemas come from the published
+`@cognipilot/synapse-fbs` and `synapse_fbs` packages.
 
 The browser exports `.sylg` files as a stream of size-prefixed `synapse.log.LogRecord`
 FlatBuffers with file identifier `SYLG`. Each file starts with:

@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 description = "Electrode native bridge from USB RC transmitter joystick input to Synapse ManualControl FlatBuffers over Zenoh"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "electrode-manual-control-bridge"
 path = "src/main.rs"

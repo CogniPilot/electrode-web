@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MappingProfile {
+pub(crate) struct MappingProfile {
     /// Joystick node the bridge reads, e.g. `/dev/input/js0`.
     pub device: String,
     /// Zenoh locator the bridge publishes to.
@@ -93,7 +93,7 @@ impl Default for MappingProfile {
 
 impl MappingProfile {
     /// Load a profile from disk, falling back to defaults if absent/unreadable.
-    pub fn load_or_default(path: &Path) -> Self {
+    pub(crate) fn load_or_default(path: &Path) -> Self {
         std::fs::read_to_string(path)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
@@ -101,7 +101,7 @@ impl MappingProfile {
     }
 
     /// Persist the profile as pretty JSON.
-    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+    pub(crate) fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -111,7 +111,7 @@ impl MappingProfile {
 
     /// Build the `electrode-manual-control-bridge` argument vector for this
     /// profile.
-    pub fn bridge_args(&self) -> Vec<String> {
+    pub(crate) fn bridge_args(&self) -> Vec<String> {
         let mut args = vec![
             "--device".into(),
             self.device.clone(),
@@ -158,7 +158,7 @@ impl MappingProfile {
     /// Build the selected-output PPM bridge args. This bridge subscribes to
     /// manual control + autopilot PWM, then publishes the selected PWM stream
     /// for simulation and writes the selected PPM packet to the radio encoder.
-    pub fn ppm_bridge_args(&self) -> Vec<String> {
+    pub(crate) fn ppm_bridge_args(&self) -> Vec<String> {
         vec![
             "--zenoh-connect".into(),
             self.zenoh_connect.clone(),
@@ -186,10 +186,9 @@ mod tests {
     fn ppm_bridge_args_use_sport_cub_aetrm_serial_order() {
         let args = MappingProfile::default().ppm_bridge_args();
 
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--channel-map", "1,2,0,3,4"])
-        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--channel-map", "1,2,0,3,4"]));
     }
 
     #[test]
@@ -200,17 +199,14 @@ mod tests {
         };
         let args = profile.ppm_bridge_args();
 
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--channel-invert", "true,false,true,false,true"])
-        );
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--force-idle-throttle", "false"])
-        );
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--force-stabilizing-mode", "false"])
-        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--channel-invert", "true,false,true,false,true"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--force-idle-throttle", "false"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--force-stabilizing-mode", "false"]));
     }
 }

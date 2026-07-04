@@ -2,12 +2,12 @@
 //!
 //! Models the real network shape as two independent publishers:
 //!
-//!   * `mocap`     — pose only, like CogniPilot/synapse_qualisys_bridge:
-//!                   a MocapFrame (position + attitude quaternion) on
-//!                   `synapse/v1/topic/mocap_frame`.
-//!   * `autopilot` — standard vehicle telemetry the flight controller emits:
-//!                   AttitudeEstimate on `synapse/v1/topic/attitude_estimate`
-//!                   and PwmSignalOutputs on `synapse/v1/topic/pwm_signal_outputs`.
+//! * `mocap` - pose only, like CogniPilot/synapse_qualisys_bridge:
+//!   a MocapFrame (position + attitude quaternion) on
+//!   `synapse/v1/topic/mocap_frame`.
+//! * `autopilot` - standard vehicle telemetry the flight controller emits:
+//!   AttitudeEstimate on `synapse/v1/topic/attitude_estimate` and
+//!   PwmSignalOutputs on `synapse/v1/topic/pwm_signal_outputs`.
 //!
 //! Run them together (default) or as two separate processes to mirror the two
 //! machines on a real setup:
@@ -73,13 +73,25 @@ struct Cli {
     )]
     mode: String,
 
-    #[arg(long, default_value = "synapse", help = "Zenoh key prefix for published topics")]
+    #[arg(
+        long,
+        default_value = "synapse",
+        help = "Zenoh key prefix for published topics"
+    )]
     prefix: String,
 
-    #[arg(long, default_value_t = 240.0, help = "Mocap (pose) publish rate in Hz")]
+    #[arg(
+        long,
+        default_value_t = 240.0,
+        help = "Mocap (pose) publish rate in Hz"
+    )]
     mocap_hz: f32,
 
-    #[arg(long, default_value_t = 50.0, help = "Autopilot telemetry publish rate in Hz")]
+    #[arg(
+        long,
+        default_value_t = 50.0,
+        help = "Autopilot telemetry publish rate in Hz"
+    )]
     autopilot_hz: f32,
 
     #[arg(
@@ -89,7 +101,11 @@ struct Cli {
     )]
     airspeed: f32,
 
-    #[arg(long, default_value_t = 18.0, help = "Bank angle for the loiter turn, degrees")]
+    #[arg(
+        long,
+        default_value_t = 18.0,
+        help = "Bank angle for the loiter turn, degrees"
+    )]
     bank_deg: f32,
 }
 
@@ -105,50 +121,100 @@ struct FlightState {
     t: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ActiveStreams {
+    mocap: bool,
+    autopilot: bool,
+}
+
+struct SimPublishers<'a> {
+    mocap: Option<Publisher<'a>>,
+    attitude: Option<Publisher<'a>>,
+    motor: Option<Publisher<'a>>,
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     // Route Zenoh's tracing output through RUST_LOG (e.g. RUST_LOG=zenoh=debug).
     zenoh::init_log_from_env_or("error");
     let session = open_verified(&cli)?;
+    let streams = active_streams(&cli);
+    let publishers = declare_publishers(&session, &cli, streams)?;
 
-    let run_mocap = cli.role == "mocap" || cli.role == "both";
-    let run_autopilot = cli.role == "autopilot" || cli.role == "both";
+    print_startup(&cli, streams);
+    run_publish_loop(&cli, streams, publishers)
+}
 
-    let mocap_pub = run_mocap
-        .then(|| declare(&session, format!("{}/v1/topic/mocap_frame", cli.prefix)))
-        .transpose()?;
-    let attitude_pub = run_autopilot
-        .then(|| declare(&session, format!("{}/v1/topic/attitude_estimate", cli.prefix)))
-        .transpose()?;
-    let motor_pub = run_autopilot
-        .then(|| declare(&session, format!("{}/v1/topic/pwm_signal_outputs", cli.prefix)))
-        .transpose()?;
+fn active_streams(cli: &Cli) -> ActiveStreams {
+    ActiveStreams {
+        mocap: cli.role == "mocap" || cli.role == "both",
+        autopilot: cli.role == "autopilot" || cli.role == "both",
+    }
+}
 
+fn declare_publishers<'a>(
+    session: &'a Session,
+    cli: &Cli,
+    streams: ActiveStreams,
+) -> anyhow::Result<SimPublishers<'a>> {
+    Ok(SimPublishers {
+        mocap: streams
+            .mocap
+            .then(|| declare(session, format!("{}/v1/topic/mocap_frame", cli.prefix)))
+            .transpose()?,
+        attitude: streams
+            .autopilot
+            .then(|| {
+                declare(
+                    session,
+                    format!("{}/v1/topic/attitude_estimate", cli.prefix),
+                )
+            })
+            .transpose()?,
+        motor: streams
+            .autopilot
+            .then(|| {
+                declare(
+                    session,
+                    format!("{}/v1/topic/pwm_signal_outputs", cli.prefix),
+                )
+            })
+            .transpose()?,
+    })
+}
+
+fn print_startup(cli: &Cli, streams: ActiveStreams) {
     println!(
         "electrode-fake-sim: role={} mode={} endpoint={}",
         cli.role, cli.mode, cli.endpoint
     );
-    if run_mocap {
+    if streams.mocap {
         println!(
             "  mocap     → {}/v1/topic/mocap_frame (MocapFrame: pose) @ {:.0} Hz",
             cli.prefix, cli.mocap_hz
         );
     }
-    if run_autopilot {
+    if streams.autopilot {
         println!(
             "  autopilot → {}/v1/topic/attitude_estimate (AttitudeEstimate), {}/v1/topic/pwm_signal_outputs (PwmSignalOutputs) @ {:.0} Hz",
             cli.prefix, cli.prefix, cli.autopilot_hz
         );
     }
+}
 
+fn run_publish_loop(
+    cli: &Cli,
+    streams: ActiveStreams,
+    publishers: SimPublishers<'_>,
+) -> anyhow::Result<()> {
     // Integrate the physics at the fastest active stream's rate; each stream is
     // then published on its own timer so mocap (240 Hz) and autopilot (50 Hz)
     // run at independent, non-integer-ratio rates.
     let mut base_hz = 1.0_f32;
-    if run_mocap {
+    if streams.mocap {
         base_hz = base_hz.max(cli.mocap_hz);
     }
-    if run_autopilot {
+    if streams.autopilot {
         base_hz = base_hz.max(cli.autopilot_hz);
     }
     let dt = 1.0 / base_hz.max(1.0);
@@ -188,7 +254,7 @@ fn main() -> anyhow::Result<()> {
         mocap_accum += dt;
         if mocap_accum >= mocap_interval {
             mocap_accum -= mocap_interval;
-            if let Some(publisher) = &mocap_pub {
+            if let Some(publisher) = &publishers.mocap {
                 put(publisher, encode_mocap_frame(&state, roll, pitch, ticks))?;
             }
         }
@@ -197,16 +263,19 @@ fn main() -> anyhow::Result<()> {
         autopilot_accum += dt;
         if autopilot_accum >= autopilot_interval {
             autopilot_accum -= autopilot_interval;
-            if let Some(publisher) = &attitude_pub {
-                put(publisher, encode_attitude_estimate(&state, roll, pitch, yaw_rate))?;
+            if let Some(publisher) = &publishers.attitude {
+                put(
+                    publisher,
+                    encode_attitude_estimate(&state, roll, pitch, yaw_rate),
+                )?;
             }
-            if let Some(publisher) = &motor_pub {
+            if let Some(publisher) = &publishers.motor {
                 put(publisher, encode_pwm_signal_outputs(&state))?;
             }
         }
 
         ticks += 1;
-        if ticks % (base_hz.max(1.0) as u64) == 0 {
+        if ticks.is_multiple_of(base_hz.max(1.0) as u64) {
             println!(
                 "  t={:6.1}s  hdg={:5.1}°  alt={:5.1}m  pos=({:7.1},{:7.1})m  bank={:4.1}°",
                 state.t,
@@ -268,11 +337,8 @@ fn encode_attitude_estimate(state: &FlightState, roll: f32, pitch: f32, yaw_rate
     let (qx, qy, qz, qw) = euler_to_quat(roll, pitch, state.psi);
     let attitude = Quaternionf::new(qw, qx, qy, qz);
     // Body roll/pitch/yaw rates (FLU, rad/s); yaw tracks the coordinated turn.
-    let angular_velocity = RateTriplet::new(
-        (t * 3.0).sin() * 0.03,
-        (t * 2.2).cos() * 0.03,
-        yaw_rate,
-    );
+    let angular_velocity =
+        RateTriplet::new((t * 3.0).sin() * 0.03, (t * 2.2).cos() * 0.03, yaw_rate);
     let flags = (AttitudeEstimateFlags::AttitudeValid | AttitudeEstimateFlags::RatesValid).bits();
     let data = AttitudeEstimateData::new(timestamp_us(), &attitude, &angular_velocity, flags);
     data.0.to_vec()
@@ -388,7 +454,11 @@ fn zenoh_config(cli: &Cli) -> anyhow::Result<Config> {
     };
     set(&mut config, "mode", &format!("\"{}\"", cli.mode))?;
     if cli.mode == "client" {
-        set(&mut config, "connect/endpoints", &format!("[\"{}\"]", cli.endpoint))?;
+        set(
+            &mut config,
+            "connect/endpoints",
+            &format!("[\"{}\"]", cli.endpoint),
+        )?;
     } else {
         // Listen on the network locator (e.g. UDP) plus, unless disabled, a
         // WebSocket locator so browser zenoh-wasm clients can connect directly.

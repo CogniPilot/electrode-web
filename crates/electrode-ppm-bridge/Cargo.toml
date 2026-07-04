@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 description = "Electrode native bridge from Synapse ManualControl FlatBuffers to a PPM encoder serial link"
 
+[lints]
+workspace = true
+
 [lib]
 name = "electrode_ppm_bridge"
 path = "src/lib.rs"
