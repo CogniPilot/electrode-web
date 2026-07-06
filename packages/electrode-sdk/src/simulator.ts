@@ -80,6 +80,7 @@ export function makeSimulatedTelemetryBundle(options: SimulationOptions): Teleme
     makeAttitudeFrame(state, synapseFrame),
     makePwmOutputsFrame(state, synapseFrame),
     makeRadioControlFrame(state, synapseFrame),
+    makeMocapPoseFrame(state, synapseFrame),
     makeMocapFrame(options, state, synapseFrame),
     makeOpticalFlowFrame(state, synapseFrame),
     makeOpticalFlowVelocityFrame(state, synapseFrame),
@@ -291,15 +292,42 @@ function makeRadioControlFrame(state: SimulationState, frame: SynapseFrameBuilde
   );
 }
 
+/**
+ * Compact per-rigid-body pose topic — mirrors what decode() produces for the
+ * 28-byte payload real mocap bridges publish (single body, no markers).
+ */
+function makeMocapPoseFrame(state: SimulationState, frame: SynapseFrameBuilder): TelemetryFrame {
+  return frame(
+    'synapse/mocap/rigid_body/cub1/pose',
+    'synapse.topic.MocapFrame',
+    'synapse_mocap_rigid_body_cub1_pose',
+    {
+      timestamp_us: 0,
+      frame_number: 0,
+      rigid_bodies: [
+        {
+          id: 0,
+          position: { x: state.xM, y: state.yM, z: state.altM },
+          attitude: eulerToQuaternion(state.rollRad, state.pitchRad, state.yawRad),
+          residual: 0,
+          tracking_valid: true
+        }
+      ]
+    },
+    180
+  );
+}
+
+/** Full mocap frame topic carrying markers alongside the rigid bodies. */
 function makeMocapFrame(
   options: SimulationOptions,
   state: SimulationState,
   frame: SynapseFrameBuilder
 ): TelemetryFrame {
   return frame(
-    'synapse/mocap/rigid_body/cub1/pose',
+    'synapse/mocap/frame',
     'synapse.topic.MocapFrame',
-    'synapse_mocap_rigid_body_cub1_pose',
+    'synapse_mocap_frame',
     {
       timestamp_us: state.timestampUs,
       frame_number: Math.floor(options.elapsedMs / 10),

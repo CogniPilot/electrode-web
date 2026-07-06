@@ -6,7 +6,8 @@ members = [
   "crates/electrode-ground-station",
   "crates/electrode-log",
   "crates/electrode-manual-control-bridge",
-  "crates/electrode-ppm-bridge"
+  "crates/electrode-ppm-bridge",
+  "xtask"
 ]
 resolver = "2"
 

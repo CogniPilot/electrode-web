@@ -1,7 +1,28 @@
 import { describe, expect, it } from 'vitest';
 
+import { ELECTRODE_SCHEMA_VERSION } from '@electrode/flatbuffers';
 import { applyGcsFrame, createInitialVehicleState, refreshStaleTopics } from './state-store';
 import { makeSimulatedTelemetryBundle } from './simulator';
+import type { TelemetryFrame } from './types';
+
+function telemetryFrame(topic: string, payload: unknown, nowMs: number): TelemetryFrame {
+  return {
+    kind: 'telemetry',
+    topic,
+    header: {
+      sequence: 1,
+      sourceTimeNs: nowMs * 1_000_000,
+      receiveTimeNs: nowMs * 1_000_000,
+      expireTimeNs: 0,
+      vehicleId: 'cubs2',
+      schemaVersion: ELECTRODE_SCHEMA_VERSION,
+      messageType: 'test',
+      priority: 'normal',
+      streamId: topic
+    },
+    payload
+  };
+}
 
 describe('state store telemetry pipeline', () => {
   it('derives vehicle state from raw Synapse telemetry frames', () => {
@@ -41,6 +62,43 @@ describe('state store telemetry pipeline', () => {
     expect(state.mode).toMatchObject({ name: 'manual', armed: true, failsafe: false });
     expect(state.localization).toMatchObject({ source: 'mocap', fresh: true });
     expect(Object.keys(state.topics)).toContain('synapse/v1/topic/manual_control_command');
+  });
+
+  it('keeps mocap attitude authoritative when estimator attitude also arrives', () => {
+    let state = createInitialVehicleState('cubs2');
+    const mocap = telemetryFrame(
+      'synapse/mocap/rigid_body/cub1/pose',
+      {
+        rigid_bodies: [
+          {
+            position: { x: 1, y: 2, z: 3 },
+            attitude: { w: 1, x: 0, y: 0, z: 0 },
+            residual: 0,
+            tracking_valid: true
+          }
+        ]
+      },
+      10_000
+    );
+    const estimate = telemetryFrame(
+      'synapse/v1/topic/attitude_estimate',
+      {
+        data: {
+          attitude: { w: Math.SQRT1_2, x: 0, y: 0, z: Math.SQRT1_2 },
+          attitude_valid: true
+        }
+      },
+      10_010
+    );
+
+    state = applyGcsFrame(state, mocap, 10_000);
+    state = applyGcsFrame(state, estimate, 10_010);
+
+    expect(state.attitude?.rollDeg).toBeCloseTo(0, 6);
+    expect(state.attitude?.pitchDeg).toBeCloseTo(0, 6);
+    expect(state.attitude?.yawDeg).toBeCloseTo(0, 6);
+    expect(state.attitudeEstimate?.yawDeg).toBeCloseTo(90, 6);
+    expect(state.localization).toMatchObject({ source: 'mocap', fresh: true });
   });
 
   it('marks connection and localization stale when topic deadlines pass', () => {

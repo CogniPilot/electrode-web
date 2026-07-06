@@ -29,14 +29,18 @@
     { key: 'arm', label: 'Arm', field: 'armButton', toggle: 'armToggle' },
     { key: 'kill', label: 'Kill', field: 'killButton', toggle: 'killToggle' }
   ];
+  const POLL_MS = 2000;
 
   let profile: MappingProfile | null = null;
   let joysticks: DetectedDevice[] = [];
   let snapshot: JoystickSnapshot | null = null;
   let status = '';
   let socket: WebSocket | null = null;
+  let connectedDevice: string | null = null;
   let showInspector = true;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let inFlight: AbortController | null = null;
 
   // Derive reactive arrays so the template references `axes`/`buttons` directly
   // — a function call would hide the `snapshot` dependency from Svelte.
@@ -44,6 +48,7 @@
   $: buttons = snapshot?.buttons ?? [];
   $: axisCount = Math.max(axes.length, 6);
   $: buttonCount = Math.max(buttons.length, 4);
+  $: controllerMissing = joysticks.length === 0;
 
   function setField<K extends keyof MappingProfile>(field: K, value: MappingProfile[K]): void {
     if (!profile) return;
@@ -70,11 +75,22 @@
     }
   }
 
+  function setDevice(path: string): void {
+    if (!profile || profile.device === path) return;
+    profile = { ...profile, device: path };
+    mappingProfile.set(profile);
+    scheduleSave();
+  }
+
   function connect(device: string): void {
+    if (socket && connectedDevice === device) return;
     socket?.close();
+    connectedDevice = null;
     snapshot = null;
+    if (!device || joysticks.length === 0) return;
     const ws = openJoystickSocket(device);
     socket = ws;
+    connectedDevice = device;
     ws.onmessage = (event) => {
       try {
         snapshot = JSON.parse(event.data) as JoystickSnapshot;
@@ -82,30 +98,62 @@
         // ignore malformed frames
       }
     };
+    ws.onclose = () => {
+      if (socket === ws) {
+        socket = null;
+        connectedDevice = null;
+      }
+    };
+  }
+
+  async function refreshDevices(): Promise<void> {
+    inFlight?.abort();
+    const controller = new AbortController();
+    inFlight = controller;
+    try {
+      const devices = await fetchDevices(controller.signal);
+      if (controller.signal.aborted) return;
+      joysticks = devices.joysticks;
+      if (!profile) return;
+      if (joysticks.length === 0) {
+        socket?.close();
+        socket = null;
+        connectedDevice = null;
+        snapshot = null;
+        return;
+      }
+      connect(profile.device);
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        status = err instanceof Error ? err.message : 'device query failed';
+      }
+    }
   }
 
   onMount(async () => {
     try {
       profile = await fetchMapping();
       mappingProfile.set(profile);
-      joysticks = (await fetchDevices()).joysticks;
-      connect(profile.device);
+      await refreshDevices();
+      pollTimer = setInterval(() => void refreshDevices(), POLL_MS);
     } catch (err) {
       status = err instanceof Error ? err.message : 'failed to load mapping';
     }
   });
 
   onDestroy(() => {
+    if (pollTimer) clearInterval(pollTimer);
+    inFlight?.abort();
     socket?.close();
     if (saveTimer) clearTimeout(saveTimer);
   });
 </script>
 
-<section class="rc-map" class:light={theme === 'light'}>
+<section class="rc-map" class:light={theme === 'light'} class:unavailable={controllerMissing}>
   <div class="head">
     <div class="title">
       <h3>RC Mapping</h3>
-      <span class="dev">{snapshot?.name ?? profile?.device ?? '—'}</span>
+      <span class="dev">{controllerMissing ? 'no RC controller detected' : (snapshot?.name ?? profile?.device ?? '—')}</span>
       {#if status}<span class="status">{status}</span>{/if}
     </div>
     <div class="actions">
@@ -115,7 +163,7 @@
           value={profile?.device ?? ''}
           onchange={(e) => {
             const d = e.currentTarget.value;
-            setField('device', d);
+            setDevice(d);
             connect(d);
           }}
         >
@@ -127,6 +175,7 @@
       <button
         type="button"
         class="btn"
+        disabled={controllerMissing}
         onclick={() => (showInspector = !showInspector)}
         title="Show/hide the live raw-channel monitor"
       >
@@ -142,9 +191,13 @@
       <!-- Editor -->
       <div class="editor">
         <p class="hint">
-          Map each control to a controller <b>Axis</b> (<b>Inv</b> flips direction). Buttons can be
-          <b>mom</b> (high while held) or <b>tog</b> (press to latch high/low). Changes save
-          automatically.
+          {#if controllerMissing}
+            Plug in an RC controller to edit and inspect its mapping. Keyboard fallback is shown in Manual Link.
+          {:else}
+            Map each control to a controller <b>Axis</b> (<b>Inv</b> flips direction). Buttons can be
+            <b>mom</b> (high while held) or <b>tog</b> (press to latch high/low). Changes save
+            automatically.
+          {/if}
         </p>
         <div class="col-head"><span>Function</span><span>Axis</span><span>Live</span><span>Inv</span></div>
         {#each AXIS_FUNCTIONS as fn}
@@ -155,7 +208,7 @@
           {@const live = inv ? -raw : raw}
           <div class="row">
             <span class="fn">{fn.label}</span>
-            <select value={ax} onchange={(e) => setField(fn.axis, Number(e.currentTarget.value))}>
+            <select disabled={controllerMissing} value={ax} onchange={(e) => setField(fn.axis, Number(e.currentTarget.value))}>
               {#each Array(axisCount) as _, i}
                 <option value={i}>{i}</option>
               {/each}
@@ -171,6 +224,7 @@
               <input
                 type="checkbox"
                 checked={inv}
+                disabled={controllerMissing}
                 title="Invert this axis"
                 onchange={(e) => fn.invert && setField(fn.invert, e.currentTarget.checked)}
               />
@@ -187,6 +241,7 @@
           <div class="row">
             <span class="fn">{fn.label}</span>
             <select
+              disabled={controllerMissing}
               value={bi ?? -1}
               onchange={(e) => {
                 const v = Number(e.currentTarget.value);
@@ -207,7 +262,7 @@
               type="button"
               class="mode-toggle"
               class:tog
-              disabled={bi === null}
+              disabled={controllerMissing || bi === null}
               title={tog
                 ? 'Toggle: each press latches high/low'
                 : 'Momentary: high only while held'}
@@ -224,7 +279,7 @@
         <div class="inspector">
           <div class="insp-head">
             Controller input · received <em>(raw from the gamepad)</em>
-            {#if !snapshot}<em>· waiting…</em>{/if}
+            {#if controllerMissing}<em>· not plugged in</em>{:else if !snapshot}<em>· waiting…</em>{/if}
           </div>
           <div class="axes">
             {#each Array(axisCount) as _, i}
@@ -269,6 +324,22 @@
     border-color: rgba(227, 95, 12, 0.3);
     background: rgba(255, 255, 255, 0.75);
   }
+  .rc-map.unavailable {
+    border-color: rgba(145, 163, 156, 0.22);
+    background: rgba(8, 12, 13, 0.28);
+  }
+  .rc-map.unavailable .editor,
+  .rc-map.unavailable .inspector {
+    opacity: 0.48;
+  }
+  .rc-map.unavailable .title h3,
+  .rc-map.unavailable .dev {
+    color: #6f7f79;
+  }
+  .rc-map.light.unavailable {
+    border-color: rgba(120, 132, 140, 0.28);
+    background: rgba(238, 242, 244, 0.55);
+  }
   .head {
     display: flex;
     align-items: center;
@@ -306,6 +377,10 @@
     font-size: 0.68rem;
     font-weight: 760;
     cursor: pointer;
+  }
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
   .rc-map.light .btn {
     color: #12171b;

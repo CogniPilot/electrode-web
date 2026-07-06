@@ -1,17 +1,7 @@
 import { classify, decode } from './synapse-decode';
-import type { CommandIntent, ConnectionState, GcsFrame } from './types';
+import type { ConnectionState, GcsFrame } from './types';
 
-export type TransportMessage =
-  | GcsFrame
-  | {
-      kind: 'commandAck';
-      commandId: string;
-      command: string;
-      status: 'acked' | 'published' | 'rejected' | 'timeout';
-      reason: string;
-      sequence: number;
-      receivedAtMs: number;
-    };
+export type TransportMessage = GcsFrame;
 
 /** One discovered Zenoh key reported by the transport. */
 export interface TopicCatalogEntry {
@@ -157,21 +147,21 @@ export class ZenohWasmTransport {
     }
   }
 
-  async sendCommand(command: CommandIntent): Promise<void> {
+  /** Replace the set of discovered keys we forward as telemetry. */
+  setSubscriptions(keys: string[]): void {
+    this.#selected = new Set(keys);
+  }
+
+  async publishBytes(topic: string, payload: Uint8Array): Promise<void> {
     if (!this.#session || this.#session.isClosed()) {
       throw new Error('zenoh-wasm session is not open');
     }
 
     await withTimeout(
-      this.#session.putString(command.topic, JSON.stringify(command)),
+      this.#session.putBytes(topic, payload),
       ZENOH_PUBLISH_TIMEOUT_MS,
-      `publishing ${command.command} to ${command.topic}`
+      `publishing bytes to ${topic}`
     );
-  }
-
-  /** Replace the set of discovered keys we forward as telemetry. */
-  setSubscriptions(keys: string[]): void {
-    this.#selected = new Set(keys);
   }
 
   async disconnect(): Promise<void> {

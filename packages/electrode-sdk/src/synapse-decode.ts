@@ -15,12 +15,16 @@ import * as flatbuffers from 'flatbuffers';
 
 import { AttitudeEstimateData } from './generated/synapse/topic/attitude-estimate-data.js';
 import { AttitudeEstimateFlags } from './generated/synapse/topic/attitude-estimate-flags.js';
+import { LocalPositionCommandData } from './generated/synapse/topic/local-position-command-data.js';
 import { ManualControlData } from './generated/synapse/topic/manual-control-data.js';
 import { ManualControlFlags } from './generated/synapse/topic/manual-control-flags.js';
+import { MissionProgressData } from './generated/synapse/topic/mission-progress-data.js';
+import { MocapDefinition } from './generated/synapse/topic/mocap-definition.js';
 import { MocapFrame } from './generated/synapse/topic/mocap-frame.js';
 import { PowerStatusData } from './generated/synapse/topic/power-status-data.js';
 import { PwmSignalOutputsData } from './generated/synapse/topic/pwm-signal-outputs-data.js';
 import { RadioControlData } from './generated/synapse/topic/radio-control-data.js';
+import { VehicleCommandData } from './generated/synapse/topic/vehicle-command-data.js';
 import { VehicleHealthData } from './generated/synapse/topic/vehicle-health-data.js';
 import { VehicleHealthFlags } from './generated/synapse/topic/vehicle-health-flags.js';
 
@@ -40,7 +44,14 @@ export interface Decoded {
  * and/or instance-suffixed, so we test with `includes`).
  */
 export function classify(key: string): string {
-  if (key.includes('mocap_frame') || key.includes('synapse/mocap/rigid_body/')) {
+  if (key.includes('mocap/definition')) {
+    return 'MocapDefinition';
+  }
+  if (
+    key.includes('mocap_frame') ||
+    key.endsWith('mocap/frame') ||
+    key.includes('synapse/mocap/rigid_body/')
+  ) {
     return 'MocapFrame';
   }
   if (key.includes('manual_control_command')) {
@@ -60,6 +71,15 @@ export function classify(key: string): string {
   }
   if (key.includes('power_status')) {
     return 'PowerStatus';
+  }
+  if (key.includes('mission_progress')) {
+    return 'MissionProgress';
+  }
+  if (key.includes('local_position_command')) {
+    return 'LocalPositionCommand';
+  }
+  if (key.includes('vehicle_command')) {
+    return 'VehicleCommand';
   }
   // optical_flow / optical_flow_velocity: raw passthrough for now.
   return 'Raw';
@@ -83,6 +103,14 @@ export function decode(key: string, bytes: Uint8Array): Decoded {
       return decodeOrRaw(schema, bytes, decodePwmSignalOutputs);
     case 'MocapFrame':
       return decodeOrRaw(schema, bytes, decodeMocapFrame);
+    case 'MocapDefinition':
+      return decodeOrRaw(schema, bytes, decodeMocapDefinition);
+    case 'MissionProgress':
+      return decodeOrRaw(schema, bytes, decodeMissionProgress);
+    case 'LocalPositionCommand':
+      return decodeOrRaw(schema, bytes, decodeLocalPositionCommand);
+    case 'VehicleCommand':
+      return decodeOrRaw(schema, bytes, decodeVehicleCommand);
     default:
       return { schema, payload: rawPayload(bytes), decoded: false };
   }
@@ -340,21 +368,20 @@ function decodeMocapFrame(bytes: Uint8Array): unknown | null {
   };
 }
 
+// Compact per-rigid-body pose published by mocap bridges (synapse_qualisys_bridge)
+// on `synapse/mocap/rigid_body/<name>/pose`: 7 little-endian f32 values
+// [px, py, pz, qx, qy, qz, qw] — position in ENU metres, then the attitude
+// quaternion with the scalar (w) LAST on the wire. Per the synapse_fbs mocap
+// schema the quaternion rotates body FLU vectors into the mocap ENU frame;
+// producers (the QTM rigid-body definition, the sim plant) must deliver an
+// FLU-aligned body frame — no per-body correction is applied here.
 function decodeCompactRigidBodyPose(bytes: Uint8Array): unknown | null {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const values = Array.from({ length: 7 }, (_, index) => view.getFloat32(index * 4, true));
   if (!values.every(Number.isFinite)) {
     return null;
   }
-  const [x, y, z, qwRaw, qxRaw, qyRaw, qzRaw] = values;
-  // The LAN pose topic carries the tracked rigid-body frame. The cub1 rigid
-  // body forward axis is opposite the aircraft FLU forward axis, so convert
-  // q_world_rigid to q_world_aircraft with a right-side 180 deg Y correction:
-  // q * [0, 0, 1, 0].
-  const qw = -qyRaw;
-  const qx = -qzRaw;
-  const qy = qwRaw;
-  const qz = qxRaw;
+  const [x, y, z, qx, qy, qz, qw] = values;
   return {
     timestamp_us: 0,
     frame_number: 0,
@@ -367,5 +394,87 @@ function decodeCompactRigidBodyPose(bytes: Uint8Array): unknown | null {
         tracking_valid: true
       }
     ]
+  };
+}
+
+const MISSION_STATE_NAMES: Record<number, string> = {
+  0: 'unknown',
+  1: 'idle',
+  2: 'active',
+  3: 'paused',
+  4: 'complete'
+};
+
+function decodeMissionProgress(bytes: Uint8Array): unknown | null {
+  const data = new MissionProgressData().__init(0, byteBuffer(bytes));
+  return {
+    data: {
+      timestamp_us: Number(data.timestampUs()),
+      mission_id: data.missionId(),
+      current_seq: data.currentSeq(),
+      total: data.total(),
+      mission_state: MISSION_STATE_NAMES[data.missionState()] ?? 'unknown',
+      mission_mode: data.missionMode()
+    }
+  };
+}
+
+function decodeLocalPositionCommand(bytes: Uint8Array): unknown | null {
+  const data = new LocalPositionCommandData().__init(0, byteBuffer(bytes));
+  const position = data.positionEnuM();
+  if (!position) {
+    return null;
+  }
+  return {
+    data: {
+      timestamp_us: Number(data.timestampUs()),
+      position_enu_m: { x: position.x(), y: position.y(), z: position.z() },
+      yaw_rad: data.yawRad(),
+      type_mask: data.typeMask(),
+      coordinate_frame: data.coordinateFrame()
+    }
+  };
+}
+
+function decodeVehicleCommand(bytes: Uint8Array): unknown | null {
+  const data = new VehicleCommandData().__init(0, byteBuffer(bytes));
+  return {
+    data: {
+      timestamp_us: Number(data.timestampUs()),
+      args: [data.arg0(), data.arg1(), data.arg2(), data.arg3(), data.arg4(), data.arg5(), data.arg6()],
+      command_id: data.commandId(),
+      target_system: data.targetSystem(),
+      target_component: data.targetComponent()
+    }
+  };
+}
+
+/** Decode the cached `synapse/mocap/definition` metadata packet. */
+function decodeMocapDefinition(bytes: Uint8Array): unknown | null {
+  const definition = MocapDefinition.getRootAsMocapDefinition(byteBuffer(bytes));
+
+  const rigidBodies: unknown[] = [];
+  for (let i = 0; i < definition.rigidBodiesLength(); i += 1) {
+    const body = definition.rigidBodies(i);
+    if (!body) {
+      continue;
+    }
+    rigidBodies.push({ id: body.id(), name: body.name() ?? '' });
+  }
+
+  const labeledMarkers: unknown[] = [];
+  for (let i = 0; i < definition.labeledMarkersLength(); i += 1) {
+    const marker = definition.labeledMarkers(i);
+    if (!marker) {
+      continue;
+    }
+    labeledMarkers.push({ id: marker.id(), name: marker.name() ?? '', color: marker.color() });
+  }
+
+  return {
+    source: definition.source() ?? '',
+    frame_id: definition.frameId() ?? '',
+    rigid_bodies: rigidBodies,
+    labeled_markers: labeledMarkers
   };
 }

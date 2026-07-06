@@ -169,6 +169,19 @@ Rust crates opt into workspace lints with `clippy.toml` thresholds for nesting,
 function length, argument count, and type complexity. The Rust file length check
 enforces the same 2000-line tracked-source limit used by the CI lint step.
 
+## Developer Book
+
+The developer notes in `docs/` build into a versioned mdBook site through the
+Rust `xtask` driver:
+
+```bash
+cargo install mdbook --version "$(awk -F= '/^MDBOOK_VERSION=/{print $2}' tools.lock)" --locked
+cargo run --locked --manifest-path xtask/Cargo.toml -- docs --version main --out-dir target/xtask/docs
+```
+
+The docs workflow publishes `main` and release-tag snapshots to the `gh-pages`
+branch with the same version-selector pattern used by `synapse_fbs`.
+
 ## Notes
 
 - `@cognipilot/zenoh-wasm` is pinned from npm, not vendored from this repo.

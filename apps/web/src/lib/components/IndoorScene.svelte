@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { Attitude, ControlInputs, Pose } from '@electrode/sdk';
+  import type { Attitude, ControlInputs, MissionPlanState, Pose } from '@electrode/sdk';
   import * as three from 'three';
   import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   import type { BufferGeometry, Group, Line, Material, Object3D, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
@@ -10,6 +10,7 @@
   export let attitude: Attitude | null = null;
   export let controls: ControlInputs | null = null;
   export let motors: number[] | null = null;
+  export let mission: MissionPlanState | null = null;
   export let localizationQuality = 0;
   export let theme: 'light' | 'dark' = 'dark';
   export let vehicleType: VehicleKind = 'fixedwing';
@@ -24,8 +25,14 @@
   // The rig is authored/displayed with its nose along scene -Z, so rotate it
   // -90 deg at zero yaw to make the visual nose line up with +X.
   const YAW_ZERO_EAST_OFFSET_RAD = -Math.PI / 2;
-  const MAX_TRAIL = 900;
+  const MAX_TRAIL = 3600;
 
+  // Follow mode: the orbit target eases onto the vehicle every frame and the
+  // camera translates with it, preserving the user's orbit angle and zoom.
+  const FOLLOW_LERP = 0.16;
+  const followDelta = new three.Vector3();
+
+  let followMode = false;
   let rig: VehicleRig | null = null;
   let rigLoadToken = 0;
   let trail: Line | null = null;
@@ -41,6 +48,8 @@
   let orbit: OrbitControls | null = null;
   let vehicleGroup: Group | null = null;
   let frameGroup: Group | null = null;
+  let missionGroup: Group | null = null;
+  let missionSignature = '';
   let resizeObserver: ResizeObserver | null = null;
   let animationFrame = 0;
 
@@ -110,6 +119,7 @@
   $: localY = pose?.yM ?? 0;
   $: localAlt = pose?.altM ?? 0;
   $: updateVehicle(pose, attitude);
+  $: updateMission(mission);
   $: applyTheme(theme);
   $: if (mounted && scene) {
     void loadVehicle(vehicleType);
@@ -208,6 +218,7 @@
     scene.add(trail);
 
     updateVehicle(pose, attitude);
+    updateMission(mission);
   }
 
   async function loadVehicle(kind: VehicleKind): Promise<void> {
@@ -276,6 +287,9 @@
     }
 
     updateVehicle(pose, attitude);
+    // The mission signature includes the theme, so this rebuilds the markers
+    // with the new palette.
+    updateMission(mission);
   }
 
   function buildFrame(): Group {
@@ -303,20 +317,20 @@
     group.add(fineGrid);
 
     const origin = new three.Mesh(
-      new three.SphereGeometry(0.13, 18, 12),
+      new three.SphereGeometry(0.012, 18, 12),
       new three.MeshBasicMaterial({ color: pal.ink })
     );
-    origin.position.y = 0.08;
+    origin.position.y = 0.015;
     group.add(origin);
 
-    const axisOrigin = new three.Vector3(0, 0.08, 0);
-    group.add(new three.ArrowHelper(new three.Vector3(1, 0, 0), axisOrigin, 6.2, pal.xAxis, 0.38, 0.19));
-    group.add(new three.ArrowHelper(new three.Vector3(0, 0, -1), axisOrigin, 6.2, pal.forward, 0.38, 0.19));
-    group.add(new three.ArrowHelper(new three.Vector3(0, 1, 0), axisOrigin, 2.9, pal.up, 0.34, 0.17));
+    const axisOrigin = new three.Vector3(0, 0.015, 0);
+    group.add(new three.ArrowHelper(new three.Vector3(1, 0, 0), axisOrigin, 0.45, pal.xAxis, 0.07, 0.035));
+    group.add(new three.ArrowHelper(new three.Vector3(0, 0, -1), axisOrigin, 0.45, pal.forward, 0.07, 0.035));
+    group.add(new three.ArrowHelper(new three.Vector3(0, 1, 0), axisOrigin, 0.22, pal.up, 0.06, 0.03));
 
-    addAxisLabel(group, 'X', pal.labelX, new three.Vector3(6.85, 0.34, 0));
-    addAxisLabel(group, 'Y', pal.labelY, new three.Vector3(0, 0.34, -6.85));
-    addAxisLabel(group, 'Z', pal.labelZ, new three.Vector3(0.35, 3.35, 0));
+    addAxisLabel(group, 'X', pal.labelX, new three.Vector3(0.52, 0.06, 0));
+    addAxisLabel(group, 'Y', pal.labelY, new three.Vector3(0, 0.06, -0.52));
+    addAxisLabel(group, 'Z', pal.labelZ, new three.Vector3(0.05, 0.3, 0));
 
     return group;
   }
@@ -348,7 +362,7 @@
     });
     const sprite = new three.Sprite(material);
     sprite.position.copy(position);
-    sprite.scale.set(0.72, 0.4, 1);
+    sprite.scale.set(0.16, 0.09, 1);
     group.add(sprite);
   }
 
@@ -357,15 +371,132 @@
     group.rotation.order = 'YXZ';
     const bodyOrigin = new three.Vector3(0, 0, 0);
     const origin = new three.Mesh(
-      new three.SphereGeometry(0.12, 18, 12),
+      new three.SphereGeometry(0.02, 18, 12),
       new three.MeshBasicMaterial({ color: pal.ink })
     );
     group.add(origin);
-    group.add(new three.ArrowHelper(new three.Vector3(0, 0, -1), bodyOrigin, 1.28, pal.ink, 0.24, 0.12));
-    group.add(new three.ArrowHelper(new three.Vector3(1, 0, 0), bodyOrigin, 1.02, pal.forward, 0.2, 0.1));
-    group.add(new three.ArrowHelper(new three.Vector3(0, 1, 0), bodyOrigin, 0.86, pal.up, 0.18, 0.09));
+    group.add(new three.ArrowHelper(new three.Vector3(0, 0, -1), bodyOrigin, 0.1, pal.ink, 0.025, 0.012));
+    group.add(new three.ArrowHelper(new three.Vector3(1, 0, 0), bodyOrigin, 0.08, pal.forward, 0.02, 0.01));
+    group.add(new three.ArrowHelper(new three.Vector3(0, 1, 0), bodyOrigin, 0.065, pal.up, 0.018, 0.009));
 
     return group;
+  }
+
+  // Mission waypoints are near-static (a periodic broadcast of a fixed plan),
+  // so the marker group is rebuilt only when the plan, active item, or theme
+  // actually changes.
+  function missionSig(plan: MissionPlanState | null): string {
+    if (!plan) {
+      return theme;
+    }
+    const points = plan.waypoints
+      .map((wp) => (wp ? `${wp.east},${wp.north},${wp.up}` : 'x'))
+      .join(';');
+    return `${theme}|${plan.missionId}|${plan.currentSeq}|${points}`;
+  }
+
+  function updateMission(plan: MissionPlanState | null): void {
+    if (!scene) {
+      return;
+    }
+    const signature = missionSig(plan);
+    if (signature === missionSignature) {
+      return;
+    }
+    missionSignature = signature;
+
+    if (missionGroup) {
+      scene.remove(missionGroup);
+      disposeObject(missionGroup);
+      missionGroup = null;
+    }
+    if (!plan || plan.waypoints.every((wp) => wp === null)) {
+      return;
+    }
+    missionGroup = buildMissionGroup(plan);
+    scene.add(missionGroup);
+  }
+
+  function buildMissionGroup(plan: MissionPlanState): Group {
+    const group = new three.Group();
+    const known = plan.waypoints.filter((wp): wp is NonNullable<typeof wp> => wp !== null);
+
+    // Planned path through the waypoints in sequence order.
+    if (known.length >= 2) {
+      const points = known.map((wp) => enuToScene(wp.east, wp.north, wp.up));
+      const pathGeometry = new three.BufferGeometry().setFromPoints(points);
+      group.add(
+        new three.Line(
+          pathGeometry,
+          new three.LineBasicMaterial({ color: pal.up, transparent: true, opacity: 0.55 })
+        )
+      );
+    }
+
+    for (const wp of known) {
+      const active = wp.seq === plan.currentSeq;
+      const position = enuToScene(wp.east, wp.north, wp.up);
+
+      const marker = new three.Mesh(
+        new three.SphereGeometry(active ? 0.03 : 0.018, 18, 12),
+        new three.MeshBasicMaterial({
+          color: active ? pal.xAxis : pal.ink,
+          transparent: !active,
+          opacity: active ? 1 : 0.78
+        })
+      );
+      marker.position.copy(position);
+      group.add(marker);
+
+      if (active) {
+        // Halo ring so the active waypoint reads at a glance.
+        const halo = new three.Mesh(
+          new three.RingGeometry(0.045, 0.058, 32),
+          new three.MeshBasicMaterial({
+            color: pal.xAxis,
+            transparent: true,
+            opacity: 0.85,
+            side: three.DoubleSide
+          })
+        );
+        halo.rotation.x = -Math.PI / 2;
+        halo.position.copy(position);
+        group.add(halo);
+      }
+
+      // Drop line to the floor anchors the altitude visually.
+      const dropGeometry = new three.BufferGeometry().setFromPoints([
+        position,
+        new three.Vector3(position.x, 0.002, position.z)
+      ]);
+      group.add(
+        new three.Line(
+          dropGeometry,
+          new three.LineBasicMaterial({
+            color: active ? pal.xAxis : pal.gridLine,
+            transparent: true,
+            opacity: active ? 0.55 : 0.4
+          })
+        )
+      );
+
+      addAxisLabel(
+        group,
+        String(wp.seq + 1),
+        active ? pal.labelX : pal.labelY,
+        position.clone().add(new three.Vector3(0, 0.07, 0))
+      );
+    }
+
+    return group;
+  }
+
+  function enuToScene(east: number, north: number, up: number): Vector3 {
+    return new three.Vector3(
+      clamp(east * LOCAL_METERS_TO_SCENE, -9.8, 9.8),
+      localAltitudeSceneY(up),
+      clamp(-north * LOCAL_METERS_TO_SCENE, -9.8, 9.8)
+    );
   }
 
   function disposeObject(root: Object3D): void {
@@ -405,7 +536,11 @@
     if (!trail || !trailPositions) {
       return;
     }
-    const index = trailCount % MAX_TRAIL;
+    if (trailCount >= MAX_TRAIL) {
+      trailPositions.copyWithin(0, 3);
+      trailCount = MAX_TRAIL - 1;
+    }
+    const index = trailCount;
     trailPositions[index * 3] = position.x;
     trailPositions[index * 3 + 1] = position.y;
     trailPositions[index * 3 + 2] = position.z;
@@ -445,8 +580,22 @@
       return;
     }
     rig?.update(controls, motors);
+    if (followMode && orbit && vehicleGroup) {
+      followDelta.copy(vehicleGroup.position).sub(orbit.target).multiplyScalar(FOLLOW_LERP);
+      orbit.target.add(followDelta);
+      camera.position.add(followDelta);
+    }
     orbit?.update();
     renderer.render(scene, camera);
+  }
+
+  function toggleFollow(): void {
+    followMode = !followMode;
+    if (orbit) {
+      // Panning would fight the follow target every frame; hand the target
+      // back to the user only when follow is off.
+      orbit.enablePan = !followMode;
+    }
   }
 
   function disposeScene(): void {
@@ -478,6 +627,8 @@
     orbit = null;
     vehicleGroup = null;
     frameGroup = null;
+    missionGroup = null;
+    missionSignature = '';
     trail = null;
     trailPositions = null;
     resizeObserver = null;
@@ -516,6 +667,15 @@
   oncontextmenu={containSceneContextMenu}
 >
   <canvas bind:this={canvas} aria-label="Indoor 3D local navigation view"></canvas>
+  <button
+    type="button"
+    class="follow-toggle"
+    class:active={followMode}
+    aria-pressed={followMode}
+    onclick={toggleFollow}
+  >
+    {followMode ? 'Following' : 'Follow'}
+  </button>
   <div class="indoor-readout">
     <div>
       <span>Local X</span>
@@ -564,6 +724,49 @@
 
   canvas:active {
     cursor: grabbing;
+  }
+
+  .follow-toggle {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    padding: 6px 12px;
+    border: 1px solid rgba(253, 119, 25, 0.35);
+    border-radius: 8px;
+    background: rgba(5, 8, 8, 0.74);
+    backdrop-filter: blur(5px);
+    color: #edf6f1;
+    font-size: 0.68rem;
+    font-weight: 760;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+  }
+
+  .follow-toggle:hover {
+    border-color: rgba(253, 119, 25, 0.7);
+  }
+
+  .follow-toggle.active {
+    border-color: #fd7719;
+    background: rgba(253, 119, 25, 0.22);
+    color: #ffd9b8;
+  }
+
+  .indoor-scene.light .follow-toggle {
+    border-color: rgba(227, 95, 12, 0.35);
+    background: rgba(255, 255, 255, 0.82);
+    color: #12171b;
+  }
+
+  .indoor-scene.light .follow-toggle:hover {
+    border-color: rgba(227, 95, 12, 0.75);
+  }
+
+  .indoor-scene.light .follow-toggle.active {
+    border-color: #e35f0c;
+    background: rgba(227, 95, 12, 0.16);
+    color: #a04208;
   }
 
   .indoor-readout {

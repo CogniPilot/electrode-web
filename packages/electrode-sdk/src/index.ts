@@ -1,4 +1,3 @@
-export * from './commands';
 export * from './mocap-encode';
 export * from './plotting';
 export * from './replay';

@@ -11,6 +11,7 @@
   // Zenoh-derived manual control (decoded from synapse/v1/topic/manual_control_command).
   export let manual: ManualControlState | null = null;
   export let theme: 'light' | 'dark' = 'dark';
+  export let hardwareAvailable = true;
 
   type Source = 'hardware' | 'zenoh';
 
@@ -18,7 +19,7 @@
   let sourcePinned = false;
   // Default to the hardware path in Ground Station mode (it works locally,
   // without waiting on the Zenoh round trip); the user can pin either.
-  $: if (!sourcePinned && $isGroundStation) source = 'hardware';
+  $: if (!sourcePinned) source = $isGroundStation && hardwareAvailable ? 'hardware' : 'zenoh';
 
   // Hardware path state.
   let socket: WebSocket | null = null;
@@ -36,10 +37,10 @@
   // (Re)connect the raw-joystick feed as the hardware path is used, and whenever
   // the mapped device changes. Axis/invert/button edits need no reconnect — the
   // WS callback reads the latest mapping from the store on every frame.
-  $: syncHardware(source, $isGroundStation, $mappingProfile?.device ?? null);
+  $: syncHardware(source, $isGroundStation, hardwareAvailable, $mappingProfile?.device ?? null);
 
-  function syncHardware(src: Source, gs: boolean, device: string | null): void {
-    if (src !== 'hardware' || !gs) {
+  function syncHardware(src: Source, gs: boolean, available: boolean, device: string | null): void {
+    if (src !== 'hardware' || !gs || !available) {
       disconnectHardware();
       return;
     }
@@ -102,7 +103,7 @@
 <div class="manual-link">
   {#if $isGroundStation}
     <div class="src-toggle" role="group" aria-label="Manual control source">
-      <button type="button" class:active={source === 'hardware'} onclick={() => pick('hardware')}>
+      <button type="button" class:active={source === 'hardware'} disabled={!hardwareAvailable} onclick={() => pick('hardware')}>
         Hardware
       </button>
       <button type="button" class:active={source === 'zenoh'} onclick={() => pick('zenoh')}>
@@ -112,6 +113,8 @@
     <p class="src-note">
       {source === 'hardware'
         ? 'Controller → mapping, computed locally (not via Zenoh)'
+        : !hardwareAvailable
+          ? 'keyboard fallback → manual_control_command over Zenoh'
         : 'synapse/v1/topic/manual_control_command received over Zenoh'}
     </p>
   {/if}
@@ -140,6 +143,10 @@
     font-size: 0.64rem;
     font-weight: 800;
     cursor: pointer;
+  }
+  .src-toggle button:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
   .src-toggle button + button {
     border-left: 1px solid rgba(253, 119, 25, 0.2);

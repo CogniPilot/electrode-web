@@ -1,23 +1,18 @@
 import {
   applyGcsFrame,
   appendEvent,
-  buildCommandIntent,
   createDemoReplay,
   createInitialVehicleState,
   framesThroughCursor,
   normalizeReplayFrames,
   refreshStaleTopics,
-  rejectedCommandResult,
   replayDurationMs,
   createPlotPacketCatalog,
   decodeSynapseLogFrames,
   extractPlotSeriesUpdates,
   plotSeriesKey,
   SynapseLogRecorder,
-  validateCommandPreconditions,
   ZenohWasmTransport,
-  type CommandName,
-  type CommandResult,
   type ConnectionState,
   type GcsFrame,
   type PlotPacketDefinition,
@@ -32,8 +27,8 @@ import zenohWasmUrl from '../zenohWasmUrl';
 type WorkerIn =
   | { type: 'connect'; mode: RuntimeMode; url: string; vehicleId: string }
   | { type: 'disconnect' }
-  | { type: 'command'; command: CommandName; args?: Record<string, unknown> }
   | { type: 'setSubscriptions'; keys: string[] }
+  | { type: 'virtualManual'; enabled: boolean; input?: VirtualManualInput }
   | { type: 'startRecording' }
   | { type: 'stopRecording' }
   | { type: 'exportRecording' }
@@ -43,9 +38,27 @@ type WorkerIn =
   | { type: 'seekReplay'; cursorMs: number }
   | { type: 'setReplaySpeed'; speed: number };
 
+type VirtualManualInput = {
+  roll: number;
+  pitch: number;
+  yaw: number;
+  throttle: number;
+  flightMode: number;
+  armSwitch: boolean;
+  killSwitch: boolean;
+  active: boolean;
+};
+
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 const MAX_PLOT_SAMPLES = 240;
 const PLOT_POST_INTERVAL_MS = 250;
+const VIRTUAL_MANUAL_TOPIC = 'synapse/v1/topic/manual_control_command';
+const VIRTUAL_MANUAL_PERIOD_MS = 20;
+const MANUAL_AXIS_MASK = 0x03ff;
+const MANUAL_FLAG_ARM = 1;
+const MANUAL_FLAG_KILL = 2;
+const MANUAL_FLAG_ACTIVE = 4;
+const MANUAL_FLAG_VALID = 8;
 
 let vehicleId = 'electrode-01';
 let state: VehicleState = createInitialVehicleState(vehicleId);
@@ -53,7 +66,6 @@ let mode: RuntimeMode = 'zenoh';
 let zenoh: ZenohWasmTransport | null = null;
 let staleTimer: ReturnType<typeof setInterval> | null = null;
 let replayTimer: ReturnType<typeof setInterval> | null = null;
-let commandSequence = 1;
 let recording = false;
 let recorder: SynapseLogRecorder | null = null;
 let replayFrames: GcsFrame[] = [];
@@ -63,7 +75,18 @@ let replayPlaying = false;
 let plotCatalog: PlotPacketDefinition[] = createPlotPacketCatalog(vehicleId);
 let plotSeries = new Map<string, PlotSeries>();
 let lastPlotPostMs = 0;
-const pendingCommandArgs = new Map<string, Record<string, unknown>>();
+let virtualManualEnabled = false;
+let virtualManualTimer: ReturnType<typeof setInterval> | null = null;
+let virtualManualInput: VirtualManualInput = {
+  roll: 0,
+  pitch: 0,
+  yaw: 0,
+  throttle: 0.5,
+  flightMode: 1,
+  armSwitch: true,
+  killSwitch: false,
+  active: true
+};
 
 postState();
 postReplay();
@@ -77,10 +100,10 @@ ctx.addEventListener('message', (event: MessageEvent<WorkerIn>) => {
     connect(message.mode, message.url);
   } else if (message.type === 'disconnect') {
     disconnect();
-  } else if (message.type === 'command') {
-    sendCommand(message.command, message.args ?? {});
   } else if (message.type === 'setSubscriptions') {
     zenoh?.setSubscriptions(message.keys);
+  } else if (message.type === 'virtualManual') {
+    setVirtualManual(message.enabled, message.input);
   } else if (message.type === 'startRecording') {
     recording = true;
     recorder = new SynapseLogRecorder({
@@ -153,6 +176,7 @@ function connect(nextMode: RuntimeMode, url: string): void {
 }
 
 function disconnect(post = true): void {
+  stopVirtualManualTimer();
   zenoh?.disconnect().catch(() => {});
   zenoh = null;
   clearTimer(staleTimer);
@@ -169,59 +193,66 @@ function disconnect(post = true): void {
   }
 }
 
-function handleTransportMessage(message: TransportMessage): void {
-  if (message.kind === 'telemetry' || message.kind === 'event') {
-    applyFrames([message]);
-    return;
+function setVirtualManual(enabled: boolean, input?: VirtualManualInput): void {
+  virtualManualEnabled = enabled;
+  if (input) {
+    virtualManualInput = { ...input };
   }
-
-  if (message.kind === 'commandAck') {
-    applyCommandResult(message as CommandResult);
+  if (enabled) {
+    startVirtualManualTimer();
+    publishVirtualManual();
+  } else {
+    stopVirtualManualTimer();
   }
 }
 
-function sendCommand(command: CommandName, args: Record<string, unknown>): void {
-  const sequence = commandSequence++;
-  const intent = buildCommandIntent({ vehicleId, command, args, sequence });
-  const failures = validateCommandPreconditions(state, command);
-  pendingCommandArgs.set(intent.commandId, args);
+function startVirtualManualTimer(): void {
+  if (virtualManualTimer) return;
+  virtualManualTimer = setInterval(publishVirtualManual, VIRTUAL_MANUAL_PERIOD_MS);
+}
 
-  if (failures.length > 0) {
-    applyCommandResult(rejectedCommandResult(intent, failures.join(', ')));
-    return;
+function stopVirtualManualTimer(): void {
+  clearTimer(virtualManualTimer);
+  virtualManualTimer = null;
+}
+
+function publishVirtualManual(): void {
+  if (!virtualManualEnabled || !zenoh) return;
+  const payload = encodeManualControl(virtualManualInput);
+  zenoh.publishBytes(VIRTUAL_MANUAL_TOPIC, payload).catch(() => {});
+}
+
+function encodeManualControl(input: VirtualManualInput): Uint8Array {
+  const payload = new Uint8Array(40);
+  const view = new DataView(payload.buffer);
+  view.setBigUint64(0, BigInt(Date.now()) * 1000n, true);
+  view.setUint32(8, 0, true);
+  view.setUint16(12, MANUAL_AXIS_MASK, true);
+  view.setInt16(14, toMilli(input.pitch), true);
+  view.setInt16(16, toMilli(input.roll), true);
+  view.setInt16(18, toMilli(input.throttle), true);
+  view.setInt16(20, toMilli(input.yaw), true);
+  for (let offset = 22; offset <= 32; offset += 2) {
+    view.setInt16(offset, 0, true);
   }
+  view.setUint8(34, input.flightMode);
+  let flags = MANUAL_FLAG_VALID;
+  if (input.armSwitch) flags |= MANUAL_FLAG_ARM;
+  if (input.killSwitch) flags |= MANUAL_FLAG_KILL;
+  if (input.active) flags |= MANUAL_FLAG_ACTIVE;
+  view.setUint8(35, flags);
+  return payload;
+}
 
-  if (mode === 'zenoh' && zenoh) {
-    zenoh
-      .sendCommand(intent)
-      .then(() => {
-        applyCommandResult({
-          kind: 'commandAck',
-          commandId: intent.commandId,
-          command,
-          status: 'published',
-          reason: `published to ${intent.topic}`,
-          sequence,
-          receivedAtMs: Date.now()
-        });
-      })
-      .catch((error) => {
-        applyCommandResult(rejectedCommandResult(intent, error instanceof Error ? error.message : String(error)));
-      });
-    return;
+function toMilli(value: number): number {
+  const bounded = Math.min(1, Math.max(-1, Number.isFinite(value) ? value : 0));
+  return Math.round(bounded * 1000);
+}
+
+function handleTransportMessage(message: TransportMessage): void {
+  if (message.kind === 'telemetry' || message.kind === 'event') {
+    applyFrames([message]);
   }
-
-  setTimeout(() => {
-    applyCommandResult({
-      kind: 'commandAck',
-      commandId: intent.commandId,
-      command,
-      status: 'acked',
-      reason: 'simulated acknowledgement',
-      sequence,
-      receivedAtMs: Date.now()
-    });
-  }, 220);
 }
 
 function applyFrames(frames: GcsFrame[]): void {
@@ -238,34 +269,6 @@ function applyFrames(frames: GcsFrame[]): void {
   if (recording) {
     ctx.postMessage({ type: 'recording', recording, count: recorder?.frameCount ?? 0 });
   }
-}
-
-function applyCommandResult(result: CommandResult): void {
-  if (result.status === 'acked' || result.status === 'published') {
-    const args = pendingCommandArgs.get(result.commandId) ?? {};
-    if (result.command === 'arm') {
-      state.mode = { ...state.mode, armed: true };
-    } else if (result.command === 'disarm') {
-      state.mode = { ...state.mode, armed: false };
-    } else if (result.command === 'setMode') {
-      state.mode = { ...state.mode, name: typeof args.mode === 'string' ? args.mode : state.mode.name };
-    } else if (result.command === 'land') {
-      state.mode = { ...state.mode, name: 'land' };
-    } else if (result.command === 'return') {
-      state.mode = { ...state.mode, name: 'return' };
-    }
-  }
-
-  pendingCommandArgs.delete(result.commandId);
-  state.commandHistory = [result, ...state.commandHistory].slice(0, 48);
-  state = appendEvent(state, {
-    severity: result.status === 'acked' ? 'info' : 'warning',
-    code: `cmd_${result.status}`,
-    message: `${result.command}: ${result.reason}`,
-    timestampMs: result.receivedAtMs
-  });
-  ctx.postMessage({ type: 'commandResult', result });
-  postState();
 }
 
 function loadReplay(bytes?: Uint8Array): void {

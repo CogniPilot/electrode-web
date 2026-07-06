@@ -5,46 +5,43 @@
   import DeflectionView from '$lib/components/DeflectionView.svelte';
   import ManualLinkView from '$lib/components/ManualLinkView.svelte';
   import GroundStationPanel from '$lib/components/GroundStationPanel.svelte';
+  import AutopilotConfigPanel from '$lib/components/AutopilotConfigPanel.svelte';
   import RcMappingPanel from '$lib/components/RcMappingPanel.svelte';
   import PpmHardwarePanel from '$lib/components/PpmHardwarePanel.svelte';
-  import AutopilotProfilePanel from '$lib/components/AutopilotProfilePanel.svelte';
   import SimulationPanel from '$lib/components/SimulationPanel.svelte';
   import { detectGroundStation, isGroundStation } from '$lib/capabilities';
   import {
-    fetchAutopilotRunStatus,
-    fetchBridgeStatus,
-    setAutopilotRunning,
-    setBridgeRunning,
-    type AutopilotRunStatus
-  } from '$lib/gcs';
+    fetchDevices,
+      fetchAutopilotRunStatus,
+      fetchBridgeStatus,
+      setAutopilotRunning,
+      setBridgeRunning,
+      type AutopilotRunStatus
+    } from '$lib/gcs';
   import {
     Activity,
     AlertTriangle,
-    BatteryCharging,
     CirclePause,
     CirclePlay,
-    Command,
     Download,
     Gauge,
     MapPinned,
     Moon,
-    Plug,
     Power,
     Radio,
     RotateCcw,
+    Settings,
     Square,
     Sun,
     Upload
   } from '@lucide/svelte';
   import {
-    COMMAND_DEFINITIONS,
     TOPIC_DEFINITIONS,
     createPlotPacketCatalog,
     createInitialVehicleState,
     plotPacketKey,
-    type CommandName,
-    type CommandResult,
     type ConnectionState,
+    type MissionWaypoint,
     type PlotFieldDefinition,
     type PlotPacketDefinition,
     type PlotSeries,
@@ -60,7 +57,6 @@
   type WorkerOut =
     | { type: 'state'; state: VehicleState }
     | { type: 'connection'; connection: ConnectionState }
-    | { type: 'commandResult'; result: CommandResult }
     | { type: 'recording'; recording: boolean; count: number }
     | { type: 'recordingExport'; export: SynapseLogExport }
     | { type: 'plotState'; plotState: PlotState }
@@ -69,7 +65,7 @@
 
   type MapViewMode = '2d' | '3d';
   type VehicleKind = 'quadrotor' | 'fixedwing';
-  type GroundStationPage = 'dashboard' | 'firmware' | 'sim';
+  type GroundStationPage = 'dashboard' | 'sim';
   type PlotTraceSelection = {
     packetKey: string;
     fieldPath: string;
@@ -86,16 +82,12 @@
   };
 
   const vehicleId = 'electrode-01';
-  const runtimeModes: RuntimeMode[] = ['zenoh', 'replay'];
   const mapViewModes: MapViewMode[] = ['2d', '3d'];
   const groundStationPages: Array<{ key: GroundStationPage; label: string }> = [
     { key: 'dashboard', label: 'Dashboard' },
-    { key: 'firmware', label: 'Firmware' },
     { key: 'sim', label: 'SIM' }
   ];
   type ThemeName = 'light' | 'dark';
-  const commandEntries = Object.entries(COMMAND_DEFINITIONS) as Array<[CommandName, (typeof COMMAND_DEFINITIONS)[CommandName]]>;
-  const flightModes = ['hold', 'manual', 'mission', 'return', 'land'];
   const manualLinks = [
     ['Manual', 'synapse/v1/topic/manual_control_command'],
     ['Selected PWM', 'synapse/motor_output'],
@@ -182,9 +174,7 @@
   let mapViewMode: MapViewMode = initialMapViewMode();
   let selectedVehicleType: VehicleKind = 'fixedwing';
   let zenohEndpoint = 'ws/127.0.0.1:7447';
-  let selectedMode = 'hold';
   let vehicle = createInitialVehicleState(vehicleId);
-  let connection: ConnectionState = { mode: 'zenoh', status: 'disconnected', url: '', message: 'offline' };
   let replay: ReplayState = { loaded: false, playing: false, cursorMs: 0, durationMs: 0, speed: 1, frameCount: 0 };
   let recording = false;
   let recordingCount = 0;
@@ -203,8 +193,18 @@
   $: manualControl = vehicle.manualControl;
   $: radioControl = vehicle.radioControl;
   $: motors = vehicle.motors;
-  $: battery = vehicle.battery;
   $: link = vehicle.link;
+  $: mission = vehicle.mission;
+  // 2D map projection of the mission plan, using the same metres→percent
+  // mapping as the vehicle marker.
+  $: missionWaypoints = (mission?.waypoints ?? [])
+    .filter((wp): wp is MissionWaypoint => wp !== null)
+    .map((wp) => ({
+      ...wp,
+      mapX: clamp(50 + wp.east * 0.72, 8, 92),
+      mapY: clamp(50 - wp.north * 0.72, 8, 92)
+    }));
+  $: missionPathPoints = missionWaypoints.map((wp) => `${wp.mapX},${wp.mapY}`).join(' ');
   $: mapSubtitle =
     mapViewMode === '2d'
       ? pose
@@ -287,7 +287,28 @@
   let manualBridgeRunning = false;
   let manualBridgeBusy = false;
   let manualBridgeStatus = 'checking...';
+  let joystickPresent = false;
+  let keyboardRevision = 0;
+  let lastVirtualManualSignature = '';
+  let keyboardRoll = 0;
+  let keyboardPitch = 0;
+  let keyboardYaw = 0;
+  let keyboardThrottle = 0.55;
+  let keyboardAuto = true;
+  let keyboardStabilize = true;
+  const pressedKeys = new Set<string>();
+  const KEYBOARD_STICK_STEP = 0.12;
+  const KEYBOARD_THROTTLE_STEP = 0.05;
   $: autopilotRunning = autopilotRun?.running ?? false;
+  $: keyboardRemoteActive = $isGroundStation && !manualBridgeRunning && !joystickPresent;
+  $: keyboardRemoteStatus = keyboardRemoteActive
+    ? 'keyboard remote active'
+    : joystickPresent
+      ? 'hardware remote detected'
+      : manualBridgeRunning
+        ? 'hardware publisher active'
+        : 'keyboard remote idle';
+  $: syncKeyboardRemote(keyboardRemoteActive, keyboardRevision);
 
   async function refreshAutopilotRun(): Promise<void> {
     if (!$isGroundStation) return;
@@ -314,8 +335,9 @@
   async function refreshManualBridge(): Promise<void> {
     if (!$isGroundStation) return;
     try {
-      const status = await fetchBridgeStatus();
+      const [status, devices] = await Promise.all([fetchBridgeStatus(), fetchDevices()]);
       manualBridgeRunning = status.running;
+      joystickPresent = devices.joysticks.length > 0;
       manualBridgeStatus = status.running
         ? `manual publisher active · ${status.bin}`
         : status.ppmRunning
@@ -342,6 +364,62 @@
     }
   }
 
+  function syncKeyboardRemote(enabled: boolean, _revision: number): void {
+    if (!worker) return;
+    const input = keyboardManualInput();
+    const signature = `${enabled}:${input.roll}:${input.pitch}:${input.yaw}:${input.throttle}:${input.flightMode}:${input.armSwitch}:${input.killSwitch}:${input.active}`;
+    if (signature === lastVirtualManualSignature) return;
+    lastVirtualManualSignature = signature;
+    worker.postMessage({ type: 'virtualManual', enabled, input });
+  }
+
+  function keyboardManualInput() {
+    return {
+      roll: keyboardRoll,
+      pitch: keyboardPitch,
+      yaw: keyboardYaw,
+      throttle: keyboardThrottle,
+      flightMode: keyboardAuto ? 1 : 0,
+      armSwitch: true,
+      killSwitch: false,
+      active: keyboardStabilize
+    };
+  }
+
+  function keyboardTargetIsEditable(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    const tag = target.tagName.toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
+  }
+
+  function handleKeyboardRemote(event: KeyboardEvent, down: boolean): void {
+    if (!keyboardRemoteActive || keyboardTargetIsEditable(event.target)) return;
+    const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyM', 'KeyT'];
+    if (!keys.includes(event.code)) return;
+    event.preventDefault();
+    const hadKey = pressedKeys.has(event.code);
+    if (down) {
+      pressedKeys.add(event.code);
+      if (!hadKey) {
+        if (event.code === 'ArrowLeft') keyboardRoll = clamp(keyboardRoll - KEYBOARD_STICK_STEP, -1, 1);
+        if (event.code === 'ArrowRight') keyboardRoll = clamp(keyboardRoll + KEYBOARD_STICK_STEP, -1, 1);
+        if (event.code === 'ArrowDown') keyboardPitch = clamp(keyboardPitch - KEYBOARD_STICK_STEP, -1, 1);
+        if (event.code === 'ArrowUp') keyboardPitch = clamp(keyboardPitch + KEYBOARD_STICK_STEP, -1, 1);
+        if (event.code === 'KeyA') keyboardYaw = clamp(keyboardYaw - KEYBOARD_STICK_STEP, -1, 1);
+        if (event.code === 'KeyD') keyboardYaw = clamp(keyboardYaw + KEYBOARD_STICK_STEP, -1, 1);
+        if (event.code === 'KeyS') keyboardThrottle = clamp(keyboardThrottle - KEYBOARD_THROTTLE_STEP, 0, 1);
+        if (event.code === 'KeyW') keyboardThrottle = clamp(keyboardThrottle + KEYBOARD_THROTTLE_STEP, 0, 1);
+        if (event.code === 'KeyM') keyboardAuto = !keyboardAuto;
+        if (event.code === 'KeyT') keyboardStabilize = !keyboardStabilize;
+      }
+    } else {
+      pressedKeys.delete(event.code);
+    }
+    if (hadKey !== down || (down && !hadKey)) {
+      keyboardRevision += 1;
+    }
+  }
+
   onMount(() => {
     const stored = document.documentElement.dataset.theme;
     theme = stored === 'light' ? 'light' : 'dark';
@@ -354,6 +432,10 @@
     });
     const autopilotTimer = setInterval(() => void refreshAutopilotRun(), 2000);
     const manualBridgeTimer = setInterval(() => void refreshManualBridge(), 2000);
+    const keydown = (event: KeyboardEvent) => handleKeyboardRemote(event, true);
+    const keyup = (event: KeyboardEvent) => handleKeyboardRemote(event, false);
+    window.addEventListener('keydown', keydown);
+    window.addEventListener('keyup', keyup);
 
     worker = new Worker(new URL('$lib/workers/comms.worker.ts', import.meta.url), { type: 'module' });
     worker.addEventListener('message', (event: MessageEvent<WorkerOut>) => {
@@ -361,8 +443,6 @@
 
       if (message.type === 'state') {
         vehicle = message.state;
-      } else if (message.type === 'connection') {
-        connection = message.connection;
       } else if (message.type === 'recording') {
         recording = message.recording;
         recordingCount = message.count;
@@ -377,11 +457,15 @@
       }
     });
 
+    syncKeyboardRemote(keyboardRemoteActive, keyboardRevision);
     connect();
 
     return () => {
       clearInterval(autopilotTimer);
       clearInterval(manualBridgeTimer);
+      window.removeEventListener('keydown', keydown);
+      window.removeEventListener('keyup', keyup);
+      worker?.postMessage({ type: 'virtualManual', enabled: false });
       worker?.postMessage({ type: 'disconnect' });
       worker?.terminate();
       worker = null;
@@ -395,6 +479,13 @@
       localStorage.setItem('electrode-theme', theme);
     } catch {
       // ignore storage failures (private mode, etc.)
+    }
+  }
+
+  function toggleThemeFromMenu(event: MouseEvent): void {
+    toggleTheme();
+    if (event.currentTarget instanceof HTMLElement) {
+      event.currentTarget.closest('details')?.removeAttribute('open');
     }
   }
 
@@ -434,20 +525,6 @@
       url.searchParams.set('page', page);
     }
     window.history.replaceState({}, '', url);
-  }
-
-  function disconnect(): void {
-    worker?.postMessage({ type: 'disconnect' });
-  }
-
-  function sendCommand(command: CommandName): void {
-    const definition = COMMAND_DEFINITIONS[command];
-    if (definition.requiresConfirmation && !window.confirm(`${definition.description} for ${vehicle.vehicleId}?`)) {
-      return;
-    }
-
-    const args = command === 'setMode' ? { mode: selectedMode } : {};
-    worker?.postMessage({ type: 'command', command, args });
   }
 
   function toggleTopicSubscription(key: string): void {
@@ -490,7 +567,6 @@
         return;
       }
       const bytes = new Uint8Array(reader.result);
-      runtimeMode = 'replay';
       worker?.postMessage({ type: 'loadReplay', bytes }, [bytes.buffer]);
     });
     reader.readAsArrayBuffer(file);
@@ -646,6 +722,7 @@
     const minutes = Math.floor(seconds / 60);
     return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
   }
+
 </script>
 
 <svelte:head>
@@ -668,36 +745,23 @@
       </div>
     </div>
 
-    <div class="mode-control" aria-label="Runtime mode">
-      {#each runtimeModes as option}
-        <label class:active={runtimeMode === option}>
-          <input type="radio" name="mode" value={option} bind:group={runtimeMode} />
-          {option}
-        </label>
-      {/each}
-    </div>
-
     <div class="header-actions">
-      <button
-        type="button"
-        class="icon-button quiet"
-        title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-        aria-label="Toggle color theme"
-        onclick={toggleTheme}
-      >
-        {#if theme === 'dark'}
-          <Sun size={18} />
-        {:else}
-          <Moon size={18} />
-        {/if}
-      </button>
-      <button type="button" class="icon-button primary" title="Connect" onclick={connect}>
-        <Plug size={18} />
-        <span>Connect</span>
-      </button>
-      <button type="button" class="icon-button quiet" title="Disconnect" onclick={disconnect}>
-        <Power size={18} />
-      </button>
+      <details class="settings-menu">
+        <summary class="icon-button quiet" aria-label="Settings" title="Settings">
+          <Settings size={18} />
+        </summary>
+        <div class="settings-popover">
+          <button type="button" class="settings-row" onclick={toggleThemeFromMenu}>
+            {#if theme === 'dark'}
+              <Sun size={18} />
+              <span>Light mode</span>
+            {:else}
+              <Moon size={18} />
+              <span>Dark mode</span>
+            {/if}
+          </button>
+        </div>
+      </details>
     </div>
   </header>
 
@@ -720,44 +784,13 @@
       <GroundStationPanel {theme} />
       <details class="config-panel">
         <summary>Dashboard config</summary>
+        <AutopilotConfigPanel {theme} />
         <RcMappingPanel {theme} />
         <PpmHardwarePanel {theme} channels={radioControl} />
       </details>
     {/if}
 
     <div class="dashboard">
-    <section class="panel connection-panel">
-      <div class="panel-heading">
-        <div>
-          <h2>Connection</h2>
-          <p>{connection.message}</p>
-        </div>
-        <Radio size={20} />
-      </div>
-
-      {#if runtimeMode === 'zenoh'}
-        <label class="field">
-          <span>Zenoh endpoint or JSON5 config</span>
-          <input bind:value={zenohEndpoint} spellcheck="false" />
-        </label>
-      {:else}
-        <div class="transport-readout">
-          <span>Transport</span>
-          <strong>replay://memory</strong>
-        </div>
-      {/if}
-
-      <div class="button-row">
-        <button type="button" class="icon-button primary" onclick={connect}>
-          <Plug size={18} />
-          <span>Open</span>
-        </button>
-        <button type="button" class="icon-button quiet" onclick={disconnect}>
-          <Square size={18} />
-          <span>Close</span>
-        </button>
-      </div>
-    </section>
 
     {#if $isGroundStation}
       <section class="panel autopilot-panel">
@@ -920,6 +953,14 @@
           <span>Quality</span>
           <strong>{format(vehicle.localization.quality * 100, 0)}%</strong>
         </div>
+        <div class="metric">
+          <span>Waypoint</span>
+          <strong>{mission && mission.total > 0 ? `${mission.currentSeq + 1}/${mission.total}` : '—'}</strong>
+        </div>
+        <div class="metric">
+          <span>Mission</span>
+          <strong>{mission?.state ?? '—'}</strong>
+        </div>
       </div>
     </section>
 
@@ -950,6 +991,21 @@
       {#if mapViewMode === '2d'}
         <div class="map-canvas outdoor-map">
           <div class="map-home">HOME</div>
+          {#if missionWaypoints.length > 1}
+            <svg class="map-mission-path" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <polyline points={missionPathPoints} />
+            </svg>
+          {/if}
+          {#each missionWaypoints as waypoint (waypoint.seq)}
+            <div
+              class="map-waypoint"
+              class:active={mission !== null && waypoint.seq === mission.currentSeq}
+              style={`left: ${waypoint.mapX}%; top: ${waypoint.mapY}%;`}
+              title={`Waypoint ${waypoint.seq + 1} · E ${waypoint.east.toFixed(1)} m, N ${waypoint.north.toFixed(1)} m, alt ${waypoint.up.toFixed(1)} m`}
+            >
+              {waypoint.seq + 1}
+            </div>
+          {/each}
           <div
             class="vehicle-marker"
             style={`left: ${mapX}%; top: ${mapY}%; transform: translate(-50%, -50%) rotate(${90 - yawDeg}deg);`}
@@ -984,6 +1040,7 @@
           {attitude}
           {controls}
           {motors}
+          {mission}
           localizationQuality={vehicle.localization.quality}
           {theme}
           bind:vehicleType={selectedVehicleType}
@@ -1002,44 +1059,11 @@
       <DeflectionView {attitude} controls={deflectionControls} {motors} {theme} bind:vehicleType={selectedVehicleType} />
     </section>
 
-    <section class="panel command-panel">
-      <div class="panel-heading">
-        <div>
-          <h2>Commands</h2>
-          <p>{vehicle.commandHistory[0]?.status ?? 'ready'}</p>
-        </div>
-        <Command size={20} />
-      </div>
-
-      <label class="field">
-        <span>Mode</span>
-        <select bind:value={selectedMode}>
-          {#each flightModes as modeName}
-            <option value={modeName}>{modeName}</option>
-          {/each}
-        </select>
-      </label>
-
-      <div class="command-grid">
-        {#each commandEntries as [name, definition]}
-          <button
-            type="button"
-            class:danger={name === 'land' || name === 'disarm'}
-            class:primary={name === 'arm'}
-            class="command-button"
-            onclick={() => sendCommand(name)}
-          >
-            <span>{definition.label}</span>
-          </button>
-        {/each}
-      </div>
-    </section>
-
     <section class="panel manual-panel">
       <div class="panel-heading">
         <div>
           <h2>Manual Link</h2>
-          <p>{manualBridgeStatus}</p>
+          <p>{manualBridgeStatus} · {keyboardRemoteStatus}</p>
         </div>
         <Radio size={20} />
       </div>
@@ -1066,7 +1090,18 @@
         </div>
       {/if}
 
-      <ManualLinkView manual={manualControl} {theme} />
+      <ManualLinkView manual={manualControl} {theme} hardwareAvailable={joystickPresent} />
+
+      {#if keyboardRemoteActive}
+        <div class="keyboard-map" aria-label="Keyboard fallback controls">
+          <div><span>Roll</span><strong>Left / Right</strong></div>
+          <div><span>Pitch</span><strong>Down / Up</strong></div>
+          <div><span>Yaw</span><strong>A / D</strong></div>
+          <div><span>Throttle</span><strong>S / W</strong></div>
+          <div><span>Mode</span><strong>M · {keyboardAuto ? 'auto' : 'manual'}</strong></div>
+          <div><span>Stabilize</span><strong>T · {keyboardStabilize ? 'on' : 'off'}</strong></div>
+        </div>
+      {/if}
 
       {#if $isGroundStation}
         <div class="manual-service">
@@ -1174,30 +1209,6 @@
           <text class="hud-text sm dim" x="34" y="472" text-anchor="start">CEREBRI · FLIGHT CONTROL</text>
           <text class="hud-text sm" x="526" y="472" text-anchor="end">{vehicle.mode.armed ? 'ARM' : 'STBY'} · {vehicle.mode.name} · Q {hudQualityPct.toFixed(0)}</text>
         </svg>
-      </div>
-    </section>
-
-    <section class="panel power-panel">
-      <div class="panel-heading">
-        <div>
-          <h2>Power Link</h2>
-          <p>{format(link?.latencyMs, 0)} ms · {format(link?.rssiDbm, 0)} dBm</p>
-        </div>
-        <BatteryCharging size={20} />
-      </div>
-
-      <div class="battery-bar" aria-label="Battery remaining">
-        <span style={`width: ${clamp(battery?.remainingPct ?? 0, 0, 100)}%;`}></span>
-      </div>
-      <div class="metrics compact">
-        <div class="metric">
-          <span>Voltage</span>
-          <strong>{format(battery?.voltageV, 2)} V</strong>
-        </div>
-        <div class="metric">
-          <span>Current</span>
-          <strong>{format(battery?.currentA, 1)} A</strong>
-        </div>
       </div>
     </section>
 
@@ -1432,8 +1443,6 @@
       </div>
     </section>
   </div>
-  {:else if activePage === 'firmware'}
-    <AutopilotProfilePanel {theme} />
   {:else}
     <SimulationPanel {theme} {zenohEndpoint} />
   {/if}
@@ -1480,7 +1489,7 @@
 
   .ground-nav {
     display: grid;
-    grid-template-columns: repeat(3, minmax(110px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0;
     overflow: hidden;
     margin-top: 10px;
@@ -1590,46 +1599,16 @@
     font-size: 0.86rem;
   }
 
-  .mode-control {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(78px, 1fr));
-    min-height: 38px;
-    overflow: hidden;
-    border: 1px solid #cfd6dd;
-    border-radius: 8px;
-  }
-
-  .mode-control label {
-    display: grid;
-    place-items: center;
-    padding: 0 12px;
-    color: #5c6873;
-    cursor: pointer;
-    font-size: 0.9rem;
-    text-transform: capitalize;
-  }
-
-  .mode-control label + label {
-    border-left: 1px solid #cfd6dd;
-  }
-
-  .mode-control input {
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  .mode-control label.active {
-    background: #152129;
-    color: #ffffff;
-  }
-
   .header-actions,
   .button-row {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+  }
+
+  .header-actions {
+    justify-content: flex-end;
   }
 
   button,
@@ -1657,23 +1636,65 @@
     white-space: nowrap;
   }
 
-  .icon-button.primary,
-  .command-button.primary {
+  .icon-button.primary {
     background: #15836f;
     color: #ffffff;
   }
 
   .icon-button.quiet,
-  .file-button,
-  .command-button {
+  .file-button {
     background: #eef2f4;
     color: #263039;
   }
 
-  .icon-button.danger,
-  .command-button.danger {
+  .icon-button.danger {
     background: #b83e4b;
     color: #ffffff;
+  }
+
+  .settings-menu {
+    position: relative;
+  }
+
+  .settings-menu summary {
+    list-style: none;
+  }
+
+  .settings-menu summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .settings-popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 20;
+    min-width: 172px;
+    padding: 6px;
+    border: 1px solid #d9dee3;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 18px 38px rgba(17, 23, 27, 0.18);
+  }
+
+  .settings-row {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    min-height: 36px;
+    padding: 0 10px;
+    border-radius: 6px;
+    background: transparent;
+    color: #263039;
+    font-size: 0.78rem;
+    font-weight: 760;
+    text-align: left;
+  }
+
+  .settings-row:hover {
+    background: #eef2f4;
   }
 
   .ok {
@@ -1783,10 +1804,6 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
-  }
-
-  .metrics.compact {
-    margin-top: 10px;
   }
 
 
@@ -1943,18 +1960,6 @@
     bottom: 16px;
   }
 
-  .command-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    margin-top: 10px;
-  }
-
-  .command-button {
-    min-height: 42px;
-    padding: 0 10px;
-  }
-
   .attitude-display {
     position: relative;
     overflow: hidden;
@@ -1964,20 +1969,6 @@
     border-radius: 8px;
     border: 1px solid #d3dae0;
     background: #101518;
-  }
-
-  .battery-bar {
-    overflow: hidden;
-    height: 18px;
-    border-radius: 8px;
-    background: #e7ecef;
-  }
-
-  .battery-bar span {
-    display: block;
-    height: 100%;
-    border-radius: inherit;
-    background: linear-gradient(90deg, #15836f, #e0a127);
   }
 
   .range {
@@ -2089,16 +2080,14 @@
       grid-template-columns: 1fr;
     }
 
-    .mode-control,
     .dashboard {
       grid-template-columns: 1fr;
     }
 
     .header-actions {
-      justify-content: stretch;
+      justify-content: flex-end;
     }
 
-    .header-actions .icon-button,
     .button-row .icon-button,
     .file-button {
       flex: 1;
@@ -2208,33 +2197,8 @@
     font-size: 0.78rem;
   }
 
-  .mode-control {
-    grid-template-columns: repeat(2, minmax(82px, 1fr));
-    min-height: 42px;
-    border: 1px solid #2d3a41;
-    border-radius: 3px;
-    background: #0b1012;
-  }
-
-  .mode-control label {
-    color: #8fa09a;
-    font-size: 0.82rem;
-    font-weight: 680;
-    text-transform: uppercase;
-  }
-
-  .mode-control label + label {
-    border-left: 1px solid #2d3a41;
-  }
-
-  .mode-control label.active {
-    background: #dfe9e4;
-    color: #0a1111;
-  }
-
   .icon-button,
-  .file-button,
-  .command-button {
+  .file-button {
     min-height: 42px;
     border: 1px solid transparent;
     border-radius: 3px;
@@ -2248,28 +2212,38 @@
   }
 
   .icon-button:hover,
-  .file-button:hover,
-  .command-button:hover {
+  .file-button:hover {
     transform: translateY(-1px);
   }
 
-  .icon-button.primary,
-  .command-button.primary {
+  .icon-button.primary {
     border-color: rgba(253, 119, 25, 0.5);
     background: #fd7719;
     color: #1a0d02;
   }
 
   .icon-button.quiet,
-  .file-button,
-  .command-button {
+  .file-button {
     border-color: #2b383f;
     background: #172023;
     color: #d9e4df;
   }
 
-  .icon-button.danger,
-  .command-button.danger {
+  .settings-popover {
+    border-color: #2b383f;
+    background: #111719;
+    box-shadow: 0 18px 38px rgba(0, 0, 0, 0.28);
+  }
+
+  .settings-row {
+    color: #d9e4df;
+  }
+
+  .settings-row:hover {
+    background: #172023;
+  }
+
+  .icon-button.danger {
     border-color: rgba(255, 93, 115, 0.34);
     background: #c94158;
     color: #fff5f6;
@@ -2290,16 +2264,12 @@
   .dashboard {
     grid-template-columns: minmax(280px, 0.66fr) minmax(560px, 1.55fr) minmax(390px, 0.95fr);
     grid-template-areas:
-      "connection vehicle map"
-      "command attitude map"
+      "replay vehicle map"
+      "replay attitude map"
       "replay plot events"
-      "recording power topics";
+      "recording plot topics";
     gap: 10px;
     margin-top: 10px;
-  }
-
-  .connection-panel {
-    grid-area: connection;
   }
 
   .vehicle-panel {
@@ -2310,16 +2280,8 @@
     grid-area: map;
   }
 
-  .command-panel {
-    grid-area: command;
-  }
-
   .attitude-panel {
     grid-area: attitude;
-  }
-
-  .power-panel {
-    grid-area: power;
   }
 
   .replay-panel {
@@ -2403,29 +2365,6 @@
     min-width: 0;
   }
 
-  .transport-readout {
-    display: grid;
-    gap: 8px;
-    min-height: 70px;
-    padding: 12px;
-    border: 1px solid #27343a;
-    border-radius: 8px;
-    background: #0c1214;
-  }
-
-  .transport-readout span {
-    color: #91a39c;
-    font-size: 0.74rem;
-    font-weight: 760;
-    text-transform: uppercase;
-  }
-
-  .transport-readout strong {
-    color: #dfe9e4;
-    overflow-wrap: anywhere;
-    font-size: 0.95rem;
-  }
-
   .manual-service {
     display: grid;
     gap: 8px;
@@ -2434,6 +2373,37 @@
 
   .manual-actions {
     margin-bottom: 10px;
+  }
+
+  .keyboard-map {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .keyboard-map > div {
+    display: grid;
+    gap: 4px;
+    min-height: 48px;
+    padding: 8px 10px;
+    border: 1px solid rgba(253, 119, 25, 0.24);
+    border-radius: 8px;
+    background: rgba(253, 119, 25, 0.08);
+  }
+
+  .keyboard-map span {
+    color: #91a39c;
+    font-size: 0.58rem;
+    font-weight: 820;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .keyboard-map strong {
+    color: #ffd9b8;
+    font-size: 0.76rem;
+    font-weight: 780;
   }
 
   .manual-service > div {
@@ -2613,12 +2583,43 @@
     font-size: 0.72rem;
   }
 
-  .command-grid {
-    gap: 8px;
+  .map-mission-path {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
   }
 
-  .command-button {
-    min-height: 48px;
+  .map-mission-path polyline {
+    fill: none;
+    stroke: rgba(255, 195, 90, 0.6);
+    stroke-width: 1.5px;
+    stroke-dasharray: 4 3;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .map-waypoint {
+    position: absolute;
+    display: grid;
+    width: 22px;
+    height: 22px;
+    place-items: center;
+    transform: translate(-50%, -50%);
+    border: 1.5px solid #d3ddd7;
+    border-radius: 50%;
+    background: rgba(9, 14, 15, 0.82);
+    color: #dfe9e4;
+    font-size: 0.68rem;
+    font-weight: 760;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .map-waypoint.active {
+    border-color: #fd7719;
+    background: rgba(253, 119, 25, 0.28);
+    color: #ffd9b8;
+    box-shadow: 0 0 0 4px rgba(253, 119, 25, 0.18);
   }
 
   .attitude-display {
@@ -2717,17 +2718,6 @@
 
   :global(html[data-theme='light']) .hud-box {
     fill: rgba(255, 255, 255, 0.7);
-  }
-
-  .battery-bar {
-    height: 20px;
-    border: 1px solid #26343a;
-    border-radius: 8px;
-    background: #0a1011;
-  }
-
-  .battery-bar span {
-    background: linear-gradient(90deg, #fd7719, #ffbf57);
   }
 
   .range,
@@ -2894,12 +2884,12 @@
     .dashboard {
       grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.1fr);
       grid-template-areas:
-        "connection vehicle"
-        "command map"
+        "replay vehicle"
+        "replay map"
         "attitude map"
         "replay events"
         "recording topics"
-        "power plot";
+        "plot plot";
     }
 
     .map-canvas {
@@ -2921,18 +2911,11 @@
       gap: 10px;
     }
 
-    .mode-control {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
     .dashboard {
       grid-template-areas:
         "vehicle"
         "map"
-        "command"
-        "connection"
         "attitude"
-        "power"
         "replay"
         "recording"
         "plot"
@@ -2944,8 +2927,7 @@
       height: 300px;
     }
 
-    .metrics,
-    .command-grid {
+    .metrics {
       grid-template-columns: 1fr 1fr;
     }
 
@@ -2967,12 +2949,6 @@
     height: calc(100% - 10px);
   }
 
-  .connection-panel {
-    grid-area: auto;
-    grid-column: 1;
-    grid-row: span 30;
-  }
-
   .autopilot-panel {
     grid-area: auto;
     grid-column: 1;
@@ -2985,16 +2961,10 @@
     grid-row: 1 / span 106;
   }
 
-  .command-panel {
-    grid-area: auto;
-    grid-column: 1;
-    grid-row: span 47;
-  }
-
   .manual-panel {
     grid-area: auto;
     grid-column: 3;
-    grid-row: 107 / span 60;
+    grid-row: 107 / span 76;
   }
 
   .replay-panel {
@@ -3011,7 +2981,6 @@
 
   .vehicle-panel {
     grid-area: auto;
-    display: none;
     grid-column: 3;
     grid-row: span 30;
   }
@@ -3020,12 +2989,6 @@
     grid-area: auto;
     grid-column: 1;
     grid-row: 1 / span 68;
-  }
-
-  .power-panel {
-    grid-area: auto;
-    grid-column: 1;
-    grid-row: span 25;
   }
 
   .plot-panel {
@@ -3079,9 +3042,7 @@
       gap: 0 10px;
     }
 
-    .connection-panel,
     .autopilot-panel,
-    .command-panel,
     .replay-panel,
     .recording-panel {
       grid-column: 1;
@@ -3095,7 +3056,6 @@
     .vehicle-panel,
     .io-panel,
     .manual-panel,
-    .power-panel,
     .plot-panel,
     .map-panel,
     .deflect-panel,
@@ -3133,16 +3093,13 @@
       grid-auto-rows: auto;
     }
 
-    .connection-panel,
     .autopilot-panel,
     .io-panel,
-    .command-panel,
     .manual-panel,
     .replay-panel,
     .recording-panel,
     .vehicle-panel,
     .attitude-panel,
-    .power-panel,
     .plot-panel,
     .map-panel,
     .deflect-panel,
@@ -3250,41 +3207,20 @@
     color: #5c6873;
   }
 
-  :global(html[data-theme='light']) .mode-control {
-    border-color: #cfd6dd;
-    background: #f5f7f8;
-  }
-
-  :global(html[data-theme='light']) .mode-control label {
-    color: #5c6873;
-  }
-
-  :global(html[data-theme='light']) .mode-control label + label {
-    border-left-color: #cfd6dd;
-  }
-
-  :global(html[data-theme='light']) .mode-control label.active {
-    background: #12171b;
-    color: #ffffff;
-  }
-
   :global(html[data-theme='light']) .icon-button.quiet,
-  :global(html[data-theme='light']) .file-button,
-  :global(html[data-theme='light']) .command-button {
+  :global(html[data-theme='light']) .file-button {
     border-color: #d3dade;
     background: #eef2f4;
     color: #263039;
   }
 
-  :global(html[data-theme='light']) .icon-button.primary,
-  :global(html[data-theme='light']) .command-button.primary {
+  :global(html[data-theme='light']) .icon-button.primary {
     border-color: rgba(227, 95, 12, 0.5);
     background: #e35f0c;
     color: #ffffff;
   }
 
-  :global(html[data-theme='light']) .icon-button.danger,
-  :global(html[data-theme='light']) .command-button.danger {
+  :global(html[data-theme='light']) .icon-button.danger {
     border-color: rgba(194, 59, 72, 0.4);
     background: #c23b48;
     color: #ffffff;
@@ -3333,22 +3269,22 @@
     color: #5c6873;
   }
 
-  :global(html[data-theme='light']) .transport-readout {
-    border-color: #e0e5ea;
-    background: #f5f7f8;
-  }
-
-  :global(html[data-theme='light']) .transport-readout span {
-    color: #6b7680;
-  }
-
-  :global(html[data-theme='light']) .transport-readout strong {
-    color: #263039;
-  }
-
   :global(html[data-theme='light']) .manual-service > div {
     border-color: #e0e5ea;
     background: #f5f7f8;
+  }
+
+  :global(html[data-theme='light']) .keyboard-map > div {
+    border-color: rgba(227, 95, 12, 0.24);
+    background: rgba(227, 95, 12, 0.08);
+  }
+
+  :global(html[data-theme='light']) .keyboard-map span {
+    color: #6b7680;
+  }
+
+  :global(html[data-theme='light']) .keyboard-map strong {
+    color: #a04208;
   }
 
   :global(html[data-theme='light']) .manual-service span {
@@ -3428,9 +3364,21 @@
     color: #47535f;
   }
 
-  :global(html[data-theme='light']) .battery-bar {
-    border-color: #d3dade;
-    background: #e7ecef;
+  :global(html[data-theme='light']) .map-mission-path polyline {
+    stroke: rgba(196, 131, 28, 0.7);
+  }
+
+  :global(html[data-theme='light']) .map-waypoint {
+    border-color: #9aa7b0;
+    background: rgba(255, 255, 255, 0.88);
+    color: #47535f;
+  }
+
+  :global(html[data-theme='light']) .map-waypoint.active {
+    border-color: #e35f0c;
+    background: rgba(227, 95, 12, 0.16);
+    color: #a04208;
+    box-shadow: 0 0 0 4px rgba(227, 95, 12, 0.14);
   }
 
   :global(html[data-theme='light']) .plot {

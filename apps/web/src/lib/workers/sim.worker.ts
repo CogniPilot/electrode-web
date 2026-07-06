@@ -2,11 +2,11 @@
 // It consumes private Ground-Station-provided PWM and publishes private plant
 // pose. Ground Station owns the public Synapse/Zenoh hardware-facing topics.
 //
-// Two WASM modules live in this worker: the rumoca stepper (loaded from the
-// static wasm asset URL provided by the main thread) and zenoh-wasm (bundled).
-// All sim state stays here; the main thread only starts/stops and receives
-// status.
+// Two WASM modules live in this worker: the rumoca simulation session (from
+// the @cognipilot/rumoca npm package) and zenoh-wasm. All sim state stays
+// here; the main thread only starts/stops and receives status.
 
+import initRumoca, { WasmSimulationSession } from '@cognipilot/rumoca';
 import { decode, encodeMocapFrame } from '@electrode/sdk';
 
 type StartMessage = {
@@ -15,8 +15,6 @@ type StartMessage = {
   endpoint: string;
   /** Bundler-resolved URL for zenoh_wasm_bg.wasm. */
   zenohWasmUrl: string;
-  /** Base-path-aware URL for the rumoca wasm-bindgen glue script. */
-  rumocaGlueUrl: string;
   /** Modelica source (self-contained) and top-level model name. */
   modelSource: string;
   modelName: string;
@@ -32,8 +30,12 @@ type StartMessage = {
 
 type IncomingMessage = StartMessage | { type: 'stop' };
 
-let rumoca: any = null;
-let stepper: any = null;
+// advance_to() clamps at the session's t_end; the flight sim runs until the
+// user stops it, so compile with an effectively unbounded horizon.
+const SIM_HORIZON_S = 1e7;
+
+let rumocaReady: Promise<unknown> | null = null;
+let stepper: WasmSimulationSession | null = null;
 let zenoh: any = null;
 let session: any = null;
 let subscriber: any = null;
@@ -53,11 +55,10 @@ function post(message: any): void {
   self.postMessage(message);
 }
 
-async function loadRumoca(rumocaGlueUrl: string): Promise<void> {
-  if (rumoca) return;
-  rumoca = await import(/* @vite-ignore */ rumocaGlueUrl);
-  await rumoca.default();
-  rumoca.init();
+async function loadRumoca(): Promise<void> {
+  // The wasm-bindgen init re-instantiates on every call; cache the promise.
+  rumocaReady ??= initRumoca();
+  await rumocaReady;
 }
 
 function applyMotorOutput(payload: Uint8Array): void {
@@ -86,24 +87,41 @@ function stepOnce(): void {
     stepper.set_input('elev_pwm', pwm.elev_pwm);
     stepper.set_input('thr_pwm', pwm.thr_pwm);
     stepper.set_input('rud_pwm', pwm.rud_pwm);
-    stepper.step(dt);
+    stepper.advance_to(stepper.time() + dt);
   } catch (error) {
     post({ type: 'error', message: `step: ${String(error)}` });
     stop();
   }
 }
 
+function readVar(name: string): number {
+  const value = stepper!.get(name);
+  if (value === undefined) throw new Error(`sim variable not found: ${name}`);
+  return value;
+}
+
 function publishMocap(): void {
   if (!stepper || !session) return;
   const bytes = encodeMocapFrame(
     {
-      position: { x: stepper.get('cer_x'), y: stepper.get('cer_y'), z: stepper.get('cer_z') },
-      attitude: { x: stepper.get('mq_x'), y: stepper.get('mq_y'), z: stepper.get('mq_z'), w: stepper.get('mq_w') }
+      position: { x: readVar('cer_x'), y: readVar('cer_y'), z: readVar('cer_z') },
+      attitude: { x: readVar('mq_x'), y: readVar('mq_y'), z: readVar('mq_z'), w: readVar('mq_w') }
     },
-    { frameNumber: frameNumber++, timestampUs: Date.now() * 1000 }
+    // QTM-style 1-based rigid-body id so the Ground Station's bridge-parity
+    // republisher matches synapse_qualisys_bridge numbering.
+    { frameNumber: frameNumber++, timestampUs: Date.now() * 1000, bodyId: 1 }
   );
   // Fire-and-forget; a slow put must not stall the step loop.
   session.putBytes(mocapTopic, bytes).catch(() => {});
+}
+
+function publishMocapSafe(): void {
+  try {
+    publishMocap();
+  } catch (error) {
+    post({ type: 'error', message: `mocap: ${String(error)}` });
+    stop();
+  }
 }
 
 async function start(msg: StartMessage): Promise<void> {
@@ -113,8 +131,17 @@ async function start(msg: StartMessage): Promise<void> {
 
   // 1. Compile the flight model (blocks a few seconds — one-time).
   post({ type: 'status', phase: 'compiling' });
-  await loadRumoca(msg.rumocaGlueUrl);
-  stepper = new rumoca.WasmStepper(msg.modelSource, msg.modelName, msg.solver ?? 'rk-like');
+  await loadRumoca();
+  // dt/atol/rtol of 0 mean "use the model's experiment metadata or defaults".
+  stepper = WasmSimulationSession.withOptions(
+    msg.modelSource,
+    msg.modelName,
+    SIM_HORIZON_S,
+    0,
+    msg.solver ?? 'rk-like',
+    0,
+    0
+  );
   post({ type: 'status', phase: 'compiled' });
 
   // 2. Join the Zenoh network as a peer, like real hardware.
@@ -133,7 +160,7 @@ async function start(msg: StartMessage): Promise<void> {
   frameNumber = 0;
   const pubMs = 1000 / (msg.pubHz ?? 100);
   stepTimer = setInterval(stepOnce, 4);
-  pubTimer = setInterval(publishMocap, pubMs);
+  pubTimer = setInterval(publishMocapSafe, pubMs);
   post({ type: 'status', phase: 'running' });
 }
 
@@ -150,7 +177,7 @@ function stop(): void {
     session = null;
   }
   if (stepper) {
-    stepper.free?.();
+    stepper.free();
     stepper = null;
   }
   post({ type: 'status', phase: 'stopped' });

@@ -360,7 +360,12 @@ fn resolve_inbound_topic(spec: &str) -> Option<InboundTopic> {
         return None;
     }
 
-    if spec == CUB1_MOCAP_TOPIC || spec.contains("/mocap/rigid_body/") {
+    // Any public mocap stream maps to the mocap_frame CSYN id; cubs2 decodes
+    // both wire forms (compact 28-byte pose and MocapFrame FlatBuffer).
+    if spec == CUB1_MOCAP_TOPIC
+        || spec.contains("/mocap/rigid_body/")
+        || spec.ends_with("mocap/frame")
+    {
         let topic = synapse_fbs::topic_catalog::TOPICS
             .iter()
             .find(|topic| topic.key_suffix == "mocap_frame")?;

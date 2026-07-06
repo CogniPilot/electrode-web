@@ -118,6 +118,32 @@ export interface EventMessage {
   timestampMs: number;
 }
 
+/** One mission waypoint in the local ENU frame (metres). */
+export interface MissionWaypoint {
+  seq: number;
+  east: number;
+  north: number;
+  up: number;
+}
+
+/**
+ * Mission plan and progress derived from the Synapse wire: `mission_progress`
+ * carries the active item and count, `local_position_command` the active
+ * target setpoint, and the waypoint table arrives item-by-item over the
+ * cubs2 `vehicle_command` mission-item broadcast (command 32001).
+ */
+export interface MissionPlanState {
+  missionId: number;
+  currentSeq: number;
+  total: number;
+  state: 'unknown' | 'idle' | 'active' | 'paused' | 'complete';
+  /** Sparse until every item has been received; indexed by seq. */
+  waypoints: (MissionWaypoint | null)[];
+  /** Active navigation target (ENU metres) and desired yaw. */
+  target: { east: number; north: number; up: number; yawRad: number } | null;
+  updatedAtMs: number;
+}
+
 export interface TopicDefinition {
   key: string;
   topic: string;
@@ -157,6 +183,12 @@ export interface VehicleState {
   pose: Pose | null;
   velocity: Velocity | null;
   attitude: Attitude | null;
+  /**
+   * Attitude from the autopilot's estimator (`attitude_estimate`), kept apart
+   * from the canonical `attitude` so estimator output never fights mocap
+   * ground truth for the displayed vehicle pose.
+   */
+  attitudeEstimate: Attitude | null;
   controls: ControlInputs | null;
   manualControl: ManualControlState | null;
   radioControl: number[] | null;
@@ -165,60 +197,15 @@ export interface VehicleState {
   link: LinkStatus | null;
   mode: ModeState;
   localization: LocalizationState;
+  mission: MissionPlanState | null;
   events: EventMessage[];
   topics: Record<string, TopicSnapshot>;
-  commandHistory: CommandResult[];
   /**
    * Last mocap sample (ENU metres + wall-clock ms), retained so the adapter can
    * derive velocity by finite-differencing successive mocap pose frames.
    * positions. Internal to the state store; not published.
    */
   lastMocap: { tMs: number; xM: number; yM: number; altM: number } | null;
-}
-
-export type CommandName =
-  | 'arm'
-  | 'disarm'
-  | 'setMode'
-  | 'land'
-  | 'return'
-  | 'clearMission'
-  | 'uploadMission'
-  | 'setParameter';
-
-export interface CommandDefinition {
-  command: CommandName;
-  topic: string;
-  label: string;
-  description: string;
-  requiresConnected: boolean;
-  requiresLocalizationFresh: boolean;
-  requiresNotFailsafe: boolean;
-  requiresConfirmation: boolean;
-  timeoutMs: number;
-  ackTopic: string;
-}
-
-export interface CommandIntent {
-  kind: 'command';
-  commandId: string;
-  command: CommandName;
-  vehicleId: string;
-  topic: string;
-  args: Record<string, unknown>;
-  createdAtMs: number;
-  expiresAtMs: number;
-  sequence: number;
-}
-
-export interface CommandResult {
-  kind: 'commandAck';
-  commandId: string;
-  command: CommandName;
-  status: 'acked' | 'published' | 'rejected' | 'timeout';
-  reason: string;
-  sequence: number;
-  receivedAtMs: number;
 }
 
 export interface ConnectionState {

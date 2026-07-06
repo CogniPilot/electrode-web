@@ -42,3 +42,17 @@ Flight-control computer
 The Qualisys bridge belongs on the mocap Windows computer because it owns the QTM connection, QTM component selection, Windows installer/update flow, and embedded Zenoh router/listener. Electrode should discover or configure its endpoint and consume `synapse/mocap/**` topics, not vendor the bridge runtime into the GCS app.
 
 This keeps traffic shaping at the correct boundary: the mocap bridge publishes selected motion-capture streams into Zenoh, and Zenoh routes only the key expressions requested by downstream clients instead of forcing every ground-station client to receive a raw QTM UDP stream.
+
+## Mocap Wire Contract
+
+Every mocap producer — the Qualisys bridge on real hardware, and the Ground Station's sim bridge when a plant (in-browser Rumoca WASM or the native sim executable) is running — publishes the same three topics, so downstream consumers cannot tell simulation from a live capture volume:
+
+| Topic | Payload |
+| --- | --- |
+| `synapse/mocap/frame` | `synapse.topic.MocapFrame` FlatBuffer (rigid bodies, markers, timing) |
+| `synapse/mocap/rigid_body/<name>/pose` | Compact 28 bytes: little-endian f32 `[px, py, pz, qx, qy, qz, qw]` |
+| `synapse/mocap/definition` | `synapse.topic.MocapDefinition` FlatBuffer, published once per stream |
+
+Conventions (synapse_fbs 0.3.0 `mocap.fbs`): positions are ENU metres; the attitude quaternion rotates body **FLU** vectors into the mocap ENU frame, and the compact payload carries its scalar component **last**. Producers must deliver an FLU-aligned body frame — in QTM that means defining the rigid body with X forward, Y left, Z up; consumers apply no per-body corrections.
+
+Sim plants publish `MocapFrame` FlatBuffers on the private `electrode/sim/rumoca/mocap_frame` topic only; the Ground Station sim bridge verifies and republishes them on the public contract above. The autopilot link forwards `synapse/mocap/rigid_body/**` payloads verbatim to cubs2, whose `csyn_decode_mocap_frame` accepts both the compact pose and the full FlatBuffer.

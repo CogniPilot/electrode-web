@@ -10,6 +10,7 @@ import type {
   LinkStatus,
   LocalizationState,
   ManualControlState,
+  MissionPlanState,
   ModeState,
   Pose,
   TelemetryFrame,
@@ -20,6 +21,8 @@ import type {
 
 const RATE_WINDOW_MS = 2000;
 const MAX_EVENTS = 80;
+const MIN_MOCAP_VELOCITY_DT_MS = 20;
+const MOCAP_VELOCITY_SMOOTHING_MS = 300;
 
 export function createInitialVehicleState(vehicleId = DEFAULT_VEHICLE_ID): VehicleState {
   return {
@@ -29,6 +32,7 @@ export function createInitialVehicleState(vehicleId = DEFAULT_VEHICLE_ID): Vehic
     pose: null,
     velocity: null,
     attitude: null,
+    attitudeEstimate: null,
     controls: null,
     manualControl: null,
     radioControl: null,
@@ -46,9 +50,9 @@ export function createInitialVehicleState(vehicleId = DEFAULT_VEHICLE_ID): Vehic
       quality: 0,
       updatedAtMs: 0
     },
+    mission: null,
     events: [],
     topics: {},
-    commandHistory: [],
     lastMocap: null
   };
 }
@@ -199,6 +203,43 @@ function parseRadioControl(payload: unknown): number[] | null {
   return entries.length > 0 ? entries.map((entry) => entry[1]) : null;
 }
 
+function parseOpticalFlowVelocity(payload: unknown): Velocity | null {
+  const record = payload as Record<string, unknown> | null | undefined;
+  const data = (record?.data ?? record) as Record<string, unknown> | undefined;
+  const velNe = data?.vel_ne as Record<string, unknown> | undefined;
+  if (!velNe) {
+    return null;
+  }
+  const northMps = toFiniteNumber(velNe.x);
+  const eastMps = toFiniteNumber(velNe.y);
+  if (northMps === null || eastMps === null) {
+    return null;
+  }
+  return {
+    northMps,
+    eastMps,
+    downMps: 0,
+    groundSpeedMps: Math.hypot(northMps, eastMps)
+  };
+}
+
+function frameSampleTimeMs(frame: TelemetryFrame, fallbackMs: number): number {
+  const payload = frame.payload as Record<string, unknown> | null | undefined;
+  const payloadTimestampUs = toFiniteNumber(payload?.timestamp_us);
+  if (payloadTimestampUs !== null && payloadTimestampUs > 0) {
+    return payloadTimestampUs / 1000;
+  }
+  const sourceMs = frame.header.sourceTimeNs > 0 ? frame.header.sourceTimeNs / 1_000_000 : 0;
+  if (Number.isFinite(sourceMs) && sourceMs > 0) {
+    return sourceMs;
+  }
+  const receiveMs = frame.header.receiveTimeNs > 0 ? frame.header.receiveTimeNs / 1_000_000 : 0;
+  if (Number.isFinite(receiveMs) && receiveMs > 0) {
+    return receiveMs;
+  }
+  return fallbackMs;
+}
+
 /**
  * cubs2 `vehicle_health.flight_mode` values. The schema leaves flight_mode
  * producer-defined; cubs2 publishes `auto_mode ? 1 : 0` (auto is selected by
@@ -213,8 +254,17 @@ const CUBS2_FLIGHT_MODES: Record<number, string> = { 0: 'manual', 1: 'auto' };
  */
 function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: number): void {
   const topic = frame.topic;
-  if (topic.endsWith('mocap_frame') || topic.includes('synapse/mocap/rigid_body/')) {
-    applyMocapFrame(state, frame.payload, nowMs);
+  if (
+    topic.endsWith('mocap_frame') ||
+    topic.endsWith('mocap/frame') ||
+    topic.includes('synapse/mocap/rigid_body/')
+  ) {
+    applyMocapFrame(state, frame.payload, nowMs, frameSampleTimeMs(frame, nowMs), topic);
+  } else if (topic.endsWith('optical_flow_velocity')) {
+    const velocity = parseOpticalFlowVelocity(frame.payload);
+    if (velocity) {
+      state.velocity = velocity;
+    }
   } else if (topic.endsWith('attitude_estimate')) {
     applyAttitudeEstimate(state, frame.payload);
   } else if (topic.endsWith('vehicle_health')) {
@@ -250,7 +300,112 @@ function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: nu
     }
   } else if (topic.endsWith('power_status')) {
     applyPowerStatus(state, frame.payload);
+  } else if (topic.endsWith('mission_progress')) {
+    applyMissionProgress(state, frame.payload, nowMs);
+  } else if (topic.endsWith('local_position_command')) {
+    applyLocalPositionCommand(state, frame.payload, nowMs);
+  } else if (topic.endsWith('vehicle_command')) {
+    applyVehicleCommand(state, frame.payload, nowMs);
   }
+}
+
+/** cubs2 VehicleCommand id broadcasting one local-frame mission item. */
+const CUBS2_CMD_MISSION_ITEM_LOCAL = 32001;
+
+const MISSION_STATES = new Set(['unknown', 'idle', 'active', 'paused', 'complete']);
+
+function ensureMission(state: VehicleState, nowMs: number): MissionPlanState {
+  if (!state.mission) {
+    state.mission = {
+      missionId: 0,
+      currentSeq: 0,
+      total: 0,
+      state: 'unknown',
+      waypoints: [],
+      target: null,
+      updatedAtMs: nowMs
+    };
+  }
+  return state.mission;
+}
+
+/** Reset the waypoint table when the plan identity or size changes. */
+function resyncMissionPlan(mission: MissionPlanState, missionId: number, total: number): void {
+  if (mission.missionId !== missionId || mission.waypoints.length !== total) {
+    mission.missionId = missionId;
+    mission.total = total;
+    mission.waypoints = Array.from({ length: total }, () => null);
+  }
+}
+
+/** Track active item and plan identity from `synapse/v1/topic/mission_progress`. */
+function applyMissionProgress(state: VehicleState, payload: unknown, nowMs: number): void {
+  const record = payload as Record<string, unknown> | null | undefined;
+  const data = (record?.data ?? record) as Record<string, unknown> | undefined;
+  const currentSeq = toFiniteNumber(data?.current_seq);
+  const total = toFiniteNumber(data?.total);
+  if (currentSeq === null || total === null) {
+    return;
+  }
+  const mission = ensureMission(state, nowMs);
+  resyncMissionPlan(mission, toFiniteNumber(data?.mission_id) ?? 0, total);
+  mission.currentSeq = currentSeq;
+  mission.total = total;
+  const missionState = typeof data?.mission_state === 'string' ? data.mission_state : 'unknown';
+  mission.state = (MISSION_STATES.has(missionState) ? missionState : 'unknown') as MissionPlanState['state'];
+  mission.updatedAtMs = nowMs;
+}
+
+/** Track the active navigation target from `synapse/v1/topic/local_position_command`. */
+function applyLocalPositionCommand(state: VehicleState, payload: unknown, nowMs: number): void {
+  const record = payload as Record<string, unknown> | null | undefined;
+  const data = (record?.data ?? record) as Record<string, unknown> | undefined;
+  const position = data?.position_enu_m as Record<string, unknown> | undefined;
+  if (!position) {
+    return;
+  }
+  const east = toFiniteNumber(position.x);
+  const north = toFiniteNumber(position.y);
+  const up = toFiniteNumber(position.z);
+  if (east === null || north === null || up === null) {
+    return;
+  }
+  const mission = ensureMission(state, nowMs);
+  mission.target = { east, north, up, yawRad: toFiniteNumber(data?.yaw_rad) ?? 0 };
+  mission.updatedAtMs = nowMs;
+}
+
+/**
+ * Rebuild the waypoint table from the cubs2 mission-item broadcast on
+ * `synapse/v1/topic/vehicle_command`: args = [seq, total, east, north, up,
+ * mission_id, reserved]. Items cycle, so the table fills within one revolution
+ * from any join point. Other command ids are ignored.
+ */
+function applyVehicleCommand(state: VehicleState, payload: unknown, nowMs: number): void {
+  const record = payload as Record<string, unknown> | null | undefined;
+  const data = (record?.data ?? record) as Record<string, unknown> | undefined;
+  if (toFiniteNumber(data?.command_id) !== CUBS2_CMD_MISSION_ITEM_LOCAL) {
+    return;
+  }
+  const args = data?.args;
+  if (!Array.isArray(args)) {
+    return;
+  }
+  const seq = toFiniteNumber(args[0]);
+  const total = toFiniteNumber(args[1]);
+  const east = toFiniteNumber(args[2]);
+  const north = toFiniteNumber(args[3]);
+  const up = toFiniteNumber(args[4]);
+  if (seq === null || total === null || east === null || north === null || up === null) {
+    return;
+  }
+  if (total <= 0 || seq < 0 || seq >= total) {
+    return;
+  }
+  const mission = ensureMission(state, nowMs);
+  resyncMissionPlan(mission, toFiniteNumber(args[5]) ?? 0, total);
+  mission.waypoints[seq] = { seq, east, north, up };
+  mission.updatedAtMs = nowMs;
 }
 
 /**
@@ -259,7 +414,13 @@ function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: nu
  * y=north, z=up — mapped to Pose as xM/yM/altM; attitude is taken from the
  * rigid-body quaternion (mocap is the attitude source of truth).
  */
-function applyMocapFrame(state: VehicleState, payload: unknown, nowMs: number): void {
+function applyMocapFrame(
+  state: VehicleState,
+  payload: unknown,
+  nowMs: number,
+  sampleMs: number,
+  topic: string
+): void {
   const record = payload as Record<string, unknown> | null | undefined;
   const bodies = record?.rigid_bodies;
   const body = Array.isArray(bodies) ? (bodies[0] as Record<string, unknown> | undefined) : undefined;
@@ -273,19 +434,41 @@ function applyMocapFrame(state: VehicleState, payload: unknown, nowMs: number): 
 
   // Ground-truth velocity by finite-differencing successive mocap positions.
   const prev = state.lastMocap;
-  if (prev && nowMs > prev.tMs) {
-    const dt = (nowMs - prev.tMs) / 1000;
+  const hasDirectVelocity = Object.values(state.topics).some(
+    (snapshot) => snapshot.topic.endsWith('optical_flow_velocity') && !snapshot.stale
+  );
+  const hasFullMocapFrame = Object.values(state.topics).some(
+    (snapshot) => snapshot.topic.endsWith('mocap/frame') && !snapshot.stale
+  );
+  const compactPoseMirrorsFullFrame = topic.includes('synapse/mocap/rigid_body/') && hasFullMocapFrame;
+  const useForMocapVelocity = !compactPoseMirrorsFullFrame;
+  const dtMs = prev ? sampleMs - prev.tMs : 0;
+  if (prev && dtMs >= MIN_MOCAP_VELOCITY_DT_MS && !hasDirectVelocity && useForMocapVelocity) {
+    const dt = dtMs / 1000;
     const eastMps = (xM - prev.xM) / dt;
     const northMps = (yM - prev.yM) / dt;
     const upMps = (altM - prev.altM) / dt;
+    const alpha = 1 - Math.exp(-dtMs / MOCAP_VELOCITY_SMOOTHING_MS);
+    const previousVelocity = state.velocity;
+    const smoothNorthMps = previousVelocity
+      ? previousVelocity.northMps + (northMps - previousVelocity.northMps) * alpha
+      : northMps;
+    const smoothEastMps = previousVelocity
+      ? previousVelocity.eastMps + (eastMps - previousVelocity.eastMps) * alpha
+      : eastMps;
+    const smoothDownMps = previousVelocity
+      ? previousVelocity.downMps + (-upMps - previousVelocity.downMps) * alpha
+      : -upMps;
     state.velocity = {
-      northMps,
-      eastMps,
-      downMps: -upMps,
-      groundSpeedMps: Math.hypot(northMps, eastMps)
+      northMps: smoothNorthMps,
+      eastMps: smoothEastMps,
+      downMps: smoothDownMps,
+      groundSpeedMps: Math.hypot(smoothNorthMps, smoothEastMps)
     };
   }
-  state.lastMocap = { tMs: nowMs, xM, yM, altM };
+  if (useForMocapVelocity && (!prev || dtMs >= MIN_MOCAP_VELOCITY_DT_MS || hasDirectVelocity)) {
+    state.lastMocap = { tMs: sampleMs, xM, yM, altM };
+  }
 
   // Indoor mocap has no geodetic fix; xM/yM/altM carry the local ENU pose.
   state.pose = { lat: 0, lon: 0, altM, xM, yM, zM: -altM };
@@ -306,16 +489,15 @@ function applyMocapFrame(state: VehicleState, payload: unknown, nowMs: number): 
 }
 
 /**
- * Set attitude from a decoded `synapse/v1/topic/attitude_estimate`. The estimate
- * carries a body attitude quaternion `{w,x,y,z}` which we convert to Euler
- * degrees for the canonical `state.attitude`.
+ * Set estimator attitude from a decoded `synapse/v1/topic/attitude_estimate`.
+ * The canonical `state.attitude` remains owned by mocap while tracking is live.
  */
 function applyAttitudeEstimate(state: VehicleState, payload: unknown): void {
   const record = payload as Record<string, unknown> | null | undefined;
   const data = (record?.data ?? record) as Record<string, unknown> | undefined;
   const attitude = quaternionToEuler(data?.attitude as Record<string, unknown> | undefined);
   if (attitude) {
-    state.attitude = attitude;
+    state.attitudeEstimate = attitude;
   }
 }
 

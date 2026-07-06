@@ -1,10 +1,9 @@
-//! Autopilot stack profile and firmware-install planning.
+//! Autopilot stack profile.
 //!
 //! This belongs in the Ground Station daemon, not the static Viewer, because it
-//! deals with local files, plugged-in hardware, and eventually bootloader access.
+//! deals with local files and runtime configuration.
 
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -39,7 +38,8 @@ pub(crate) struct AutopilotProfile {
 }
 
 fn default_native_binary() -> String {
-    "/home/micah/autopilot/cerebri_cubs2/build-native_sim/zephyr/zephyr.exe".to_string()
+    std::env::var("ELECTRODE_AUTOPILOT_NATIVE_BINARY")
+        .unwrap_or_else(|_| "../cerebri_cubs2/build-native_sim/zephyr/zephyr.exe".to_string())
 }
 
 fn default_udp_rx_port() -> u16 {
@@ -90,32 +90,6 @@ pub(crate) enum RuntimeTransport {
 pub(crate) enum RuntimeProtocol {
     SynapseZenoh,
     Mavlink,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct FirmwareInstallRequest {
-    pub device: String,
-    #[serde(default)]
-    pub confirmed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct FirmwareInstallStatus {
-    pub job_id: String,
-    pub status: InstallState,
-    pub message: String,
-    pub profile: AutopilotProfile,
-    pub device: String,
-    pub steps: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum InstallState {
-    Planned,
-    Rejected,
 }
 
 impl Default for AutopilotProfile {
@@ -178,68 +152,4 @@ impl AutopilotProfile {
         let text = serde_json::to_string_pretty(self).unwrap_or_default();
         std::fs::write(path, text)
     }
-
-    pub(crate) fn install_plan(&self, request: FirmwareInstallRequest) -> FirmwareInstallStatus {
-        let artifact = self.firmware_artifact.trim();
-        let device = request.device.trim();
-        let mut steps = vec![
-            format!("Use {} autopilot profile", self.stack_name),
-            format!("Resolve firmware artifact: {}", artifact),
-            format!("Target board: {}", self.board_target),
-            format!("Prepare flash method: {:?}", self.flash_method),
-            format!("Open hardware device: {}", device),
-            "Reboot target into bootloader mode".to_string(),
-            "Erase, program, verify, then reboot into runtime firmware".to_string(),
-        ];
-
-        if matches!(self.runtime_transport, RuntimeTransport::Zenoh) {
-            steps.push(format!(
-                "After install, reconnect runtime transport over Zenoh at {}",
-                self.runtime_endpoint
-            ));
-        } else {
-            steps.push(format!(
-                "After install, reconnect runtime transport over MAVLink at {}",
-                self.runtime_endpoint
-            ));
-        }
-
-        let rejected = if artifact.is_empty() {
-            Some("firmware artifact is required")
-        } else if device.is_empty() {
-            Some("hardware device is required")
-        } else if !request.confirmed {
-            Some("install request requires explicit operator confirmation")
-        } else {
-            None
-        };
-
-        if let Some(reason) = rejected {
-            return FirmwareInstallStatus {
-                job_id: new_job_id(),
-                status: InstallState::Rejected,
-                message: reason.to_string(),
-                profile: self.clone(),
-                device: device.to_string(),
-                steps,
-            };
-        }
-
-        FirmwareInstallStatus {
-            job_id: new_job_id(),
-            status: InstallState::Planned,
-            message: "install plan created; flashing backend is not enabled yet".to_string(),
-            profile: self.clone(),
-            device: device.to_string(),
-            steps,
-        }
-    }
-}
-
-fn new_job_id() -> String {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
-    format!("fw-{millis}")
 }

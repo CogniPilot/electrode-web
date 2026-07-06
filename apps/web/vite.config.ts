@@ -14,6 +14,11 @@ const cesiumBaseUrl = 'cesium';
 const gcsTarget = 'http://127.0.0.1:8790';
 
 export default defineConfig({
+  optimizeDeps: {
+    // Pre-bundling would relocate the wasm-bindgen glue and break its
+    // import.meta.url-relative fetch of rumoca_bind_wasm_bg.wasm in dev.
+    exclude: ['@cognipilot/rumoca']
+  },
   define: {
     CESIUM_BASE_URL: JSON.stringify(`/${cesiumBaseUrl}`)
   },

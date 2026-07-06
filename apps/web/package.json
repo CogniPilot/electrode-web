@@ -10,6 +10,7 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
+    "@cognipilot/rumoca": "0.9.11",
     "@cognipilot/zenoh-wasm": "1.9.0-wasm.1",
     "@electrode/flatbuffers": "0.1.0",
     "@electrode/sdk": "0.1.0",

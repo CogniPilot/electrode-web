@@ -1,8 +1,6 @@
 // Controller for the in-browser rumoca flight sim. Spawns the sim worker,
 // hands it the Zenoh endpoint + Modelica source, and relays status. The worker
 // runs Rumoca WASM behind Ground Station's private sim wrapper topics.
-import { asset } from '$app/paths';
-
 import zenohWasmUrl from '../zenohWasmUrl';
 
 export type SimPhase = 'compiling' | 'compiled' | 'connecting' | 'running' | 'stopped';
@@ -43,7 +41,6 @@ export class InBrowserSim {
       type: 'start',
       endpoint: options.endpoint,
       zenohWasmUrl,
-      rumocaGlueUrl: asset('/wasm/rumoca_bind_wasm.js'),
       modelSource: options.modelSource,
       modelName: options.modelName ?? 'FixedWingTrueSILFull',
       solver: options.solver ?? 'rk-like',

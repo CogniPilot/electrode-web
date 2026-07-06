@@ -230,7 +230,20 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     fields: rcChannelFields('')
   },
   {
+    // Compact 28-byte pose republished per rigid body — position + attitude
+    // only; markers and timing live on `synapse/mocap/frame`.
     topic: 'synapse/mocap/rigid_body/cub1/pose',
+    schema: 'synapse.topic.MocapFrame',
+    label: 'MocapPose',
+    source: 'synapse_fbs',
+    fields: [
+      ...vec3Fields('rigid_bodies.0.position', 'Rigid body 0 position', 'm'),
+      ...quatFields('rigid_bodies.0.attitude', 'Rigid body 0 attitude'),
+      booleanField('rigid_bodies.0.tracking_valid', 'Rigid body 0 valid')
+    ]
+  },
+  {
+    topic: 'synapse/mocap/frame',
     schema: 'synapse.topic.MocapFrame',
     label: 'MocapFrame',
     source: 'synapse_fbs',
