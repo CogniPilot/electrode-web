@@ -1,0 +1,29 @@
+.electrode-version-menu {
+  align-items: center;
+  display: inline-flex;
+  gap: .45rem;
+  margin-right: .75rem;
+}
+
+.electrode-version-menu label {
+  font-size: .75rem;
+  font-weight: 700;
+}
+
+.electrode-version-select {
+  background: var(--bg);
+  border: 1px solid var(--theme-popup-border);
+  border-radius: 4px;
+  color: var(--fg);
+  font: inherit;
+  min-height: 1.8rem;
+  padding: .1rem .4rem;
+}
+
+table {
+  width: 100%;
+}
+
+code {
+  font-size: .94em;
+}

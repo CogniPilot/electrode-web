@@ -1,0 +1,538 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Using The UI - electrode-web main</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Versioned developer documentation for electrode-web.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-0392ca55.css">
+        <link rel="stylesheet" href="css/chrome-fc474251.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/electrode-81b2ddd6.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-d856caf9.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-c3e5e778.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">electrode-web main</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/CogniPilot/electrode-web" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="using-the-ui"><a class="header" href="#using-the-ui">Using The UI</a></h1>
+<p>This page is a tour of Electrode in full Ground Station mode. Ground Station
+mode is active when the app is served by <code>electrode-ground-station</code> and the
+same-origin <code>gcs/*</code> APIs are available. That unlocks hardware status, RC
+mapping, PPM output, autopilot control, and simulation workbench panels.</p>
+<p><img src="assets/ui/groundstation-dashboard.png" alt="Electrode Ground Station dashboard"></p>
+<h2 id="from-a-fresh-clone"><a class="header" href="#from-a-fresh-clone">From A Fresh Clone</a></h2>
+<p>From the repository root:</p>
+<pre><code class="language-sh">npm ci
+npm run station
+</code></pre>
+<p><code>npm run station</code> builds the web app, starts the Rust Ground Station daemon,
+serves the UI, and enables the local <code>gcs/*</code> hardware APIs. When it is ready,
+open:</p>
+<pre><code class="language-text">http://127.0.0.1:8790/
+</code></pre>
+<p>Use that local URL for simulation, RC mapping, PPM, and autopilot workflows.
+The static GitHub Pages viewer and the Vite dev server can display telemetry,
+but they cannot start local native tools or access host hardware.</p>
+<h2 id="first-read"><a class="header" href="#first-read">First Read</a></h2>
+<p>Use the screen from top left to bottom right:</p>
+<ol>
+<li>Check the header for the active vehicle id and the theme/settings menu.</li>
+<li>Check the Ground Station strip for backend host, RC input, serial/PPM, and
+connection status.</li>
+<li>Check <strong>State I/O</strong> for whether expected Synapse topics are arriving.</li>
+<li>Use <strong>HUD</strong>, <strong>Map</strong>, and <strong>Vehicle</strong> for quick flight-state awareness.</li>
+<li>Use <strong>Manual Link</strong> and <strong>Control Surfaces</strong> to verify operator input and
+selected actuator output.</li>
+<li>Use <strong>Plots</strong>, <strong>Discovery</strong>, <strong>Topics</strong>, <strong>Replay</strong>, and <strong>Logging</strong> when
+debugging or recording a session.</li>
+</ol>
+<h2 id="header"><a class="header" href="#header">Header</a></h2>
+<p>The header shows the Electrode mark, the current vehicle id, and the settings
+menu. The settings menu currently contains the light/dark theme toggle.</p>
+<p>If the vehicle id is not the vehicle you expect, confirm the app was opened
+with the intended backend or Zenoh stream source.</p>
+<h2 id="ground-station-strip"><a class="header" href="#ground-station-strip">Ground Station Strip</a></h2>
+<p>The strip below the Dashboard/SIM tabs is the backend capability summary. It
+reports:</p>
+<ul>
+<li>The host serving <code>electrode-ground-station</code>.</li>
+<li>The detected RC input device.</li>
+<li>The serial/PPM device state.</li>
+<li>Whether the browser is connected to the local backend.</li>
+</ul>
+<p>If the strip is missing, you are in static Viewer mode. Open the app through
+the local daemon, usually <code>http://127.0.0.1:8790/</code>, instead of a static build or
+GitHub Pages URL.</p>
+<h2 id="dashboard-config"><a class="header" href="#dashboard-config">Dashboard Config</a></h2>
+<p>Open <strong>Dashboard Config</strong> when you need to adjust physical controls or output
+hardware.</p>
+<p><img src="assets/ui/groundstation-dashboard-config.png" alt="Ground Station dashboard config"></p>
+<h3 id="rc-mapping"><a class="header" href="#rc-mapping">RC Mapping</a></h3>
+<p><strong>RC Mapping</strong> maps the controller axes and buttons into Electrode’s manual
+control model. Use the live controller input bars on the right to identify
+which axis moves when you move a stick.</p>
+<ul>
+<li><strong>Axis</strong> chooses the raw controller axis.</li>
+<li><strong>Inv</strong> flips an axis direction.</li>
+<li><strong>MOM</strong> means momentary, active only while held.</li>
+<li><strong>TOG</strong> means toggle/latch.</li>
+</ul>
+<p>Changes save through the Ground Station backend and are reflected immediately
+in <strong>Manual Link</strong>.</p>
+<h3 id="ppm-hardware"><a class="header" href="#ppm-hardware">PPM Hardware</a></h3>
+<p><strong>PPM Hardware</strong> maps logical control sources to serial PPM output channels.
+Use it when Electrode is driving an external receiver or encoder.</p>
+<ul>
+<li>The channel rows define throttle, roll, pitch, yaw, and stabilization output.</li>
+<li><strong>Force throttle idle</strong> and <strong>Force stabilize</strong> are safety overrides.</li>
+<li><strong>Start PPM</strong> starts the native PPM bridge when a serial device is available.</li>
+</ul>
+<p>Use the live values to confirm channel order before connecting anything that
+can move actuators.</p>
+<p>For hardware-in-the-loop work, the autopilot can be a real flight-control board
+or the local <code>cubs2</code> native simulation. The PPM bridge does not run the
+autopilot; it selects between manual-control output and autopilot PWM output,
+then writes the selected PPM packet to the serial encoder/receiver hardware.
+Start the autopilot path first, verify <strong>Selected raw commands to
+sim/hardware</strong>, then start PPM output.</p>
+<h2 id="hud"><a class="header" href="#hud">HUD</a></h2>
+<p>The <strong>HUD</strong> is the quickest attitude readout. It summarizes standby/arming,
+roll, and pitch in the panel subtitle, then renders a flight-display style view
+with heading, pitch ladder, roll marker, speed, and altitude.</p>
+<p>When telemetry is missing, the subtitle shows <code>--</code> values. Treat that as a data
+path problem before debugging the visualization itself.</p>
+<h2 id="map"><a class="header" href="#map">Map</a></h2>
+<p>The <strong>Map</strong> panel is the position view. The <code>2D</code>/<code>3D</code> switch changes between a
+flat mission-style map and the local 3D scene. <code>Follow</code> recenters the view on
+the vehicle.</p>
+<p>The bottom chips show local X, local Y, altitude, and localization quality.
+If quality is <code>0%</code> or the subtitle says <code>no fix</code>, check mocap/GNSS/local-pose
+topics in <strong>State I/O</strong> and <strong>Discovery</strong>.</p>
+<h2 id="state-io"><a class="header" href="#state-io">State I/O</a></h2>
+<p><strong>State I/O</strong> is the data-contract panel. It groups the key flows Electrode
+expects:</p>
+<ul>
+<li><strong>Autopilot reported</strong>: vehicle mode and arming status.</li>
+<li><strong>Mocap 6DOF pose</strong>: position, orientation, and tracking freshness.</li>
+<li><strong>Autopilot telemetry received</strong>: flight mode, attitude, and link data.</li>
+<li><strong>Selected raw commands to sim/hardware</strong>: actuator/PWM command stream.</li>
+<li><strong>Manual control state</strong>: mode-switch request and manual-control values.</li>
+</ul>
+<p>Use this panel first when a downstream panel looks wrong. If State I/O says
+<code>no data</code> or <code>stale</code>, the UI is faithfully reporting that the topic has not
+arrived or has timed out.</p>
+<p>In Ground Station mode, the manual-control rows can update even without vehicle
+telemetry because the backend can publish local joystick state.</p>
+<h2 id="replay"><a class="header" href="#replay">Replay</a></h2>
+<p><strong>Replay</strong> loads MCAP recordings and feeds them through the same worker/state
+pipeline used by live data. Use the play/pause button, load button, timeline,
+and speed slider to inspect previous sessions.</p>
+<p>Replay is useful for UI work because it lets you reproduce a vehicle state
+without hardware.</p>
+<h2 id="logging"><a class="header" href="#logging">Logging</a></h2>
+<p><strong>Logging</strong> records live topics into MCAP. Press <strong>Record</strong> before the event you
+want to capture, press it again to stop, then <strong>Export</strong> to download the file.</p>
+<p>The counter reports how many frames are buffered. A stopped recording is what
+saves the <code>.mcap</code> export cleanly.</p>
+<h2 id="events"><a class="header" href="#events">Events</a></h2>
+<p><strong>Events</strong> is the short operational log. Warnings and errors appear here when
+the state store or bridge observes something the operator should notice.</p>
+<p>If the UI looks quiet but behavior feels wrong, check this panel before opening
+developer tools.</p>
+<h2 id="topics"><a class="header" href="#topics">Topics</a></h2>
+<p><strong>Topics</strong> lists active registered topic snapshots with rate and latency. It is
+a compact way to see whether Electrode knows about a stream, how fast it is
+arriving, and whether it is late.</p>
+<p>In Viewer mode with no backend or Zenoh stream, this panel is expected to say
+<code>No topics</code>.</p>
+<h2 id="control-surfaces"><a class="header" href="#control-surfaces">Control Surfaces</a></h2>
+<p><strong>Control Surfaces</strong> visualizes the currently selected command output as
+aircraft deflections. Switch between <strong>Quadrotor</strong> and <strong>Fixed Wing</strong> to match
+the vehicle model you are inspecting.</p>
+<p>Use this beside <strong>Manual Link</strong>: Manual Link shows operator intent, while
+Control Surfaces shows what that intent or selected autopilot output becomes.</p>
+<h2 id="plots"><a class="header" href="#plots">Plots</a></h2>
+<p><strong>Plots</strong> graphs selected fields from live or replayed packets. Choose a packet
+and field for each trace, then watch the plot and legend for last values and
+ranges.</p>
+<p>Start with altitude and ground speed when checking whether replay/live decoding
+is working. Add attitude, link, or control fields once the basic stream is
+healthy.</p>
+<h2 id="discovery"><a class="header" href="#discovery">Discovery</a></h2>
+<p><strong>Discovery</strong> shows raw observed Zenoh keys, schemas, rates, and byte counts.
+Use it when a stream exists but Electrode is not decoding it into a higher-level
+panel.</p>
+<p>The usual debugging sequence is:</p>
+<ol>
+<li>Confirm the key appears in Discovery.</li>
+<li>Confirm the schema/bytes look plausible.</li>
+<li>Confirm the matching State I/O row is fresh.</li>
+<li>Then inspect the visual panel that consumes that state.</li>
+</ol>
+<h2 id="manual-link"><a class="header" href="#manual-link">Manual Link</a></h2>
+<p><strong>Manual Link</strong> displays controller sticks, arm/kill state, signal state, axis
+values, and the manual-control topic it is waiting for.</p>
+<p>In Ground Station mode, the <strong>Hardware</strong> tab shows locally computed joystick
+state before it leaves the machine. The <strong>Zenoh</strong> tab shows the actual
+<code>synapse/v1/topic/manual_control_command</code> stream after publication. Compare
+them when debugging mapping, transport, or stale-command behavior.</p>
+<p>When no RC controller is plugged in and the native manual publisher is stopped,
+Electrode enables a keyboard fallback. The Manual Link subtitle says
+<code>keyboard remote active</code> when this path is live.</p>
+<p>Keyboard controls:</p>
+<ul>
+<li>Arrow left/right: roll.</li>
+<li>Arrow up/down: pitch.</li>
+<li><code>A</code> / <code>D</code>: yaw.</li>
+<li><code>W</code> / <code>S</code>: throttle up/down.</li>
+<li><code>M</code>: toggle manual/autopilot mode request.</li>
+<li><code>T</code>: toggle stabilization active.</li>
+</ul>
+<p>The keyboard path is meant for bench testing and simulation bring-up, not for
+flying hardware.</p>
+<h2 id="vehicle"><a class="header" href="#vehicle">Vehicle</a></h2>
+<p><strong>Vehicle</strong> is the compact summary: altitude, speed, yaw, and quality. It is
+the panel to glance at when the larger HUD/Map panels are off screen.</p>
+<p>If <strong>Vehicle</strong> disagrees with <strong>HUD</strong> or <strong>Map</strong>, prefer <strong>State I/O</strong> as the
+source of truth and check whether one of the panels is using stale data.</p>
+<h2 id="sim-bring-up"><a class="header" href="#sim-bring-up">Sim Bring-Up</a></h2>
+<p>Use this sequence when you want the browser plant, local autopilot, manual
+input, and Ground Station display all working together.</p>
+<h3 id="1-open-the-full-ground-station"><a class="header" href="#1-open-the-full-ground-station">1. Open The Full Ground Station</a></h3>
+<p>Start the app through the Ground Station command if it is not already running:</p>
+<pre><code class="language-sh">npm run station
+</code></pre>
+<p>Then open the local daemon URL:</p>
+<pre><code class="language-text">http://127.0.0.1:8790/
+</code></pre>
+<p>Confirm the Ground Station strip says <strong>Connected</strong>. Also check the same strip
+for the RC input device and serial/PPM status. If the Ground Station strip is
+missing, you are in static Viewer mode and cannot start the local autopilot or
+simulation from the UI.</p>
+<h3 id="2-check-the-dashboard-config"><a class="header" href="#2-check-the-dashboard-config">2. Check The Dashboard Config</a></h3>
+<p>Open <strong>Dashboard Config</strong> before starting anything that can publish commands.</p>
+<p>Confirm <strong>RC Mapping</strong> moves the expected axes when you move the sticks. If an
+axis moves backward, flip <strong>Inv</strong> for that row. Confirm the mode switch row
+changes when you move the controller mode switch.</p>
+<p>Confirm <strong>PPM Hardware</strong> only if you are using serial PPM output. For pure
+simulation, PPM hardware can stay stopped.</p>
+<h3 id="3-start-manual-publishing"><a class="header" href="#3-start-manual-publishing">3. Start Manual Publishing</a></h3>
+<p>If an RC controller is attached, press <strong>Start</strong> in <strong>Manual Link</strong> when the
+manual publisher is stopped. The panel should show <strong>Hardware</strong> as live and the
+<code>manual_control_command</code> topic.</p>
+<p>If no RC controller is attached, leave the native manual publisher stopped and
+use the keyboard fallback. The panel should say <code>keyboard remote active</code>.</p>
+<p>Then check <strong>State I/O -&gt; Manual control state</strong>. It should show fresh data at
+roughly controller rate. If it says <code>waiting for manual_control_command</code>, fix
+manual publishing before starting the sim.</p>
+<h3 id="4-put-the-mode-switch-in-the-intended-mode"><a class="header" href="#4-put-the-mode-switch-in-the-intended-mode">4. Put The Mode Switch In The Intended Mode</a></h3>
+<p>The sim does not choose manual or autopilot mode. It behaves like the aircraft:
+the transmitter mode switch sends <code>manual_control_command.flight_mode</code>, and the
+autopilot decides whether to accept that mode.</p>
+<p>Use these checks:</p>
+<ul>
+<li>Manual mode: <strong>State I/O -&gt; Mode switch request</strong> should read <code>manual</code> or
+mode <code>0</code>.</li>
+<li>Autopilot mode: <strong>State I/O -&gt; Mode switch request</strong> should read <code>autopilot</code>
+or mode <code>1+</code>.</li>
+<li>Accepted autopilot mode: <strong>Autopilot reported</strong> should change to <code>auto</code>.</li>
+<li>Mismatch: if <strong>Mode switch request</strong> says <code>autopilot ... not accepted by autopilot</code>, the switch request is reaching Electrode but the autopilot has
+not accepted that mode yet.</li>
+</ul>
+<p>For a closed-loop sim test, put the switch in autopilot mode and wait for
+<strong>Autopilot reported</strong> to show <code>auto</code>. For a manual plant test, leave the
+switch in manual mode and verify <strong>Control Surfaces</strong> responds to stick input.</p>
+<h3 id="5-start-the-autopilot"><a class="header" href="#5-start-the-autopilot">5. Start The Autopilot</a></h3>
+<p>On the Dashboard, find <strong>Autopilot</strong> and press <strong>Start</strong>. The panel should move
+from <code>stopped</code> to <code>running · pid ...</code>.</p>
+<p>For the default local workflow this starts the <code>cubs2</code> native simulation. For
+PPM or hardware-in-the-loop workflows, the autopilot may instead be a real
+flight-control board that boots on power; in that case use <strong>State I/O</strong> and
+<strong>Autopilot reported</strong> to verify it is producing telemetry before enabling PPM
+output.</p>
+<p>Watch <strong>Frames out</strong> and <strong>Frames in</strong>:</p>
+<ul>
+<li><strong>Frames out</strong> means Electrode is forwarding commands/sensor data toward the
+autopilot link.</li>
+<li><strong>Frames in</strong> means the autopilot is sending data back.</li>
+</ul>
+<p>If the process starts but frame counts stay at zero, check the Zenoh endpoint
+and the autopilot profile before debugging the UI.</p>
+<h3 id="6-start-the-sim-tab"><a class="header" href="#6-start-the-sim-tab">6. Start The SIM Tab</a></h3>
+<p>Open <strong>SIM</strong> and press <strong>Start</strong> in the Simulation panel. Leave the topic names
+at their defaults unless you intentionally changed the rest of the stack.</p>
+<p>After the sim starts, return to <strong>Dashboard</strong> and check:</p>
+<ul>
+<li><strong>Discovery</strong> should show new sim/autopilot topics.</li>
+<li><strong>State I/O -&gt; Mocap 6DOF pose</strong> should become fresh.</li>
+<li><strong>State I/O -&gt; Autopilot telemetry received</strong> should become fresh.</li>
+<li><strong>Map</strong> and <strong>HUD</strong> should stop showing only placeholder values once state is
+flowing.</li>
+</ul>
+<h3 id="7-verify-the-control-path"><a class="header" href="#7-verify-the-control-path">7. Verify The Control Path</a></h3>
+<p>Use the panels together:</p>
+<ol>
+<li><strong>Manual Link</strong>: confirms local joystick and published manual-control state.</li>
+<li><strong>State I/O</strong>: confirms the requested mode and whether the autopilot accepts
+it.</li>
+<li><strong>Selected raw commands to sim/hardware</strong>: confirms the command stream that
+the plant receives.</li>
+<li><strong>Control Surfaces</strong>: visualizes the selected output.</li>
+<li><strong>Plots</strong>: graph altitude, ground speed, attitude, or control fields once
+samples are flowing.</li>
+</ol>
+<h3 id="8-shut-down-in-reverse"><a class="header" href="#8-shut-down-in-reverse">8. Shut Down In Reverse</a></h3>
+<p>Stop the sim first, then stop the autopilot, then stop manual publishing if you
+are done with the controller. Export any logs before closing the tab.</p>
+<h2 id="sim"><a class="header" href="#sim">SIM</a></h2>
+<p>The <strong>SIM</strong> tab is the Rumoca TRUE SIL workbench. It runs the flight model in
+the browser tab with Rumoca WASM and uses the same Zenoh topic contract as the
+hardware path.</p>
+<p><img src="assets/ui/groundstation-sim.png" alt="Ground Station SIM tab"></p>
+<p>Use the left column to choose the vehicle kind, Rumoca project path, executable,
+Zenoh endpoint, and topic names. Use <strong>Start</strong> and <strong>Stop</strong> to control the
+in-browser plant.</p>
+<p>Use the editor on the right to inspect or edit the Modelica file. <strong>Reload</strong>
+pulls the file from disk, <strong>Check</strong> validates the configured model, and <strong>Save</strong>
+writes changes when the file is editable.</p>
+<p>Simulation publishes mocap-like pose output and consumes the selected actuator
+command stream, so it is most useful when checking the whole command path:</p>
+<ol>
+<li>Start manual publishing.</li>
+<li>Put the mode switch in the intended mode.</li>
+<li>Start the autopilot.</li>
+<li>Start the sim.</li>
+<li>Confirm the command, sensor, and telemetry topics in <strong>Discovery</strong>.</li>
+<li>Confirm <strong>State I/O</strong> receives fresh mocap and telemetry.</li>
+<li>Use <strong>HUD</strong>, <strong>Map</strong>, <strong>Plots</strong>, and <strong>Manual Link</strong> to inspect behavior.</li>
+</ol>
+<h2 id="static-viewer-mode"><a class="header" href="#static-viewer-mode">Static Viewer Mode</a></h2>
+<p>Static Viewer mode is what the same app shows when no local Ground Station
+daemon answers <code>gcs/health</code>. Hardware panels, Dashboard Config, and SIM are not
+available, but live Zenoh-over-WebSocket, replay, logging, plots, discovery,
+and visualization still work.</p>
+<p><img src="assets/ui/dashboard-tall.png" alt="Static Viewer dashboard"></p>
+<p>Use <code>?viewer</code> to force this mode even when the app is served by the daemon.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="index.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="architecture.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="index.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="architecture.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-09f2665d.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="theme/version-selector-19891e1e.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
