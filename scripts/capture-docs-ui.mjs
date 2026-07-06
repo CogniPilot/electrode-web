@@ -39,12 +39,6 @@ const shots = [
     url: `${origin}/?viewer`,
     width: 1440,
     height: 1100
-  },
-  {
-    path: 'mobile-dashboard.png',
-    url: `${origin}/?viewer`,
-    width: 390,
-    height: 1400
   }
 ];
 

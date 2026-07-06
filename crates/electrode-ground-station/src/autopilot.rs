@@ -38,7 +38,8 @@ pub(crate) struct AutopilotProfile {
 }
 
 fn default_native_binary() -> String {
-    "/home/micah/autopilot/cerebri_cubs2/build-native_sim/zephyr/zephyr.exe".to_string()
+    std::env::var("ELECTRODE_AUTOPILOT_NATIVE_BINARY")
+        .unwrap_or_else(|_| "../cerebri_cubs2/build-native_sim/zephyr/zephyr.exe".to_string())
 }
 
 fn default_udp_rx_port() -> u16 {

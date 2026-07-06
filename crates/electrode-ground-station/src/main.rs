@@ -34,10 +34,7 @@ use serde::Serialize;
 use autopilot::AutopilotProfile;
 use autopilot_link::{AutopilotLink, AutopilotRunStatus};
 use mapping::MappingProfile;
-use simulation::{
-    ModelicaFile, ModelicaFileSave, SimulationCheckResult, SimulationProfile, SimulationStatus,
-    SimulationSupervisor,
-};
+use simulation::{ModelicaFile, ModelicaFileSave, SimulationProfile};
 use supervisor::Supervisor;
 use zenoh_hub::{ZenohHub, ZenohHubConfig};
 
@@ -87,8 +84,7 @@ struct AppState {
     autopilot_file: PathBuf,
     simulation: RwLock<SimulationProfile>,
     simulation_file: PathBuf,
-    simulation_supervisor: SimulationSupervisor,
-    sim_bridge: sim_bridge::SimBridge,
+    _sim_bridge: sim_bridge::SimBridge,
     supervisor: Supervisor,
     ppm_supervisor: Supervisor,
     autopilot_link: AutopilotLink,
@@ -237,60 +233,6 @@ async fn put_simulation_model(
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
 }
 
-async fn simulation_check(
-    State(state): State<Shared>,
-) -> Result<Json<SimulationCheckResult>, (StatusCode, String)> {
-    let profile = state
-        .simulation
-        .read()
-        .expect("simulation lock poisoned")
-        .clone();
-    profile
-        .check_config()
-        .map(Json)
-        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
-}
-
-async fn simulation_status(State(state): State<Shared>) -> Json<SimulationStatus> {
-    let mut status = state.simulation_supervisor.status();
-    status.sim_bridge = state.sim_bridge.counts();
-    Json(status)
-}
-
-async fn simulation_start(
-    State(state): State<Shared>,
-) -> Result<Json<SimulationStatus>, (StatusCode, String)> {
-    let profile = state
-        .simulation
-        .read()
-        .expect("simulation lock poisoned")
-        .clone();
-    state
-        .simulation_supervisor
-        .start(&profile)
-        .map(Json)
-        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
-}
-
-async fn simulation_stop(State(state): State<Shared>) -> Json<SimulationStatus> {
-    Json(state.simulation_supervisor.stop())
-}
-
-async fn simulation_restart(
-    State(state): State<Shared>,
-) -> Result<Json<SimulationStatus>, (StatusCode, String)> {
-    let profile = state
-        .simulation
-        .read()
-        .expect("simulation lock poisoned")
-        .clone();
-    state
-        .simulation_supervisor
-        .restart(&profile)
-        .map(Json)
-        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BridgeStatus {
@@ -403,8 +345,7 @@ async fn main() -> anyhow::Result<()> {
         autopilot_file: cli.autopilot_file.clone(),
         simulation: RwLock::new(SimulationProfile::load_or_default(&cli.simulation_file)),
         simulation_file: cli.simulation_file.clone(),
-        simulation_supervisor: SimulationSupervisor::new(),
-        sim_bridge,
+        _sim_bridge: sim_bridge,
         supervisor: Supervisor::manual_control(),
         ppm_supervisor: Supervisor::ppm_bridge(),
         autopilot_link: AutopilotLink::new(),
@@ -427,11 +368,6 @@ async fn main() -> anyhow::Result<()> {
             "/simulation/model",
             get(simulation_model).put(put_simulation_model),
         )
-        .route("/simulation/check", post(simulation_check))
-        .route("/simulation/status", get(simulation_status))
-        .route("/simulation/start", post(simulation_start))
-        .route("/simulation/stop", post(simulation_stop))
-        .route("/simulation/restart", post(simulation_restart))
         .route("/bridge", get(bridge_status))
         .route("/bridge/start", post(bridge_start))
         .route("/bridge/stop", post(bridge_stop))

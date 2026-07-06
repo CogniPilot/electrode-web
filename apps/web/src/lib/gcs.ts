@@ -84,19 +84,6 @@ export interface SimulationProfile {
   actuatorOutputTopic: string;
   sensorOutputTopic: string;
   telemetryOutputTopic: string;
-  executable: string;
-}
-
-export interface SimulationStatus {
-  running: boolean;
-  pid: number | null;
-  startedAtMs: number | null;
-  message: string;
-  commandLine: string[];
-  simBridge: {
-    radioPwmFrames: number;
-    mocapFrames: number;
-  };
 }
 
 export interface ModelicaFile {
@@ -104,14 +91,6 @@ export interface ModelicaFile {
   text: string;
   editable: boolean;
   lspCommand: string;
-}
-
-export interface SimulationCheckResult {
-  ok: boolean;
-  status: number | null;
-  commandLine: string[];
-  stdout: string;
-  stderr: string;
 }
 
 /** Live raw joystick state pushed over the inspector WebSocket. */
@@ -188,6 +167,49 @@ export interface AutopilotRunStatus {
   framesIn: number;
 }
 
+export type FirmwareSource = 'localBuild' | 'releaseArtifact' | 'ciArtifact' | 'customFile';
+export type FlashMethod = 'usbBootloader' | 'dfu' | 'serialBootloader' | 'sdCard' | 'externalTool';
+export type RuntimeTransport = 'zenoh' | 'mavlinkSerial' | 'mavlinkUdp' | 'mavlinkTcp';
+export type RuntimeProtocol = 'synapseZenoh' | 'mavlink';
+
+export interface AutopilotProfile {
+  stackName: string;
+  stackPath: string;
+  firmwareSource: FirmwareSource;
+  firmwareArtifact: string;
+  boardTarget: string;
+  flashMethod: FlashMethod;
+  runtimeTransport: RuntimeTransport;
+  runtimeEndpoint: string;
+  missionProtocol: RuntimeProtocol;
+  parameterProtocol: RuntimeProtocol;
+  calibrationProtocol: RuntimeProtocol;
+  nativeBinary: string;
+  udpRxPort: number;
+  udpTxPort: number;
+  inboundTopics: string[];
+}
+
+export async function fetchAutopilotProfile(signal?: AbortSignal): Promise<AutopilotProfile> {
+  const response = await fetch(gcsUrl('autopilot'), { signal });
+  if (!response.ok) {
+    throw new Error(`gcs/autopilot responded ${response.status}`);
+  }
+  return (await response.json()) as AutopilotProfile;
+}
+
+export async function saveAutopilotProfile(profile: AutopilotProfile): Promise<AutopilotProfile> {
+  const response = await fetch(gcsUrl('autopilot'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(profile)
+  });
+  if (!response.ok) {
+    throw new Error(`saving autopilot profile failed (${response.status})`);
+  }
+  return (await response.json()) as AutopilotProfile;
+}
+
 export async function fetchAutopilotRunStatus(signal?: AbortSignal): Promise<AutopilotRunStatus> {
   const response = await fetch(gcsUrl('autopilot/status'), { signal });
   if (!response.ok) {
@@ -225,22 +247,6 @@ export async function saveSimulationProfile(profile: SimulationProfile): Promise
   return (await response.json()) as SimulationProfile;
 }
 
-export async function fetchSimulationStatus(signal?: AbortSignal): Promise<SimulationStatus> {
-  const response = await fetch(gcsUrl('simulation/status'), { signal });
-  if (!response.ok) {
-    throw new Error(`gcs/simulation/status responded ${response.status}`);
-  }
-  return (await response.json()) as SimulationStatus;
-}
-
-export async function setSimulationRunning(action: 'start' | 'stop' | 'restart'): Promise<SimulationStatus> {
-  const response = await fetch(gcsUrl(`simulation/${action}`), { method: 'POST' });
-  if (!response.ok) {
-    throw new Error(`simulation ${action} failed (${response.status})`);
-  }
-  return (await response.json()) as SimulationStatus;
-}
-
 export async function fetchSimulationModel(signal?: AbortSignal): Promise<ModelicaFile> {
   const response = await fetch(gcsUrl('simulation/model'), { signal });
   if (!response.ok) {
@@ -259,14 +265,6 @@ export async function saveSimulationModel(path: string, text: string): Promise<M
     throw new Error(`saving simulation model failed (${response.status})`);
   }
   return (await response.json()) as ModelicaFile;
-}
-
-export async function checkSimulationConfig(): Promise<SimulationCheckResult> {
-  const response = await fetch(gcsUrl('simulation/check'), { method: 'POST' });
-  if (!response.ok) {
-    throw new Error(`simulation check failed (${response.status})`);
-  }
-  return (await response.json()) as SimulationCheckResult;
 }
 
 /** Open a WebSocket to the live raw-joystick inspector for a device. */

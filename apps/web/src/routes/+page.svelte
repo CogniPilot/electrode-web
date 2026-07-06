@@ -5,18 +5,19 @@
   import DeflectionView from '$lib/components/DeflectionView.svelte';
   import ManualLinkView from '$lib/components/ManualLinkView.svelte';
   import GroundStationPanel from '$lib/components/GroundStationPanel.svelte';
+  import AutopilotConfigPanel from '$lib/components/AutopilotConfigPanel.svelte';
   import RcMappingPanel from '$lib/components/RcMappingPanel.svelte';
   import PpmHardwarePanel from '$lib/components/PpmHardwarePanel.svelte';
   import SimulationPanel from '$lib/components/SimulationPanel.svelte';
   import { detectGroundStation, isGroundStation } from '$lib/capabilities';
   import {
     fetchDevices,
-    fetchAutopilotRunStatus,
-    fetchBridgeStatus,
-    setAutopilotRunning,
-    setBridgeRunning,
-    type AutopilotRunStatus
-  } from '$lib/gcs';
+      fetchAutopilotRunStatus,
+      fetchBridgeStatus,
+      setAutopilotRunning,
+      setBridgeRunning,
+      type AutopilotRunStatus
+    } from '$lib/gcs';
   import {
     Activity,
     AlertTriangle,
@@ -781,6 +782,7 @@
       <GroundStationPanel {theme} />
       <details class="config-panel">
         <summary>Dashboard config</summary>
+        <AutopilotConfigPanel {theme} />
         <RcMappingPanel {theme} />
         <PpmHardwarePanel {theme} channels={radioControl} />
       </details>

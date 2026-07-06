@@ -1,13 +1,11 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import {
-    checkSimulationConfig,
     fetchSimulationModel,
     fetchSimulationProfile,
     saveSimulationModel,
     saveSimulationProfile,
     type ModelicaFile,
-    type SimulationCheckResult,
     type SimulationProfile,
     type SimulationVehicleKind
   } from '$lib/gcs';
@@ -51,7 +49,6 @@
   let profile: SimulationProfile | null = null;
   let modelFile: ModelicaFile | null = null;
   let modelText = '';
-  let checkResult: SimulationCheckResult | null = null;
   let status = '';
   let editorStatus = '';
   let modelDirty = false;
@@ -67,6 +64,11 @@
   function toNumber(value: string, fallback: number): number {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  function modelPathLabel(profile: SimulationProfile, modelFile: ModelicaFile | null): string {
+    const configured = `${profile.projectPath.replace(/\/$/, '')}/${profile.modelPath.replace(/^\//, '')}`;
+    return configured || modelFile?.path || 'FixedWingTrueSILFull.mo';
   }
 
   function setField<K extends keyof SimulationProfile>(field: K, value: SimulationProfile[K]): void {
@@ -113,22 +115,6 @@
       editorStatus = 'model saved';
     } catch (err) {
       editorStatus = err instanceof Error ? err.message : 'model save failed';
-    }
-  }
-
-  async function runCheck(): Promise<void> {
-    try {
-      if (saveTimer) {
-        clearTimeout(saveTimer);
-        saveTimer = null;
-        await doSave();
-      }
-      if (modelDirty) await saveModelFile();
-      editorStatus = 'checking model...';
-      checkResult = await checkSimulationConfig();
-      editorStatus = checkResult.ok ? 'check passed' : 'check failed';
-    } catch (err) {
-      editorStatus = err instanceof Error ? err.message : 'check failed';
     }
   }
 
@@ -193,14 +179,10 @@
 
         <div class="panel">
           <div class="panel-head">
-            <strong>Rumoca project</strong>
+            <strong>Model</strong>
             <span>{status}</span>
           </div>
 
-          <!-- No manual/autopilot choice here: exactly like the real plane,
-               the transmitter mode switch decides. Stabilization travels as
-               the Active flag on manual_control_command. Watch it live in
-               Autopilot I/O. -->
           <label>
             <span>Vehicle</span>
             <select value={profile.vehicleKind} onchange={(e) => setField('vehicleKind', e.currentTarget.value as SimulationVehicleKind)}>
@@ -208,16 +190,6 @@
                 <option value={vehicle}>{label(vehicle)}</option>
               {/each}
             </select>
-          </label>
-
-          <label>
-            <span>Project path</span>
-            <input value={profile.projectPath} spellcheck="false" oninput={(e) => setField('projectPath', e.currentTarget.value)} />
-          </label>
-
-          <label>
-            <span>Rumoca executable</span>
-            <input value={profile.executable} spellcheck="false" oninput={(e) => setField('executable', e.currentTarget.value)} />
           </label>
 
           <label>
@@ -256,21 +228,15 @@
         <div class="editor-toolbar">
           <div>
             <strong>FixedWingTrueSILFull.mo</strong>
-            <span>{modelFile?.path ?? profile.modelPath}</span>
+            <span>{modelPathLabel(profile, modelFile)}</span>
           </div>
           <div class="editor-actions">
             <button type="button" class="quiet" onclick={loadModelFile}>Reload</button>
-            <button type="button" class="quiet" onclick={runCheck}>Check</button>
             <button type="button" class="primary" disabled={!modelDirty} onclick={saveModelFile}>Save</button>
           </div>
         </div>
 
-        <div class="model-row">
-          <label>
-            <span>Modelica file</span>
-            <input value={profile.modelPath} spellcheck="false" oninput={(e) => setField('modelPath', e.currentTarget.value)} />
-          </label>
-
+        <div class="model-row single">
           <label class="confirm">
             <input type="checkbox" checked={profile.modelEditable} onchange={(e) => setField('modelEditable', e.currentTarget.checked)} />
             <span>Editable</span>
@@ -297,15 +263,6 @@
           ></textarea>
         </div>
 
-        {#if checkResult}
-          <div class="check-output" class:ok={checkResult.ok}>
-            <div>
-              <strong>{checkResult.ok ? 'Check passed' : 'Check failed'}</strong>
-              <span>{checkResult.commandLine.join(' ')}</span>
-            </div>
-            <pre>{checkResult.stdout || checkResult.stderr || 'no output'}</pre>
-          </div>
-        {/if}
       </main>
     </div>
 
@@ -354,8 +311,7 @@
   label span,
   .empty,
   .lsp-strip span,
-  .lsp-strip em,
-  .check-output span {
+  .lsp-strip em {
     color: #91a39c;
     font-size: 0.66rem;
     font-weight: 700;
@@ -388,8 +344,7 @@
   }
 
   .panel,
-  .editor-shell,
-  .check-output {
+  .editor-shell {
     padding: 10px;
     border: 1px solid rgba(145, 163, 156, 0.24);
     border-radius: 8px;
@@ -564,30 +519,6 @@
     white-space: pre;
     overflow: auto;
     tab-size: 2;
-  }
-
-  .check-output {
-    display: grid;
-    gap: 8px;
-    border-color: rgba(255, 120, 120, 0.32);
-  }
-
-  .check-output.ok {
-    border-color: rgba(126, 224, 172, 0.28);
-  }
-
-  .check-output > div {
-    display: grid;
-    gap: 4px;
-  }
-
-  .check-output pre {
-    max-height: 240px;
-    margin: 0;
-    overflow: auto;
-    white-space: pre-wrap;
-    color: inherit;
-    font-size: 0.7rem;
   }
 
   @media (max-width: 1060px) {

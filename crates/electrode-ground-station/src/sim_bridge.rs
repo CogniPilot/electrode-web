@@ -1,5 +1,4 @@
-//! Ground Station boundary for the sim plant (in-browser Rumoca WASM or the
-//! native sim executable).
+//! Ground Station boundary for the in-browser Rumoca WASM sim plant.
 //!
 //! The plant is private behind the Ground Station: it publishes MocapFrame
 //! FlatBuffers on `electrode/sim/rumoca/mocap_frame`, and this bridge
@@ -38,8 +37,6 @@ const MANUAL_CONTROL_PAYLOAD_SIZE: usize = 40;
 pub(crate) struct SimBridge {
     _session: zenoh::Session,
     _subscribers: Vec<zenoh::pubsub::Subscriber<()>>,
-    radio_pwm_frames: Arc<AtomicU64>,
-    mocap_frames: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,16 +77,7 @@ impl SimBridge {
         Ok(Self {
             _session: session,
             _subscribers: subscribers,
-            radio_pwm_frames,
-            mocap_frames,
         })
-    }
-
-    pub(crate) fn counts(&self) -> SimBridgeCounts {
-        SimBridgeCounts {
-            radio_pwm_frames: self.radio_pwm_frames.load(Ordering::Relaxed),
-            mocap_frames: self.mocap_frames.load(Ordering::Relaxed),
-        }
     }
 }
 
@@ -296,13 +284,6 @@ fn mocap_definition_payload(body_id: i32, body_name: &str) -> Vec<u8> {
     );
     builder.finish(definition, None);
     builder.finished_data().to_vec()
-}
-
-#[derive(Debug, Clone, Default, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SimBridgeCounts {
-    pub radio_pwm_frames: u64,
-    pub mocap_frames: u64,
 }
 
 fn manual_selection_from_payload(payload: &[u8]) -> Option<(ManualMode, PpmChannels, Vec<u8>)> {
