@@ -18,6 +18,10 @@ cargo run --locked --manifest-path xtask/Cargo.toml -- docs --version main --out
 
 Open `target/xtask/docs/main/index.html` after the build completes.
 
+The GitHub Pages workflow builds the same book into
+`apps/web/build/dev-book`, so updates to the app and documentation deploy
+together at `/electrode-web/dev-book/` when changes land on `main`.
+
 ## Source Map
 
 - `apps/web` contains the SvelteKit app used by static hosting and the local

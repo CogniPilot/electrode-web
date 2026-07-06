@@ -40,6 +40,10 @@ jobs:
       - run: nix develop --command npm run build
         env:
           ELECTRODE_WEB_BASE_PATH: /electrode-web
+      - name: Install mdBook
+        run: nix develop --command cargo install mdbook --version "$(awk -F= '/^MDBOOK_VERSION=/{print $2}' tools.lock)" --locked
+      - name: Build developer book
+        run: nix develop --command bash -lc 'export PATH="$HOME/.cargo/bin:$PATH"; cargo run --locked --manifest-path xtask/Cargo.toml -- docs --version main --out-dir apps/web/build/dev-book'
       - run: nix develop --command npm run verify:pages
         env:
           ELECTRODE_WEB_BASE_PATH: /electrode-web

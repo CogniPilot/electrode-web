@@ -179,8 +179,10 @@ cargo install mdbook --version "$(awk -F= '/^MDBOOK_VERSION=/{print $2}' tools.l
 cargo run --locked --manifest-path xtask/Cargo.toml -- docs --version main --out-dir target/xtask/docs
 ```
 
-The docs workflow publishes `main` and release-tag snapshots to the `gh-pages`
-branch with the same version-selector pattern used by `synapse_fbs`.
+Open `target/xtask/docs/main/index.html` for a local copy. GitHub Actions also
+builds the book into `apps/web/build/dev-book` during the normal Pages build, so
+pushes to `main` deploy the app and the developer book together at
+`https://cognipilot.github.io/electrode-web/dev-book/`.
 
 ## Notes
 
