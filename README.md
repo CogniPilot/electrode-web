@@ -5,6 +5,7 @@ Synapse/Zenoh systems. The same SvelteKit build runs as a static GitHub Pages
 viewer and as the UI served by the local Rust ground-station daemon.
 
 - Static Viewer: <https://cognipilot.github.io/electrode-web/>
+- Developer Book: <https://cognipilot.github.io/electrode-web/dev-book/>
 - Local Ground Station: <http://127.0.0.1:8790/> after `npm run ground-station`
 
 ## What It Does
