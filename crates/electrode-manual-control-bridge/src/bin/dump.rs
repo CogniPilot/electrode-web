@@ -58,7 +58,7 @@ fn main() -> Result<()> {
             .recv()
             .map_err(|error| DumpError::Zenoh(error.to_string()))?;
         let payload = sample.payload().to_bytes();
-        // 0.3.0 transmits ManualControlData as a bare fixed-layout struct.
+        // synapse_fbs transmits ManualControlData as a bare fixed-layout struct.
         if payload.len() != MANUAL_CONTROL_PAYLOAD_SIZE {
             return Err(DumpError::PayloadSize {
                 expected: MANUAL_CONTROL_PAYLOAD_SIZE,

@@ -15,9 +15,8 @@ const WAYPOINTS: Array<[number, number, number]> = [
   [-4.0, -5.0, 3.0]
 ];
 const MISSION_ID = 1;
-const CMD_MISSION_ITEM_LOCAL = 32001;
 
-// Wire encoders matching the synapse_fbs 0.3.0 fixed-layout C structs the
+// Wire encoders matching the synapse_fbs 0.5.0 fixed-layout structs the
 // firmware transmits (bare struct bytes, little-endian).
 function encodeMissionProgress(currentSeq: number, total: number, state: number): Uint8Array {
   const bytes = new Uint8Array(32);
@@ -42,13 +41,21 @@ function encodeLocalPositionCommand(east: number, north: number, up: number, yaw
   return bytes;
 }
 
-function encodeMissionItemCommand(seq: number): Uint8Array {
-  const bytes = new Uint8Array(40);
+function encodeTrajectorySegment(seq: number, trajectoryId = MISSION_ID): Uint8Array {
+  const bytes = new Uint8Array(168);
   const view = new DataView(bytes.buffer);
   view.setBigUint64(0, 123_456n, true);
-  const args = [seq, WAYPOINTS.length, ...WAYPOINTS[seq], MISSION_ID, 0];
-  args.forEach((value, index) => view.setFloat32(8 + index * 4, value, true));
-  view.setUint16(36, CMD_MISSION_ITEM_LOCAL, true);
+  const waypoint = WAYPOINTS[seq] ?? [0, 0, 0];
+  view.setFloat32(16, waypoint[0], true); // p0_enu_m.x
+  view.setFloat32(20, waypoint[1], true); // p0_enu_m.y
+  view.setFloat32(24, waypoint[2], true); // p0_enu_m.z
+  view.setUint32(144, trajectoryId, true);
+  view.setUint32(148, seq, true);
+  view.setUint32(156, 1, true); // plan_version
+  view.setUint16(160, seq === 0 ? 1 : seq === WAYPOINTS.length - 1 ? 2 : 0, true);
+  view.setUint8(162, 1); // TrajectoryType.Bezier
+  view.setUint8(163, 3); // TrajectoryDegree.Cubic
+  view.setUint8(164, 0); // LocalFrame.LocalEnu
   return bytes;
 }
 
@@ -77,9 +84,10 @@ describe('mission telemetry pipeline', () => {
   it('classifies the mission wire topics', () => {
     expect(classify('synapse/v1/topic/mission_progress')).toBe('MissionProgress');
     expect(classify('synapse/v1/topic/local_position_command')).toBe('LocalPositionCommand');
-    expect(classify('synapse/v1/topic/vehicle_command')).toBe('VehicleCommand');
+    expect(classify('synapse/v1/topic/trajectory_segment')).toBe('TrajectorySegment');
     // Must not shadow neighbouring topics.
     expect(classify('synapse/v1/topic/local_position_estimate')).toBe('Raw');
+    expect(classify('synapse/v1/topic/vehicle_command')).toBe('Raw');
     expect(classify('synapse/v1/topic/vehicle_health')).toBe('VehicleHealth');
   });
 
@@ -119,7 +127,7 @@ describe('mission telemetry pipeline', () => {
       const seq = (i + 3) % WAYPOINTS.length;
       state = applyGcsFrame(
         state,
-        frameFor('synapse/v1/topic/vehicle_command', encodeMissionItemCommand(seq), sequence++),
+        frameFor('synapse/v1/topic/trajectory_segment', encodeTrajectorySegment(seq), sequence++),
         10_000
       );
     }
@@ -134,37 +142,41 @@ describe('mission telemetry pipeline', () => {
     });
   });
 
-  it('ignores non-mission vehicle commands and resyncs on a new mission id', () => {
+  it('ignores invalid trajectory segments and resyncs on a new trajectory id', () => {
     let state = createInitialVehicleState('cubs2');
     state = applyGcsFrame(
       state,
-      frameFor('synapse/v1/topic/vehicle_command', encodeMissionItemCommand(0), 1),
+      frameFor('synapse/v1/topic/mission_progress', encodeMissionProgress(0, WAYPOINTS.length, 2), 1),
+      10_000
+    );
+    state = applyGcsFrame(
+      state,
+      frameFor('synapse/v1/topic/trajectory_segment', encodeTrajectorySegment(0), 2),
       10_000
     );
     expect(state.mission?.waypoints[0]).toMatchObject({ seq: 0 });
 
-    // A different producer command id must not disturb the plan.
-    const other = encodeMissionItemCommand(1);
-    new DataView(other.buffer).setUint16(36, 77, true);
-    const decoded = decode('synapse/v1/topic/vehicle_command', other);
+    // Invalid coordinates must not disturb the plan.
+    const other = encodeTrajectorySegment(1);
+    new DataView(other.buffer).setFloat32(16, Number.NaN, true);
+    const decoded = decode('synapse/v1/topic/trajectory_segment', other);
     state = applyGcsFrame(
       state,
       {
-        ...frameFor('synapse/v1/topic/vehicle_command', encodeMissionItemCommand(1), 2),
+        ...frameFor('synapse/v1/topic/trajectory_segment', encodeTrajectorySegment(1), 3),
         payload: decoded.payload
       },
       10_000
     );
     expect(state.mission?.waypoints[1]).toBeNull();
 
-    // A new mission id clears the previously received items.
-    const renumbered = encodeMissionItemCommand(1);
-    new DataView(renumbered.buffer).setFloat32(28, 9, true); // arg5 = mission_id 9
+    // A new trajectory id clears the previously received items.
+    const renumbered = encodeTrajectorySegment(1, 9);
     state = applyGcsFrame(
       state,
       {
-        ...frameFor('synapse/v1/topic/vehicle_command', renumbered, 3),
-        payload: decode('synapse/v1/topic/vehicle_command', renumbered).payload
+        ...frameFor('synapse/v1/topic/trajectory_segment', renumbered, 4),
+        payload: decode('synapse/v1/topic/trajectory_segment', renumbered).payload
       },
       10_000
     );

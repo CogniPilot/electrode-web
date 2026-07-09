@@ -84,7 +84,7 @@ export function makeSimulatedTelemetryBundle(options: SimulationOptions): Teleme
     makeMocapFrame(options, state, synapseFrame),
     makeOpticalFlowFrame(state, synapseFrame),
     makeOpticalFlowVelocityFrame(state, synapseFrame),
-    makeSimInputFrame(options, state, synapseFrame)
+    makeLockstepTickFrame(options, synapseFrame)
   ];
 }
 
@@ -347,8 +347,7 @@ function makeMocapFrame(
           residual: 0.0014 + Math.abs(Math.cos(state.t / 2)) * 0.0008,
           tracking_valid: true
         }
-      ],
-      skeleton_segments: []
+      ]
     },
     180
   );
@@ -402,31 +401,21 @@ function makeOpticalFlowVelocityFrame(state: SimulationState, frame: SynapseFram
   );
 }
 
-function makeSimInputFrame(
+function makeLockstepTickFrame(
   options: SimulationOptions,
-  state: SimulationState,
   frame: SynapseFrameBuilder
 ): TelemetryFrame {
   return frame(
-    'synapse/v1/sil/sim_input',
-    'synapse.sil.SimInput',
-    'synapse_sim_input',
+    'synapse/v1/topic/lockstep_tick',
+    'synapse.topic.LockstepTick',
+    'synapse_lockstep_tick',
     {
-      gyro: {
-        x: degToRad(Math.cos(state.t * 1.3) * 15.6),
-        y: degToRad(-Math.sin(state.t * 0.9) * 7.2),
-        z: degToRad(18)
-      },
-      accel: {
-        x: Math.sin(state.pitchRad) * 9.81,
-        y: -Math.sin(state.rollRad) * 9.81,
-        z: -Math.cos(state.rollRad) * Math.cos(state.pitchRad) * 9.81
-      },
-      rc: state.rc,
-      rc_link_quality: Math.round(state.localizationQuality * 100),
-      rc_valid: true,
-      imu_valid: true,
-      target_boot_time_ns: Math.round(options.elapsedMs * 1_000_000)
+      data: {
+        target_boot_time_us: Math.round(options.elapsedMs * 1000),
+        run_id: 1,
+        sequence: Math.floor(options.elapsedMs / 10),
+        flags: 0
+      }
     },
     180
   );

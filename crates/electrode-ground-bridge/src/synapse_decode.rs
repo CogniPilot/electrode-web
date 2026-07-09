@@ -6,7 +6,7 @@
 //! topics we understand. Anything we do not recognize is still surfaced to the
 //! operator as a raw payload so it remains discoverable.
 //!
-//! Wire encoding (synapse_fbs 0.3.0): every fixed-layout topic is transmitted
+//! Wire encoding (synapse_fbs 0.5.0): every fixed-layout topic is transmitted
 //! as the *bare* `*Data` struct (raw fixed-size bytes), not a FlatBuffers root
 //! table. We decode those exactly like `synapse_fbs::topic_decode::decode_struct`
 //! (size-check then `Follow::follow`). Only `mocap_frame` is a root table.
@@ -15,8 +15,10 @@ use flatbuffers::root;
 use serde_json::{json, Value};
 use synapse_fbs::topic::{
     AttitudeEstimateData, AttitudeEstimateFlags, ManualControlData, ManualControlFlags, MocapFrame,
-    PowerStatusData, PwmSignalOutputsData, RadioControlData, VehicleHealthData, VehicleHealthFlags,
+    MocapRawFlags, PowerStatusData, PwmSignalOutputsData, RadioControlData, VehicleHealthData,
+    VehicleHealthFlags,
 };
+use synapse_fbs::types::RotationMatrix3f;
 
 /// A payload decoded (or passed through) from a Zenoh sample.
 pub(crate) struct Decoded {
@@ -329,24 +331,25 @@ fn decode_mocap_frame(bytes: &[u8]) -> Option<Value> {
     if let Some(bodies) = frame.rigid_bodies() {
         for body in bodies.iter() {
             let p = body.position_enu_m();
-            let q = body.attitude();
+            let q = rotation_matrix_to_quaternion(body.rotation());
+            let flags = MocapRawFlags::from_bits_retain(body.flags());
             rigid_bodies.push(json!({
                 "id": body.id(),
                 "position": { "x": p.x(), "y": p.y(), "z": p.z() },
-                "attitude": { "x": q.x(), "y": q.y(), "z": q.z(), "w": q.w() },
-                "residual": body.residual(),
-                "tracking_valid": body.tracking_valid()
+                "attitude": { "x": q.0, "y": q.1, "z": q.2, "w": q.3 },
+                "residual": body.residual_mm(),
+                "tracking_valid": flags.contains(MocapRawFlags::Valid)
             }));
         }
     }
     let mut labeled_markers: Vec<Value> = Vec::new();
-    if let Some(markers) = frame.labeled_markers() {
+    if let Some(markers) = frame.markers() {
         for marker in markers.iter() {
             let p = marker.position_enu_m();
             labeled_markers.push(json!({
                 "id": marker.id(),
                 "position": { "x": p.x(), "y": p.y(), "z": p.z() },
-                "residual": marker.residual()
+                "residual": marker.residual_mm()
             }));
         }
     }
@@ -356,4 +359,64 @@ fn decode_mocap_frame(bytes: &[u8]) -> Option<Value> {
         "rigid_bodies": rigid_bodies,
         "labeled_markers": labeled_markers
     }))
+}
+
+fn rotation_matrix_to_quaternion(rotation: &RotationMatrix3f) -> (f32, f32, f32, f32) {
+    let trace = rotation.r11() + rotation.r22() + rotation.r33();
+    let quaternion = if trace > 0.0 {
+        let scale = (trace + 1.0).sqrt() * 2.0;
+        (
+            (rotation.r32() - rotation.r23()) / scale,
+            (rotation.r13() - rotation.r31()) / scale,
+            (rotation.r21() - rotation.r12()) / scale,
+            0.25 * scale,
+        )
+    } else if rotation.r11() > rotation.r22() && rotation.r11() > rotation.r33() {
+        let scale = (1.0 + rotation.r11() - rotation.r22() - rotation.r33()).sqrt() * 2.0;
+        (
+            0.25 * scale,
+            (rotation.r12() + rotation.r21()) / scale,
+            (rotation.r13() + rotation.r31()) / scale,
+            (rotation.r32() - rotation.r23()) / scale,
+        )
+    } else if rotation.r22() > rotation.r33() {
+        let scale = (1.0 + rotation.r22() - rotation.r11() - rotation.r33()).sqrt() * 2.0;
+        (
+            (rotation.r12() + rotation.r21()) / scale,
+            0.25 * scale,
+            (rotation.r23() + rotation.r32()) / scale,
+            (rotation.r13() - rotation.r31()) / scale,
+        )
+    } else {
+        let scale = (1.0 + rotation.r33() - rotation.r11() - rotation.r22()).sqrt() * 2.0;
+        (
+            (rotation.r13() + rotation.r31()) / scale,
+            (rotation.r23() + rotation.r32()) / scale,
+            0.25 * scale,
+            (rotation.r21() - rotation.r12()) / scale,
+        )
+    };
+    normalize_quaternion(quaternion)
+}
+
+fn normalize_quaternion(quaternion: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+    let norm = (quaternion.0.mul_add(
+        quaternion.0,
+        quaternion.1.mul_add(
+            quaternion.1,
+            quaternion
+                .2
+                .mul_add(quaternion.2, quaternion.3 * quaternion.3),
+        ),
+    ))
+    .sqrt();
+    if !norm.is_finite() || norm == 0.0 {
+        return (0.0, 0.0, 0.0, 1.0);
+    }
+    (
+        quaternion.0 / norm,
+        quaternion.1 / norm,
+        quaternion.2 / norm,
+        quaternion.3 / norm,
+    )
 }
