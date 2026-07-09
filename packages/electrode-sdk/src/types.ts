@@ -129,8 +129,8 @@ export interface MissionWaypoint {
 /**
  * Mission plan and progress derived from the Synapse wire: `mission_progress`
  * carries the active item and count, `local_position_command` the active
- * target setpoint, and the waypoint table arrives item-by-item over the
- * cubs2 `vehicle_command` mission-item broadcast (command 32001).
+ * target setpoint, and the waypoint table arrives segment-by-segment over
+ * `trajectory_segment`.
  */
 export interface MissionPlanState {
   missionId: number;

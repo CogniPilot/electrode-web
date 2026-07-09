@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   encodeCompactRigidBodyPose,
-  encodeMocapDefinition,
   encodeMocapFrame
 } from './mocap-encode';
 import { classify, decode } from './synapse-decode';
@@ -12,7 +11,7 @@ describe('Synapse decoder', () => {
     expect(classify('robot/synapse/v1/topic/manual_control_command')).toBe('ManualControl');
     expect(classify('synapse/mocap/rigid_body/cub1/pose')).toBe('MocapFrame');
     expect(classify('synapse/mocap/frame')).toBe('MocapFrame');
-    expect(classify('synapse/mocap/definition')).toBe('MocapDefinition');
+    expect(classify('synapse/mocap/definition')).toBe('Raw');
     expect(classify('synapse/v1/topic/unknown')).toBe('Raw');
   });
 
@@ -98,24 +97,6 @@ describe('Mocap wire contract', () => {
       .rigid_bodies[0];
     expect(body.position).toMatchObject(pose.position);
     expect(body.attitude).toMatchObject(pose.attitude);
-  });
-
-  it('round-trips the mocap definition metadata packet', () => {
-    const bytes = encodeMocapDefinition({
-      source: 'electrode-sim',
-      frameId: 'mocap',
-      rigidBodies: [{ id: 1, name: 'cub1' }]
-    });
-
-    const decoded = decode('synapse/mocap/definition', bytes);
-
-    expect(decoded.decoded).toBe(true);
-    expect(decoded.schema).toBe('MocapDefinition');
-    expect(decoded.payload).toMatchObject({
-      source: 'electrode-sim',
-      frame_id: 'mocap',
-      rigid_bodies: [{ id: 1, name: 'cub1' }]
-    });
   });
 
   it('decodes full MocapFrame FlatBuffers on the synapse/mocap/frame topic', () => {

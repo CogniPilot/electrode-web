@@ -8,19 +8,16 @@
 //!   - `synapse/mocap/frame`                  — MocapFrame FlatBuffer, verbatim
 //!   - `synapse/mocap/rigid_body/cub1/pose`   — compact 28-byte pose
 //!     (little-endian f32 `[px, py, pz, qx, qy, qz, qw]`, ENU metres, w last)
-//!   - `synapse/mocap/definition`             — MocapDefinition FlatBuffer, once
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use electrode_ppm_bridge::{
     channels_to_pwm_signal_outputs_payload, manual_control_to_channels,
     pwm_signal_outputs_to_channels, PpmChannels, FAILSAFE_CHANNELS,
 };
-use synapse_fbs::topic::{
-    ManualControlData, ManualControlFlags, MocapDefinition, MocapDefinitionArgs, MocapFrame,
-    MocapRigidBodyDefinition, MocapRigidBodyDefinitionArgs, MocapRigidBodySample,
-};
+use synapse_fbs::topic::{ManualControlData, ManualControlFlags, MocapFrame, MocapRigidBodyData};
+use synapse_fbs::types::RotationMatrix3f;
 use zenoh::Wait;
 
 pub(crate) const PRIVATE_RADIO_PWM_TOPIC: &str = "electrode/sim/rumoca/radio_pwm_signal_outputs";
@@ -30,8 +27,6 @@ const PUBLIC_PWM_TOPIC: &str = "synapse/v1/topic/pwm_signal_outputs";
 const PUBLIC_MANUAL_TOPIC: &str = "synapse/v1/topic/manual_control_command";
 const PUBLIC_MOCAP_FRAME_TOPIC: &str = "synapse/mocap/frame";
 const PUBLIC_MOCAP_POSE_TOPIC: &str = "synapse/mocap/rigid_body/cub1/pose";
-const PUBLIC_MOCAP_DEFINITION_TOPIC: &str = "synapse/mocap/definition";
-const MOCAP_RIGID_BODY_NAME: &str = "cub1";
 const MANUAL_CONTROL_PAYLOAD_SIZE: usize = 40;
 
 pub(crate) struct SimBridge {
@@ -150,12 +145,11 @@ fn subscribe_private_mocap(
 ) -> anyhow::Result<zenoh::pubsub::Subscriber<()>> {
     let subscribe_session = session.clone();
     let publish_session = session.clone();
-    let definition_published = Arc::new(AtomicBool::new(false));
     subscribe_session
         .declare_subscriber(PRIVATE_MOCAP_TOPIC)
         .callback(move |sample| {
             let bytes = sample.payload().to_bytes();
-            publish_mocap_sample(&publish_session, &count, &definition_published, &bytes);
+            publish_mocap_sample(&publish_session, &count, &bytes);
         })
         .wait()
         .map_err(|error| {
@@ -198,12 +192,7 @@ fn handle_public_manual_sample(
     publish_selected_radio_pwm(session, state, count);
 }
 
-fn publish_mocap_sample(
-    session: &zenoh::Session,
-    count: &AtomicU64,
-    definition_published: &AtomicBool,
-    bytes: &[u8],
-) {
+fn publish_mocap_sample(session: &zenoh::Session, count: &AtomicU64, bytes: &[u8]) {
     // The plant publishes schema-verified MocapFrame FlatBuffers; drop anything
     // else rather than republishing garbage on the public wire.
     let Ok(frame) = flatbuffers::root::<MocapFrame>(bytes) else {
@@ -213,15 +202,6 @@ fn publish_mocap_sample(
     let Some(body) = frame.rigid_bodies().and_then(|bodies| bodies.iter().next()) else {
         return;
     };
-
-    if !definition_published.swap(true, Ordering::Relaxed) {
-        let _ = session
-            .put(
-                PUBLIC_MOCAP_DEFINITION_TOPIC,
-                mocap_definition_payload(body.id(), MOCAP_RIGID_BODY_NAME),
-            )
-            .wait();
-    }
 
     let frame_ok = session
         .put(PUBLIC_MOCAP_FRAME_TOPIC, bytes.to_vec())
@@ -238,17 +218,17 @@ fn publish_mocap_sample(
 
 /// Compact per-rigid-body pose exactly as synapse_qualisys_bridge encodes it:
 /// little-endian f32 `[px, py, pz, qx, qy, qz, qw]` (ENU metres, scalar last).
-fn compact_pose_payload(body: &MocapRigidBodySample) -> [u8; 28] {
+fn compact_pose_payload(body: &MocapRigidBodyData) -> [u8; 28] {
     let position = body.position_enu_m();
-    let attitude = body.attitude();
+    let attitude = rotation_matrix_to_quaternion(body.rotation());
     let values = [
         position.x(),
         position.y(),
         position.z(),
-        attitude.x(),
-        attitude.y(),
-        attitude.z(),
-        attitude.w(),
+        attitude.0,
+        attitude.1,
+        attitude.2,
+        attitude.3,
     ];
     let mut payload = [0u8; 28];
     for (index, value) in values.into_iter().enumerate() {
@@ -257,33 +237,64 @@ fn compact_pose_payload(body: &MocapRigidBodySample) -> [u8; 28] {
     payload
 }
 
-/// Cached `synapse/mocap/definition` metadata, mirroring what a real mocap
-/// bridge publishes once at stream start.
-fn mocap_definition_payload(body_id: i32, body_name: &str) -> Vec<u8> {
-    let mut builder = flatbuffers::FlatBufferBuilder::new();
-    let name = builder.create_string(body_name);
-    let body = MocapRigidBodyDefinition::create(
-        &mut builder,
-        &MocapRigidBodyDefinitionArgs {
-            id: body_id,
-            name: Some(name),
-        },
-    );
-    let rigid_bodies = builder.create_vector(&[body]);
-    let source = builder.create_string("electrode-sim");
-    let frame_id = builder.create_string("mocap");
-    let definition = MocapDefinition::create(
-        &mut builder,
-        &MocapDefinitionArgs {
-            source: Some(source),
-            frame_id: Some(frame_id),
-            labeled_markers: None,
-            rigid_bodies: Some(rigid_bodies),
-            skeleton_segments: None,
-        },
-    );
-    builder.finish(definition, None);
-    builder.finished_data().to_vec()
+fn rotation_matrix_to_quaternion(rotation: &RotationMatrix3f) -> (f32, f32, f32, f32) {
+    let trace = rotation.r11() + rotation.r22() + rotation.r33();
+    let quaternion = if trace > 0.0 {
+        let scale = (trace + 1.0).sqrt() * 2.0;
+        (
+            (rotation.r32() - rotation.r23()) / scale,
+            (rotation.r13() - rotation.r31()) / scale,
+            (rotation.r21() - rotation.r12()) / scale,
+            0.25 * scale,
+        )
+    } else if rotation.r11() > rotation.r22() && rotation.r11() > rotation.r33() {
+        let scale = (1.0 + rotation.r11() - rotation.r22() - rotation.r33()).sqrt() * 2.0;
+        (
+            0.25 * scale,
+            (rotation.r12() + rotation.r21()) / scale,
+            (rotation.r13() + rotation.r31()) / scale,
+            (rotation.r32() - rotation.r23()) / scale,
+        )
+    } else if rotation.r22() > rotation.r33() {
+        let scale = (1.0 + rotation.r22() - rotation.r11() - rotation.r33()).sqrt() * 2.0;
+        (
+            (rotation.r12() + rotation.r21()) / scale,
+            0.25 * scale,
+            (rotation.r23() + rotation.r32()) / scale,
+            (rotation.r13() - rotation.r31()) / scale,
+        )
+    } else {
+        let scale = (1.0 + rotation.r33() - rotation.r11() - rotation.r22()).sqrt() * 2.0;
+        (
+            (rotation.r13() + rotation.r31()) / scale,
+            (rotation.r23() + rotation.r32()) / scale,
+            0.25 * scale,
+            (rotation.r21() - rotation.r12()) / scale,
+        )
+    };
+    normalize_quaternion(quaternion)
+}
+
+fn normalize_quaternion(quaternion: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+    let norm = (quaternion.0.mul_add(
+        quaternion.0,
+        quaternion.1.mul_add(
+            quaternion.1,
+            quaternion
+                .2
+                .mul_add(quaternion.2, quaternion.3 * quaternion.3),
+        ),
+    ))
+    .sqrt();
+    if !norm.is_finite() || norm == 0.0 {
+        return (0.0, 0.0, 0.0, 1.0);
+    }
+    (
+        quaternion.0 / norm,
+        quaternion.1 / norm,
+        quaternion.2 / norm,
+        quaternion.3 / norm,
+    )
 }
 
 fn manual_selection_from_payload(payload: &[u8]) -> Option<(ManualMode, PpmChannels, Vec<u8>)> {
@@ -334,17 +345,19 @@ fn publish_selected_radio_pwm(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use synapse_fbs::topic::MocapFrameArgs;
-    use synapse_fbs::types::{Quaternionf, Vec3f};
+    use synapse_fbs::topic::{MocapFrameArgs, MocapRawComponent, MocapRawFlags};
+    use synapse_fbs::types::Vec3f;
 
     fn mocap_frame_bytes() -> Vec<u8> {
         let mut builder = flatbuffers::FlatBufferBuilder::new();
-        let body = MocapRigidBodySample::new(
-            1,
+        let flags = (MocapRawFlags::Valid | MocapRawFlags::ResidualValid).bits();
+        let body = MocapRigidBodyData::new(
             &Vec3f::new(1.5, -2.25, 0.75),
-            &Quaternionf::new(0.8, 0.1, -0.2, 0.55),
+            &RotationMatrix3f::new(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
             0.001,
-            true,
+            1,
+            flags,
+            MocapRawComponent::RigidBody6d,
         );
         let bodies = builder.create_vector(&[body]);
         let frame = MocapFrame::create(
@@ -352,10 +365,8 @@ mod tests {
             &MocapFrameArgs {
                 timestamp_us: 123_456,
                 frame_number: 42,
-                labeled_markers: None,
-                unlabeled_markers: None,
                 rigid_bodies: Some(bodies),
-                skeleton_segments: None,
+                ..Default::default()
             },
         );
         builder.finish(frame, None);
@@ -377,22 +388,10 @@ mod tests {
         assert_eq!(f32_at(0), 1.5); // px
         assert_eq!(f32_at(4), -2.25); // py
         assert_eq!(f32_at(8), 0.75); // pz
-        assert_eq!(f32_at(12), 0.1); // qx
-        assert_eq!(f32_at(16), -0.2); // qy
-        assert_eq!(f32_at(20), 0.55); // qz
-        assert_eq!(f32_at(24), 0.8); // qw — scalar is last on the wire
-    }
-
-    #[test]
-    fn definition_payload_round_trips() {
-        let payload = mocap_definition_payload(1, MOCAP_RIGID_BODY_NAME);
-        let definition = flatbuffers::root::<MocapDefinition>(&payload).expect("parses");
-        assert_eq!(definition.source(), Some("electrode-sim"));
-        assert_eq!(definition.frame_id(), Some("mocap"));
-        let bodies = definition.rigid_bodies().unwrap();
-        assert_eq!(bodies.len(), 1);
-        assert_eq!(bodies.get(0).id(), 1);
-        assert_eq!(bodies.get(0).name(), Some("cub1"));
+        assert_eq!(f32_at(12), 0.0); // qx
+        assert_eq!(f32_at(16), 0.0); // qy
+        assert_eq!(f32_at(20), 0.0); // qz
+        assert_eq!(f32_at(24), 1.0); // qw — scalar is last on the wire
     }
 
     #[test]

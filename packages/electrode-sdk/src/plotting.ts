@@ -290,18 +290,15 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     ]
   },
   {
-    topic: 'synapse/v1/sil/sim_input',
-    schema: 'synapse.sil.SimInput',
-    label: 'SimInput',
+    topic: 'synapse/v1/topic/lockstep_tick',
+    schema: 'synapse.topic.LockstepTick',
+    label: 'LockstepTick',
     source: 'synapse_fbs',
     fields: [
-      ...vec3Fields('gyro', 'Gyro', 'rad/s'),
-      ...vec3Fields('accel', 'Accel', 'm/s^2'),
-      ...rcChannelFields('rc'),
-      numberField('rc_link_quality', 'RC quality', ''),
-      booleanField('rc_valid', 'RC valid'),
-      booleanField('imu_valid', 'IMU valid'),
-      numberField('target_boot_time_ns', 'Target boot time', 'ns')
+      numberField('data.target_boot_time_us', 'Target boot time', 'us'),
+      numberField('data.run_id', 'Run ID', ''),
+      numberField('data.sequence', 'Sequence', ''),
+      numberField('data.flags', 'Flags', '')
     ]
   }
 ];

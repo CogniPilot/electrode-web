@@ -6,7 +6,7 @@
 // committed readers were generated from the published `@cognipilot/synapse-fbs`
 // schemas; normal development and CI do not require `flatc`.
 //
-// Wire encoding (synapse_fbs 0.3.0): every topic is `table X { data: XData; }`
+// Wire encoding (synapse_fbs 0.5.0): every topic is `table X { data: XData; }`
 // EXCEPT fixed-layout structs, which are transmitted as the *bare* `*Data`
 // struct on the wire (raw fixed-size struct bytes, NOT a flatbuffer root table).
 // Struct topics are decoded with `new XData().__init(0, bb)`; only `mocap_frame`
@@ -19,12 +19,12 @@ import { LocalPositionCommandData } from './generated/synapse/topic/local-positi
 import { ManualControlData } from './generated/synapse/topic/manual-control-data.js';
 import { ManualControlFlags } from './generated/synapse/topic/manual-control-flags.js';
 import { MissionProgressData } from './generated/synapse/topic/mission-progress-data.js';
-import { MocapDefinition } from './generated/synapse/topic/mocap-definition.js';
 import { MocapFrame } from './generated/synapse/topic/mocap-frame.js';
+import { MocapRawFlags } from './generated/synapse/topic/mocap-raw-flags.js';
 import { PowerStatusData } from './generated/synapse/topic/power-status-data.js';
 import { PwmSignalOutputsData } from './generated/synapse/topic/pwm-signal-outputs-data.js';
 import { RadioControlData } from './generated/synapse/topic/radio-control-data.js';
-import { VehicleCommandData } from './generated/synapse/topic/vehicle-command-data.js';
+import { TrajectorySegmentData } from './generated/synapse/topic/trajectory-segment-data.js';
 import { VehicleHealthData } from './generated/synapse/topic/vehicle-health-data.js';
 import { VehicleHealthFlags } from './generated/synapse/topic/vehicle-health-flags.js';
 
@@ -44,9 +44,6 @@ export interface Decoded {
  * and/or instance-suffixed, so we test with `includes`).
  */
 export function classify(key: string): string {
-  if (key.includes('mocap/definition')) {
-    return 'MocapDefinition';
-  }
   if (
     key.includes('mocap_frame') ||
     key.endsWith('mocap/frame') ||
@@ -78,8 +75,8 @@ export function classify(key: string): string {
   if (key.includes('local_position_command')) {
     return 'LocalPositionCommand';
   }
-  if (key.includes('vehicle_command')) {
-    return 'VehicleCommand';
+  if (key.includes('trajectory_segment')) {
+    return 'TrajectorySegment';
   }
   // optical_flow / optical_flow_velocity: raw passthrough for now.
   return 'Raw';
@@ -103,14 +100,12 @@ export function decode(key: string, bytes: Uint8Array): Decoded {
       return decodeOrRaw(schema, bytes, decodePwmSignalOutputs);
     case 'MocapFrame':
       return decodeOrRaw(schema, bytes, decodeMocapFrame);
-    case 'MocapDefinition':
-      return decodeOrRaw(schema, bytes, decodeMocapDefinition);
     case 'MissionProgress':
       return decodeOrRaw(schema, bytes, decodeMissionProgress);
     case 'LocalPositionCommand':
       return decodeOrRaw(schema, bytes, decodeLocalPositionCommand);
-    case 'VehicleCommand':
-      return decodeOrRaw(schema, bytes, decodeVehicleCommand);
+    case 'TrajectorySegment':
+      return decodeOrRaw(schema, bytes, decodeTrajectorySegment);
     default:
       return { schema, payload: rawPayload(bytes), decoded: false };
   }
@@ -333,22 +328,33 @@ function decodeMocapFrame(bytes: Uint8Array): unknown | null {
   for (let i = 0; i < frame.rigidBodiesLength(); i += 1) {
     const rigid = frame.rigidBodies(i);
     const position = rigid?.positionEnuM();
-    const attitude = rigid?.attitude();
-    if (!rigid || !position || !attitude) {
+    const rotation = rigid?.rotation();
+    if (!rigid || !position || !rotation) {
       continue;
     }
+    const attitude = rotationMatrixToQuaternion({
+      r11: rotation.r11(),
+      r12: rotation.r12(),
+      r13: rotation.r13(),
+      r21: rotation.r21(),
+      r22: rotation.r22(),
+      r23: rotation.r23(),
+      r31: rotation.r31(),
+      r32: rotation.r32(),
+      r33: rotation.r33()
+    });
     rigidBodies.push({
       id: rigid.id(),
       position: { x: position.x(), y: position.y(), z: position.z() },
-      attitude: { x: attitude.x(), y: attitude.y(), z: attitude.z(), w: attitude.w() },
-      residual: rigid.residual(),
-      tracking_valid: rigid.trackingValid()
+      attitude,
+      residual: rigid.residualMm(),
+      tracking_valid: hasFlag(rigid.flags(), MocapRawFlags.Valid)
     });
   }
 
   const labeledMarkers: unknown[] = [];
-  for (let i = 0; i < frame.labeledMarkersLength(); i += 1) {
-    const marker = frame.labeledMarkers(i);
+  for (let i = 0; i < frame.markersLength(); i += 1) {
+    const marker = frame.markers(i);
     const position = marker?.positionEnuM();
     if (!marker || !position) {
       continue;
@@ -356,7 +362,7 @@ function decodeMocapFrame(bytes: Uint8Array): unknown | null {
     labeledMarkers.push({
       id: marker.id(),
       position: { x: position.x(), y: position.y(), z: position.z() },
-      residual: marker.residual()
+      residual: marker.residualMm()
     });
   }
 
@@ -365,6 +371,79 @@ function decodeMocapFrame(bytes: Uint8Array): unknown | null {
     frame_number: frame.frameNumber(),
     rigid_bodies: rigidBodies,
     labeled_markers: labeledMarkers
+  };
+}
+
+interface RotationMatrix {
+  r11: number;
+  r12: number;
+  r13: number;
+  r21: number;
+  r22: number;
+  r23: number;
+  r31: number;
+  r32: number;
+  r33: number;
+}
+
+function rotationMatrixToQuaternion(matrix: RotationMatrix): {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+} {
+  const trace = matrix.r11 + matrix.r22 + matrix.r33;
+  if (trace > 0) {
+    const scale = Math.sqrt(trace + 1) * 2;
+    return normalizeQuaternion({
+      w: 0.25 * scale,
+      x: (matrix.r32 - matrix.r23) / scale,
+      y: (matrix.r13 - matrix.r31) / scale,
+      z: (matrix.r21 - matrix.r12) / scale
+    });
+  }
+  if (matrix.r11 > matrix.r22 && matrix.r11 > matrix.r33) {
+    const scale = Math.sqrt(1 + matrix.r11 - matrix.r22 - matrix.r33) * 2;
+    return normalizeQuaternion({
+      w: (matrix.r32 - matrix.r23) / scale,
+      x: 0.25 * scale,
+      y: (matrix.r12 + matrix.r21) / scale,
+      z: (matrix.r13 + matrix.r31) / scale
+    });
+  }
+  if (matrix.r22 > matrix.r33) {
+    const scale = Math.sqrt(1 + matrix.r22 - matrix.r11 - matrix.r33) * 2;
+    return normalizeQuaternion({
+      w: (matrix.r13 - matrix.r31) / scale,
+      x: (matrix.r12 + matrix.r21) / scale,
+      y: 0.25 * scale,
+      z: (matrix.r23 + matrix.r32) / scale
+    });
+  }
+  const scale = Math.sqrt(1 + matrix.r33 - matrix.r11 - matrix.r22) * 2;
+  return normalizeQuaternion({
+    w: (matrix.r21 - matrix.r12) / scale,
+    x: (matrix.r13 + matrix.r31) / scale,
+    y: (matrix.r23 + matrix.r32) / scale,
+    z: 0.25 * scale
+  });
+}
+
+function normalizeQuaternion(quaternion: { x: number; y: number; z: number; w: number }): {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+} {
+  const norm = Math.hypot(quaternion.w, quaternion.x, quaternion.y, quaternion.z);
+  if (!Number.isFinite(norm) || norm === 0) {
+    return { x: 0, y: 0, z: 0, w: 1 };
+  }
+  return {
+    x: quaternion.x / norm,
+    y: quaternion.y / norm,
+    z: quaternion.z / norm,
+    w: quaternion.w / norm
   };
 }
 
@@ -436,45 +515,39 @@ function decodeLocalPositionCommand(bytes: Uint8Array): unknown | null {
   };
 }
 
-function decodeVehicleCommand(bytes: Uint8Array): unknown | null {
-  const data = new VehicleCommandData().__init(0, byteBuffer(bytes));
+function decodeTrajectorySegment(bytes: Uint8Array): unknown | null {
+  const data = new TrajectorySegmentData().__init(0, byteBuffer(bytes));
+  const points = [
+    pointPayload(data.p0EnuM(), data.yaw0Rad()),
+    pointPayload(data.p1EnuM(), data.yaw1Rad()),
+    pointPayload(data.p2EnuM(), data.yaw2Rad()),
+    pointPayload(data.p3EnuM(), data.yaw3Rad()),
+    pointPayload(data.p4EnuM(), data.yaw4Rad()),
+    pointPayload(data.p5EnuM(), data.yaw5Rad()),
+    pointPayload(data.p6EnuM(), data.yaw6Rad()),
+    pointPayload(data.p7EnuM(), data.yaw7Rad())
+  ];
   return {
     data: {
       timestamp_us: Number(data.timestampUs()),
-      args: [data.arg0(), data.arg1(), data.arg2(), data.arg3(), data.arg4(), data.arg5(), data.arg6()],
-      command_id: data.commandId(),
-      target_system: data.targetSystem(),
-      target_component: data.targetComponent()
+      start_time_us: Number(data.startTimeUs()),
+      trajectory_id: data.trajectoryId(),
+      segment_seq: data.segmentSeq(),
+      duration_us: data.durationUs(),
+      plan_version: data.planVersion(),
+      flags: data.flags(),
+      trajectory_type: data.trajectoryType(),
+      degree: data.degree(),
+      coordinate_frame: data.frame(),
+      id: data.id(),
+      points
     }
   };
 }
 
-/** Decode the cached `synapse/mocap/definition` metadata packet. */
-function decodeMocapDefinition(bytes: Uint8Array): unknown | null {
-  const definition = MocapDefinition.getRootAsMocapDefinition(byteBuffer(bytes));
-
-  const rigidBodies: unknown[] = [];
-  for (let i = 0; i < definition.rigidBodiesLength(); i += 1) {
-    const body = definition.rigidBodies(i);
-    if (!body) {
-      continue;
-    }
-    rigidBodies.push({ id: body.id(), name: body.name() ?? '' });
-  }
-
-  const labeledMarkers: unknown[] = [];
-  for (let i = 0; i < definition.labeledMarkersLength(); i += 1) {
-    const marker = definition.labeledMarkers(i);
-    if (!marker) {
-      continue;
-    }
-    labeledMarkers.push({ id: marker.id(), name: marker.name() ?? '', color: marker.color() });
-  }
-
-  return {
-    source: definition.source() ?? '',
-    frame_id: definition.frameId() ?? '',
-    rigid_bodies: rigidBodies,
-    labeled_markers: labeledMarkers
-  };
+function pointPayload(
+  point: { x(): number; y(): number; z(): number } | null,
+  yawRad: number
+): { x: number; y: number; z: number; yaw_rad: number } | null {
+  return point ? { x: point.x(), y: point.y(), z: point.z(), yaw_rad: yawRad } : null;
 }

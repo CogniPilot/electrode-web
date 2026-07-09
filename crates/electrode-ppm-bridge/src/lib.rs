@@ -102,7 +102,7 @@ pub fn channel_inversions_from_slice(
 }
 
 pub fn manual_control_to_channels(data: &ManualControlData) -> PpmChannels {
-    // 0.3.0 ManualControlData carries switch state in the flags bitmask and the
+    // ManualControlData carries switch state in the flags bitmask and the
     // axes as scaled shorts in -1000..1000 (normalized = value / 1000).
     let flags = ManualControlFlags::from_bits_retain(data.flags());
     if !flags.contains(ManualControlFlags::Valid) || flags.contains(ManualControlFlags::KillSwitch)
@@ -280,7 +280,7 @@ mod tests {
         (value * 1000.0).round().clamp(-1000.0, 1000.0) as i16
     }
 
-    /// Build a 0.3.0 ManualControlData from normalized stick inputs and switch
+    /// Build a ManualControlData from normalized stick inputs and switch
     /// flags (axes scaled to -1000..1000 shorts).
     fn manual_control_data_with_flags(
         roll: f32,

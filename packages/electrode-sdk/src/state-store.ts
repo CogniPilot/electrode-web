@@ -304,13 +304,10 @@ function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: nu
     applyMissionProgress(state, frame.payload, nowMs);
   } else if (topic.endsWith('local_position_command')) {
     applyLocalPositionCommand(state, frame.payload, nowMs);
-  } else if (topic.endsWith('vehicle_command')) {
-    applyVehicleCommand(state, frame.payload, nowMs);
+  } else if (topic.endsWith('trajectory_segment')) {
+    applyTrajectorySegment(state, frame.payload, nowMs);
   }
 }
-
-/** cubs2 VehicleCommand id broadcasting one local-frame mission item. */
-const CUBS2_CMD_MISSION_ITEM_LOCAL = 32001;
 
 const MISSION_STATES = new Set(['unknown', 'idle', 'active', 'paused', 'complete']);
 
@@ -375,35 +372,28 @@ function applyLocalPositionCommand(state: VehicleState, payload: unknown, nowMs:
   mission.updatedAtMs = nowMs;
 }
 
-/**
- * Rebuild the waypoint table from the cubs2 mission-item broadcast on
- * `synapse/v1/topic/vehicle_command`: args = [seq, total, east, north, up,
- * mission_id, reserved]. Items cycle, so the table fills within one revolution
- * from any join point. Other command ids are ignored.
- */
-function applyVehicleCommand(state: VehicleState, payload: unknown, nowMs: number): void {
+/** Rebuild the waypoint table from `synapse/v1/topic/trajectory_segment`. */
+function applyTrajectorySegment(state: VehicleState, payload: unknown, nowMs: number): void {
   const record = payload as Record<string, unknown> | null | undefined;
   const data = (record?.data ?? record) as Record<string, unknown> | undefined;
-  if (toFiniteNumber(data?.command_id) !== CUBS2_CMD_MISSION_ITEM_LOCAL) {
+  const points = data?.points;
+  const firstPoint = Array.isArray(points) ? (points[0] as Record<string, unknown> | undefined) : undefined;
+  if (!firstPoint) {
     return;
   }
-  const args = data?.args;
-  if (!Array.isArray(args)) {
-    return;
-  }
-  const seq = toFiniteNumber(args[0]);
-  const total = toFiniteNumber(args[1]);
-  const east = toFiniteNumber(args[2]);
-  const north = toFiniteNumber(args[3]);
-  const up = toFiniteNumber(args[4]);
-  if (seq === null || total === null || east === null || north === null || up === null) {
-    return;
-  }
-  if (total <= 0 || seq < 0 || seq >= total) {
+  const seq = toFiniteNumber(data?.segment_seq);
+  const east = toFiniteNumber(firstPoint.x);
+  const north = toFiniteNumber(firstPoint.y);
+  const up = toFiniteNumber(firstPoint.z);
+  if (seq === null || east === null || north === null || up === null) {
     return;
   }
   const mission = ensureMission(state, nowMs);
-  resyncMissionPlan(mission, toFiniteNumber(args[5]) ?? 0, total);
+  const total = Math.max(mission.total, seq + 1);
+  if (total <= 0 || seq < 0 || seq >= total) {
+    return;
+  }
+  resyncMissionPlan(mission, toFiniteNumber(data?.trajectory_id) ?? mission.missionId, total);
   mission.waypoints[seq] = { seq, east, north, up };
   mission.updatedAtMs = nowMs;
 }

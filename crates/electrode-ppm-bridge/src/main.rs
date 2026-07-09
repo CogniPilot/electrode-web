@@ -402,7 +402,7 @@ struct ManualSelection {
 }
 
 fn manual_from_payload(payload: &[u8]) -> Result<ManualSelection> {
-    // 0.3.0 transmits ManualControlData as a bare fixed-layout struct, not a
+    // synapse_fbs transmits ManualControlData as a bare fixed-layout struct, not a
     // FlatBuffers root table: verify the exact size then follow at offset 0.
     if payload.len() != MANUAL_CONTROL_PAYLOAD_SIZE {
         return Err(BridgeError::InvalidManualControlSize {

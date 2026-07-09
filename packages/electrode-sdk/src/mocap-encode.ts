@@ -2,16 +2,15 @@
 // Qualisys bridge (synapse_qualisys_bridge) publishes:
 //   - `synapse/mocap/frame`                    — MocapFrame FlatBuffer
 //   - `synapse/mocap/rigid_body/<name>/pose`   — compact 28-byte pose
-//   - `synapse/mocap/definition`               — MocapDefinition FlatBuffer
 // The in-browser rumoca sim emits MocapFrame on a private topic; the Ground
 // Station normalizes it onto the public topics above so simulation traffic is
 // indistinguishable from a real mocap bridge.
 import * as flatbuffers from 'flatbuffers';
 
-import { MocapDefinition } from './generated/synapse/topic/mocap-definition.js';
 import { MocapFrame } from './generated/synapse/topic/mocap-frame.js';
-import { MocapRigidBodyDefinition } from './generated/synapse/topic/mocap-rigid-body-definition.js';
-import { MocapRigidBodySample } from './generated/synapse/topic/mocap-rigid-body-sample.js';
+import { MocapRawComponent } from './generated/synapse/topic/mocap-raw-component.js';
+import { MocapRawFlags } from './generated/synapse/topic/mocap-raw-flags.js';
+import { MocapRigidBodyData } from './generated/synapse/topic/mocap-rigid-body-data.js';
 
 export interface MocapPose {
   /** Rigid-body position, ENU metres (x=east, y=north, z=up). */
@@ -32,18 +31,29 @@ export interface MocapFrameOptions {
 export function encodeMocapFrame(pose: MocapPose, options: MocapFrameOptions = {}): Uint8Array {
   const builder = new flatbuffers.Builder(256);
   MocapFrame.startRigidBodiesVector(builder, 1);
-  MocapRigidBodySample.createMocapRigidBodySample(
+  const rotation = quaternionToRotationMatrix(pose.attitude);
+  const flags =
+    (options.trackingValid ?? true ? MocapRawFlags.Valid : 0) |
+    MocapRawFlags.ResidualValid |
+    MocapRawFlags.LabelValid;
+  MocapRigidBodyData.createMocapRigidBodyData(
     builder,
-    options.bodyId ?? 0,
     pose.position.x,
     pose.position.y,
     pose.position.z,
-    pose.attitude.w,
-    pose.attitude.x,
-    pose.attitude.y,
-    pose.attitude.z,
+    rotation.r11,
+    rotation.r12,
+    rotation.r13,
+    rotation.r21,
+    rotation.r22,
+    rotation.r23,
+    rotation.r31,
+    rotation.r32,
+    rotation.r33,
     options.residual ?? 0,
-    options.trackingValid ?? true
+    options.bodyId ?? 0,
+    flags,
+    MocapRawComponent.RigidBody6d
   );
   const bodies = builder.endVector();
   const message = MocapFrame.createMocapFrame(
@@ -52,11 +62,44 @@ export function encodeMocapFrame(pose: MocapPose, options: MocapFrameOptions = {
     options.frameNumber ?? 0,
     0,
     0,
-    bodies,
-    0
+    0,
+    flags,
+    0,
+    0,
+    bodies
   );
   builder.finish(message);
   return builder.asUint8Array();
+}
+
+function quaternionToRotationMatrix(quaternion: MocapPose['attitude']): {
+  r11: number;
+  r12: number;
+  r13: number;
+  r21: number;
+  r22: number;
+  r23: number;
+  r31: number;
+  r32: number;
+  r33: number;
+} {
+  const norm = Math.hypot(quaternion.w, quaternion.x, quaternion.y, quaternion.z);
+  const scale = Number.isFinite(norm) && norm > 0 ? 1 / norm : 1;
+  const w = quaternion.w * scale;
+  const x = quaternion.x * scale;
+  const y = quaternion.y * scale;
+  const z = quaternion.z * scale;
+  return {
+    r11: 1 - 2 * (y * y + z * z),
+    r12: 2 * (x * y - z * w),
+    r13: 2 * (x * z + y * w),
+    r21: 2 * (x * y + z * w),
+    r22: 1 - 2 * (x * x + z * z),
+    r23: 2 * (y * z - x * w),
+    r31: 2 * (x * z - y * w),
+    r32: 2 * (y * z + x * w),
+    r33: 1 - 2 * (x * x + y * y)
+  };
 }
 
 /**
@@ -78,34 +121,4 @@ export function encodeCompactRigidBodyPose(pose: MocapPose): Uint8Array {
   ];
   values.forEach((value, index) => view.setFloat32(index * 4, value, true));
   return bytes;
-}
-
-export interface MocapDefinitionOptions {
-  /** Mocap system or producer name, e.g. `electrode-sim`. */
-  source: string;
-  /** Frame name for the mocap ENU coordinate system. */
-  frameId: string;
-  /** Tracked rigid bodies (ids match MocapRigidBodySample.id). */
-  rigidBodies: Array<{ id: number; name: string }>;
-}
-
-/** Serialize the cached `synapse/mocap/definition` metadata packet. */
-export function encodeMocapDefinition(options: MocapDefinitionOptions): Uint8Array {
-  const builder = new flatbuffers.Builder(256);
-  const bodyOffsets = options.rigidBodies.map((body) => {
-    const name = builder.createString(body.name);
-    MocapRigidBodyDefinition.startMocapRigidBodyDefinition(builder);
-    MocapRigidBodyDefinition.addId(builder, body.id);
-    MocapRigidBodyDefinition.addName(builder, name);
-    return MocapRigidBodyDefinition.endMocapRigidBodyDefinition(builder);
-  });
-  const bodies = MocapDefinition.createRigidBodiesVector(builder, bodyOffsets);
-  const source = builder.createString(options.source);
-  const frameId = builder.createString(options.frameId);
-  MocapDefinition.startMocapDefinition(builder);
-  MocapDefinition.addSource(builder, source);
-  MocapDefinition.addFrameId(builder, frameId);
-  MocapDefinition.addRigidBodies(builder, bodies);
-  builder.finish(MocapDefinition.endMocapDefinition(builder));
-  return builder.asUint8Array();
 }

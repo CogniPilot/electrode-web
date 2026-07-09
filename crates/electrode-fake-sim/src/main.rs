@@ -28,10 +28,10 @@ use std::{
 use clap::Parser;
 use flatbuffers::FlatBufferBuilder;
 use synapse_fbs::topic::{
-    AttitudeEstimateData, AttitudeEstimateFlags, MocapFrame, MocapFrameArgs, MocapRigidBodySample,
-    PwmSignalOutputsData,
+    AttitudeEstimateData, AttitudeEstimateFlags, MocapFrame, MocapFrameArgs, MocapRawComponent,
+    MocapRawFlags, MocapRigidBodyData, PwmSignalOutputsData,
 };
-use synapse_fbs::types::{Quaternionf, RateTriplet, Vec3f};
+use synapse_fbs::types::{Quaternionf, RateTriplet, RotationMatrix3f, Vec3f};
 use zenoh::{config::Config, pubsub::Publisher, Session, Wait};
 
 const G: f32 = 9.81;
@@ -308,13 +308,17 @@ fn attitude(state: &FlightState, bank: f32) -> (f32, f32) {
 fn encode_mocap_frame(state: &FlightState, roll: f32, pitch: f32, frame_number: u64) -> Vec<u8> {
     let mut builder = FlatBufferBuilder::new();
     let (qx, qy, qz, qw) = euler_to_quat(roll, pitch, state.psi);
+    let rotation = quaternion_to_rotation_matrix(qw, qx, qy, qz);
+    let flags =
+        (MocapRawFlags::Valid | MocapRawFlags::ResidualValid | MocapRawFlags::LabelValid).bits();
     // Rigid body 0: the tracked vehicle, ENU position in metres.
-    let body = MocapRigidBodySample::new(
-        0,
+    let body = MocapRigidBodyData::new(
         &Vec3f::new(state.east, state.north, state.up),
-        &Quaternionf::new(qw, qx, qy, qz),
+        &rotation,
         0.0005,
-        true,
+        0,
+        flags,
+        MocapRawComponent::RigidBody6d,
     );
     let bodies = builder.create_vector(&[body]);
     let message = MocapFrame::create(
@@ -322,6 +326,7 @@ fn encode_mocap_frame(state: &FlightState, roll: f32, pitch: f32, frame_number: 
         &MocapFrameArgs {
             timestamp_us: timestamp_us(),
             frame_number: frame_number as u32,
+            flags,
             rigid_bodies: Some(bodies),
             ..Default::default()
         },
@@ -384,6 +389,27 @@ fn euler_to_quat(roll: f32, pitch: f32, yaw: f32) -> (f32, f32, f32, f32) {
         cr * sp * cy + sr * cp * sy,
         cr * cp * sy - sr * sp * cy,
         cr * cp * cy + sr * sp * sy,
+    )
+}
+
+fn quaternion_to_rotation_matrix(qw: f32, qx: f32, qy: f32, qz: f32) -> RotationMatrix3f {
+    let norm = (qw.mul_add(qw, qx.mul_add(qx, qy.mul_add(qy, qz * qz)))).sqrt();
+    let scale = if norm.is_finite() && norm > 0.0 {
+        1.0 / norm
+    } else {
+        1.0
+    };
+    let (w, x, y, z) = (qw * scale, qx * scale, qy * scale, qz * scale);
+    RotationMatrix3f::new(
+        1.0 - (2.0 * ((y * y) + (z * z))),
+        2.0 * ((x * y) - (z * w)),
+        2.0 * ((x * z) + (y * w)),
+        2.0 * ((x * y) + (z * w)),
+        1.0 - (2.0 * ((x * x) + (z * z))),
+        2.0 * ((y * z) - (x * w)),
+        2.0 * ((x * z) - (y * w)),
+        2.0 * ((y * z) + (x * w)),
+        1.0 - (2.0 * ((x * x) + (y * y))),
     )
 }
 
