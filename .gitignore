@@ -14,3 +14,7 @@ pkg/
 /electrode-autopilot.json
 /electrode-simulation.json
 /electrode-mapping.json
+
+# Local command-authority runtime state
+/data/velocity-budget.csv
+/data/velocity-budget-db.json
