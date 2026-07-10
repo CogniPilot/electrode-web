@@ -50,6 +50,11 @@ export interface Attitude {
   rollDeg: number;
   pitchDeg: number;
   yawDeg: number;
+  /** Synapse 0.3 body-FLU to ENU attitude quaternion. */
+  qx?: number;
+  qy?: number;
+  qz?: number;
+  qw?: number;
 }
 
 /**

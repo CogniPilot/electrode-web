@@ -103,7 +103,7 @@ impl FirmwareGate {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::excessive_nesting)]
     pub(crate) fn handle_intent(
         &self,
         vehicle: &Session,

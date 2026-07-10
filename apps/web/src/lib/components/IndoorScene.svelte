@@ -19,6 +19,7 @@
   // the vehicle on the same scale: fixed wing is 2 ft wingspan in local metres.
   const LOCAL_METERS_TO_SCENE = 0.09;
   const VEHICLE_FIT = 0.6096 * LOCAL_METERS_TO_SCENE;
+  const MIN_ALTITUDE_SCENE_Y = 0.006;
   const CAMERA_TARGET = new three.Vector3(0, 0.24, 0);
   const CAMERA_START = new three.Vector3(1.15, 0.78, 1.25);
   // ENU/body yaw convention: yaw 0 faces +X (east), yaw +90 faces +Y (north).
@@ -524,12 +525,53 @@
 
     const vehiclePosition = localPositionToScene(nextPose);
     vehicleGroup.position.copy(vehiclePosition);
-    vehicleGroup.rotation.set(
-      three.MathUtils.degToRad(nextAttitude?.pitchDeg ?? 0),
-      three.MathUtils.degToRad(nextAttitude?.yawDeg ?? 0) + YAW_ZERO_EAST_OFFSET_RAD,
-      -three.MathUtils.degToRad(nextAttitude?.rollDeg ?? 0)
-    );
+    vehicleGroup.quaternion.copy(attitudeToSceneQuaternion(nextAttitude));
     recordTrail(vehiclePosition);
+  }
+
+  function attitudeToSceneQuaternion(nextAttitude: Attitude | null): three.Quaternion {
+    if (hasSynapseQuaternion(nextAttitude)) {
+      const bodyToEnu = new three.Quaternion(
+        nextAttitude.qx,
+        nextAttitude.qy,
+        nextAttitude.qz,
+        nextAttitude.qw
+      ).normalize();
+      const xAxis = synapseBodyVectorToScene(modelLocalVectorToSynapseBody(new three.Vector3(1, 0, 0)), bodyToEnu);
+      const yAxis = synapseBodyVectorToScene(modelLocalVectorToSynapseBody(new three.Vector3(0, 1, 0)), bodyToEnu);
+      const zAxis = synapseBodyVectorToScene(modelLocalVectorToSynapseBody(new three.Vector3(0, 0, 1)), bodyToEnu);
+      return new three.Quaternion().setFromRotationMatrix(new three.Matrix4().makeBasis(xAxis, yAxis, zAxis));
+    }
+
+    return new three.Quaternion().setFromEuler(
+      new three.Euler(
+        three.MathUtils.degToRad(nextAttitude?.pitchDeg ?? 0),
+        three.MathUtils.degToRad(nextAttitude?.yawDeg ?? 0) + YAW_ZERO_EAST_OFFSET_RAD,
+        -three.MathUtils.degToRad(nextAttitude?.rollDeg ?? 0),
+        'YXZ'
+      )
+    );
+  }
+
+  function hasSynapseQuaternion(
+    nextAttitude: Attitude | null
+  ): nextAttitude is Attitude & { qx: number; qy: number; qz: number; qw: number } {
+    return (
+      nextAttitude !== null &&
+      Number.isFinite(nextAttitude.qx) &&
+      Number.isFinite(nextAttitude.qy) &&
+      Number.isFinite(nextAttitude.qz) &&
+      Number.isFinite(nextAttitude.qw)
+    );
+  }
+
+  function modelLocalVectorToSynapseBody(vector: three.Vector3): three.Vector3 {
+    return new three.Vector3(-vector.z, -vector.x, vector.y);
+  }
+
+  function synapseBodyVectorToScene(vector: three.Vector3, bodyToEnu: three.Quaternion): three.Vector3 {
+    const enu = vector.applyQuaternion(bodyToEnu);
+    return new three.Vector3(enu.x, enu.z, -enu.y).normalize();
   }
 
   function recordTrail(position: Vector3): void {
@@ -559,7 +601,7 @@
   }
 
   function localAltitudeSceneY(altM: number): number {
-    return clamp(altM * 0.08, 0.25, 3.2);
+    return clamp(altM * LOCAL_METERS_TO_SCENE, MIN_ALTITUDE_SCENE_Y, 3.2);
   }
 
   function resize(): void {

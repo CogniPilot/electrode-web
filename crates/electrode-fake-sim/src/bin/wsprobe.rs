@@ -5,9 +5,10 @@
 //!   cargo run -p electrode-fake-sim --bin wsprobe -- ws/127.0.0.1:7447 synapse/** 5
 //!   cargo run -p electrode-fake-sim --bin wsprobe -- peer synapse/** 5
 use synapse_fbs::topic::{
-    AttitudeEstimateData, AttitudeEstimateFlags, ManualControlData, ManualControlFlags,
-    PwmSignalOutputsData, RadioControlData, VehicleHealthData, VehicleHealthFlags,
+    AttitudeEstimateData, AttitudeEstimateFlags, ManualControlData, ManualControlFlags, MocapFrame,
+    MocapRawFlags, PwmSignalOutputsData, RadioControlData, VehicleHealthData, VehicleHealthFlags,
 };
+use synapse_fbs::types::RotationMatrix3f;
 use zenoh::Wait;
 
 fn main() -> anyhow::Result<()> {
@@ -85,6 +86,7 @@ fn hex_preview(bytes: &[u8]) -> String {
         .join("")
 }
 
+#[allow(clippy::too_many_lines, clippy::excessive_nesting)]
 fn decode_sample(key: &str, bytes: &[u8]) -> String {
     if key.ends_with("manual_control_command") && bytes.len() == 40 {
         let data = unsafe { <ManualControlData as flatbuffers::Follow>::follow(bytes, 0) };
@@ -163,6 +165,42 @@ fn decode_sample(key: &str, bytes: &[u8]) -> String {
             value(6)
         );
     }
+    if key.ends_with("/mocap/frame") {
+        if let Ok(frame) = flatbuffers::root::<MocapFrame>(bytes) {
+            let bodies = frame.rigid_bodies();
+            let mut body_text = Vec::new();
+            if let Some(bodies) = bodies {
+                for body in bodies.iter() {
+                    let p = body.position_enu_m();
+                    let q = rotation_matrix_to_quaternion(body.rotation());
+                    let flags = MocapRawFlags::from_bits_retain(body.flags());
+                    let (roll, pitch, yaw) = euler_deg(q.3, q.0, q.1, q.2);
+                    body_text.push(format!(
+                        "id={} p=[{:.3},{:.3},{:.3}] q_wxyz=[{:.4},{:.4},{:.4},{:.4}] rpy_deg=[{:.1},{:.1},{:.1}] residual={:.4} valid={}",
+                        body.id(),
+                        p.x(),
+                        p.y(),
+                        p.z(),
+                        q.3,
+                        q.0,
+                        q.1,
+                        q.2,
+                        roll,
+                        pitch,
+                        yaw,
+                        body.residual_mm(),
+                        flags.contains(MocapRawFlags::Valid)
+                    ));
+                }
+            }
+            return format!(
+                "mocap_frame timestamp_us={} frame={} bodies={}",
+                frame.timestamp_us(),
+                frame.frame_number(),
+                body_text.join("; ")
+            );
+        }
+    }
     if key.ends_with("radio_control") && bytes.len() == 48 {
         let data = unsafe { <RadioControlData as flatbuffers::Follow>::follow(bytes, 0) };
         return format!(
@@ -178,6 +216,62 @@ fn decode_sample(key: &str, bytes: &[u8]) -> String {
         );
     }
     format!("hex={}", hex_preview(bytes))
+}
+
+fn rotation_matrix_to_quaternion(rotation: &RotationMatrix3f) -> (f32, f32, f32, f32) {
+    let trace = rotation.r11() + rotation.r22() + rotation.r33();
+    let quaternion = if trace > 0.0 {
+        let scale = (trace + 1.0).sqrt() * 2.0;
+        (
+            (rotation.r32() - rotation.r23()) / scale,
+            (rotation.r13() - rotation.r31()) / scale,
+            (rotation.r21() - rotation.r12()) / scale,
+            0.25 * scale,
+        )
+    } else if rotation.r11() > rotation.r22() && rotation.r11() > rotation.r33() {
+        let scale = (1.0 + rotation.r11() - rotation.r22() - rotation.r33()).sqrt() * 2.0;
+        (
+            0.25 * scale,
+            (rotation.r12() + rotation.r21()) / scale,
+            (rotation.r13() + rotation.r31()) / scale,
+            (rotation.r32() - rotation.r23()) / scale,
+        )
+    } else if rotation.r22() > rotation.r33() {
+        let scale = (1.0 + rotation.r22() - rotation.r11() - rotation.r33()).sqrt() * 2.0;
+        (
+            (rotation.r12() + rotation.r21()) / scale,
+            0.25 * scale,
+            (rotation.r23() + rotation.r32()) / scale,
+            (rotation.r13() - rotation.r31()) / scale,
+        )
+    } else {
+        let scale = (1.0 + rotation.r33() - rotation.r11() - rotation.r22()).sqrt() * 2.0;
+        (
+            (rotation.r13() + rotation.r31()) / scale,
+            (rotation.r23() + rotation.r32()) / scale,
+            0.25 * scale,
+            (rotation.r21() - rotation.r12()) / scale,
+        )
+    };
+    let norm = quaternion.0.mul_add(
+        quaternion.0,
+        quaternion.1.mul_add(
+            quaternion.1,
+            quaternion
+                .2
+                .mul_add(quaternion.2, quaternion.3 * quaternion.3),
+        ),
+    );
+    let norm = norm.sqrt();
+    if !norm.is_finite() || norm == 0.0 {
+        return (0.0, 0.0, 0.0, 1.0);
+    }
+    (
+        quaternion.0 / norm,
+        quaternion.1 / norm,
+        quaternion.2 / norm,
+        quaternion.3 / norm,
+    )
 }
 
 fn euler_deg(qw: f32, qx: f32, qy: f32, qz: f32) -> (f32, f32, f32) {

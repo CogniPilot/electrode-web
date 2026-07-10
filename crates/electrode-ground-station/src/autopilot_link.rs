@@ -24,12 +24,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use zenoh::Wait;
 
-use crate::autopilot::AutopilotProfile;
+use crate::autopilot::{AutopilotProfile, MOCAP_POSE_TOPIC};
 
 const CSYN_MAGIC: [u8; 4] = *b"CSYN";
 const CSYN_HEADER: usize = 8;
 const MAX_FRAME: usize = 2048;
-const CUB1_MOCAP_TOPIC: &str = "synapse/mocap/rigid_body/cub1/pose";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,12 +113,21 @@ impl AutopilotLink {
         }
     }
 
-    pub(crate) fn start(&self, profile: &AutopilotProfile) -> anyhow::Result<AutopilotRunStatus> {
+    pub(crate) fn start(
+        &self,
+        profile: &AutopilotProfile,
+        hub_session: Option<zenoh::Session>,
+    ) -> anyhow::Result<AutopilotRunStatus> {
         self.stop();
 
         let binary = validate_native_binary(profile)?;
         let (log_path, log, log_err) = create_log_files(profile)?;
-        let session = open_autopilot_session(profile)?;
+        // Prefer the hub's own session: an extra in-process session does not
+        // reliably receive mesh traffic (field debug 2026-07-08).
+        let session = match hub_session {
+            Some(session) => session,
+            None => open_autopilot_session(profile)?,
+        };
         let rx = UdpSocket::bind(("127.0.0.1", profile.udp_tx_port))?;
         rx.set_read_timeout(Some(Duration::from_millis(200)))?;
         let tx = UdpSocket::new_target(profile.udp_rx_port)?;
@@ -203,8 +211,11 @@ fn create_log_files(
 
 fn open_autopilot_session(profile: &AutopilotProfile) -> anyhow::Result<zenoh::Session> {
     let mut config = zenoh::Config::default();
+    // Client of the daemon's own zenoh listener. A connect-only peer over UDP
+    // never joins the mesh, so its subscribers receive nothing (field debug
+    // 2026-07-08: framesIn stayed 0 while the pose stream ran at 240 Hz).
     config
-        .insert_json5("mode", "\"peer\"")
+        .insert_json5("mode", "\"client\"")
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
     let endpoints = autopilot_zenoh_endpoints(profile);
@@ -300,6 +311,10 @@ fn declare_inbound_subscriber(
     let key = topic.key;
     let callback_key = key.clone();
     let logged = Arc::new(AtomicBool::new(false));
+    // No zenoh republish here: zenoh-transport firmware subscribes to the
+    // pose keys directly (CSYN_ZENOH_MOCAP_POSE_KEY) with its own
+    // selected-vs-fallback arbitration; republishing onto the catalog key
+    // would bypass that arbitration and double the stream on the bus.
     session
         .declare_subscriber(key.clone())
         .callback(move |sample| {
@@ -362,8 +377,9 @@ fn resolve_inbound_topic(spec: &str) -> Option<InboundTopic> {
 
     // Any public mocap stream maps to the mocap_frame CSYN id; cubs2 decodes
     // both wire forms (compact 28-byte pose and MocapFrame FlatBuffer).
-    if spec == CUB1_MOCAP_TOPIC
+    if spec == MOCAP_POSE_TOPIC
         || spec.contains("/mocap/rigid_body/")
+        || spec.contains("/mocap/selected/rigid_body/")
         || spec.ends_with("mocap/frame")
     {
         let topic = synapse_fbs::topic_catalog::TOPICS
@@ -509,5 +525,14 @@ mod tests {
         let mut frame = build_frame(1, &[9, 9]);
         frame.push(0); // trailing garbage breaks the declared length
         assert!(parse_frame(&frame).is_none());
+    }
+
+    #[test]
+    fn pose_streams_resolve_to_the_mocap_frame_id() {
+        let pose = resolve_inbound_topic("synapse/mocap/rigid_body/cub1/pose").unwrap();
+        let selected =
+            resolve_inbound_topic("synapse/mocap/selected/rigid_body/cub1/pose").unwrap();
+        assert_eq!(pose.id, selected.id);
+        assert_eq!(pose.key, "synapse/mocap/rigid_body/cub1/pose");
     }
 }

@@ -246,6 +246,7 @@ function frameSampleTimeMs(frame: TelemetryFrame, fallbackMs: number): number {
  * the RC mode switch, or forced when manual input is invalid).
  */
 const CUBS2_FLIGHT_MODES: Record<number, string> = { 0: 'manual', 1: 'auto' };
+const SELECTED_MOCAP_TOPIC_FRAGMENT = 'synapse/mocap/selected/rigid_body/';
 
 /**
  * Adapter: map raw Synapse wire topics onto the canonical vehicle state. Most
@@ -257,9 +258,12 @@ function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: nu
   if (
     topic.endsWith('mocap_frame') ||
     topic.endsWith('mocap/frame') ||
-    topic.includes('synapse/mocap/rigid_body/')
+    topic.includes('synapse/mocap/rigid_body/') ||
+    topic.includes(SELECTED_MOCAP_TOPIC_FRAGMENT)
   ) {
-    applyMocapFrame(state, frame.payload, nowMs, frameSampleTimeMs(frame, nowMs), topic);
+    if (!shouldIgnoreUnselectedMocap(state, topic)) {
+      applyMocapFrame(state, frame.payload, nowMs, frameSampleTimeMs(frame, nowMs), topic);
+    }
   } else if (topic.endsWith('optical_flow_velocity')) {
     const velocity = parseOpticalFlowVelocity(frame.payload);
     if (velocity) {
@@ -309,6 +313,14 @@ function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: nu
   }
 }
 
+function shouldIgnoreUnselectedMocap(state: VehicleState, topic: string): boolean {
+  if (topic.includes(SELECTED_MOCAP_TOPIC_FRAGMENT)) {
+    return false;
+  }
+  return Object.values(state.topics).some(
+    (snapshot) => snapshot.topic.includes(SELECTED_MOCAP_TOPIC_FRAGMENT) && !snapshot.stale
+  );
+}
 const MISSION_STATES = new Set(['unknown', 'idle', 'active', 'paused', 'complete']);
 
 function ensureMission(state: VehicleState, nowMs: number): MissionPlanState {
@@ -415,12 +427,13 @@ function applyMocapFrame(
   const bodies = record?.rigid_bodies;
   const body = Array.isArray(bodies) ? (bodies[0] as Record<string, unknown> | undefined) : undefined;
   const position = body?.position as Record<string, unknown> | undefined;
-  if (!body || !position) {
+  if (!body || !position || !isValidMocapBody(body)) {
+    markMocapStale(state, nowMs);
     return;
   }
-  const xM = toFiniteNumber(position.x) ?? 0;
-  const yM = toFiniteNumber(position.y) ?? 0;
-  const altM = toFiniteNumber(position.z) ?? 0;
+  const xM = toFiniteNumber(position.x)!;
+  const yM = toFiniteNumber(position.y)!;
+  const altM = toFiniteNumber(position.z)!;
 
   // Ground-truth velocity by finite-differencing successive mocap positions.
   const prev = state.lastMocap;
@@ -430,7 +443,10 @@ function applyMocapFrame(
   const hasFullMocapFrame = Object.values(state.topics).some(
     (snapshot) => snapshot.topic.endsWith('mocap/frame') && !snapshot.stale
   );
-  const compactPoseMirrorsFullFrame = topic.includes('synapse/mocap/rigid_body/') && hasFullMocapFrame;
+  const compactPoseMirrorsFullFrame =
+    (topic.includes('synapse/mocap/rigid_body/') ||
+      topic.includes(SELECTED_MOCAP_TOPIC_FRAGMENT)) &&
+    hasFullMocapFrame;
   const useForMocapVelocity = !compactPoseMirrorsFullFrame;
   const dtMs = prev ? sampleMs - prev.tMs : 0;
   if (prev && dtMs >= MIN_MOCAP_VELOCITY_DT_MS && !hasDirectVelocity && useForMocapVelocity) {
@@ -474,6 +490,33 @@ function applyMocapFrame(
     source: 'mocap',
     fresh: trackingValid,
     quality: trackingValid ? Math.max(0, 1 - Math.min(residual / 0.05, 1)) : 0,
+    updatedAtMs: nowMs
+  };
+}
+
+function isValidMocapBody(body: unknown): body is Record<string, unknown> {
+  const record = body as Record<string, unknown> | null | undefined;
+  if (!record || record.tracking_valid === false) {
+    return false;
+  }
+  const position = record.position as Record<string, unknown> | undefined;
+  const attitude = record.attitude as Record<string, unknown> | undefined;
+  return (
+    toFiniteNumber(position?.x) !== null &&
+    toFiniteNumber(position?.y) !== null &&
+    toFiniteNumber(position?.z) !== null &&
+    toFiniteNumber(attitude?.w) !== null &&
+    toFiniteNumber(attitude?.x) !== null &&
+    toFiniteNumber(attitude?.y) !== null &&
+    toFiniteNumber(attitude?.z) !== null
+  );
+}
+
+function markMocapStale(state: VehicleState, nowMs: number): void {
+  state.localization = {
+    source: 'mocap',
+    fresh: false,
+    quality: 0,
     updatedAtMs: nowMs
   };
 }
@@ -561,7 +604,7 @@ function quaternionToEuler(quat: Record<string, unknown> | undefined): Attitude 
   const deg = 180 / Math.PI;
   // Mocap/model quaternions are body-to-ENU for a FLU body. The raw Y-axis
   // Euler angle is positive nose-down; the UI displays pitch positive nose-up.
-  return { rollDeg: roll * deg, pitchDeg: -pitch * deg, yawDeg: yaw * deg };
+  return { rollDeg: roll * deg, pitchDeg: -pitch * deg, yawDeg: yaw * deg, qx: x, qy: y, qz: z, qw: w };
 }
 
 function clampRange(value: number, min: number, max: number): number {
@@ -583,7 +626,8 @@ export function refreshStaleTopics(state: VehicleState, nowMs = Date.now()): Veh
   }
 
   state.connected = hasFreshTopic && nowMs - state.lastUpdateMs < 3000;
-  state.localization.fresh = state.localization.updatedAtMs > 0 && nowMs - state.localization.updatedAtMs < 1200;
+  state.localization.fresh =
+    state.localization.fresh && state.localization.updatedAtMs > 0 && nowMs - state.localization.updatedAtMs < 1200;
   return state;
 }
 

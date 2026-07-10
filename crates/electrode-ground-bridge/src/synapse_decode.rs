@@ -14,9 +14,9 @@
 use flatbuffers::root;
 use serde_json::{json, Value};
 use synapse_fbs::topic::{
-    AttitudeEstimateData, AttitudeEstimateFlags, ManualControlData, ManualControlFlags, MocapFrame,
-    MocapRawFlags, PowerStatusData, PwmSignalOutputsData, RadioControlData, VehicleHealthData,
-    VehicleHealthFlags,
+    AttitudeCommandData, AttitudeEstimateData, AttitudeEstimateFlags, ControlLoopMetricsData,
+    ManualControlData, ManualControlFlags, MocapFrame, MocapRawFlags, NavigationTargetData,
+    PowerStatusData, PwmSignalOutputsData, RadioControlData, VehicleHealthData, VehicleHealthFlags,
 };
 use synapse_fbs::types::RotationMatrix3f;
 
@@ -58,6 +58,9 @@ fn schema_for_suffix(suffix: &str) -> Option<&'static str> {
         "radio_control" => "RadioControl",
         "pwm_signal_outputs" => "PwmSignalOutputs",
         "attitude_estimate" => "AttitudeEstimate",
+        "attitude_command" => "AttitudeCommand",
+        "navigation_target" => "NavigationTarget",
+        "control_loop_metrics" => "ControlLoopMetrics",
         "vehicle_health" => "VehicleHealth",
         "power_status" => "PowerStatus",
         _ => return None,
@@ -72,6 +75,11 @@ pub(crate) fn decode(key: &str, bytes: &[u8]) -> Decoded {
         "RadioControl" => decode_or_raw("RadioControl", bytes, decode_radio_control),
         "PwmSignalOutputs" => decode_or_raw("PwmSignalOutputs", bytes, decode_pwm_signal_outputs),
         "AttitudeEstimate" => decode_or_raw("AttitudeEstimate", bytes, decode_attitude_estimate),
+        "AttitudeCommand" => decode_or_raw("AttitudeCommand", bytes, decode_attitude_command),
+        "NavigationTarget" => decode_or_raw("NavigationTarget", bytes, decode_navigation_target),
+        "ControlLoopMetrics" => {
+            decode_or_raw("ControlLoopMetrics", bytes, decode_control_loop_metrics)
+        }
         "VehicleHealth" => decode_or_raw("VehicleHealth", bytes, decode_vehicle_health),
         "PowerStatus" => decode_or_raw("PowerStatus", bytes, decode_power_status),
         schema => Decoded {
@@ -119,6 +127,60 @@ where
     // with unaligned accessors, and the exact-size check above guarantees the
     // buffer covers the struct.
     Some(unsafe { T::follow(payload, 0) })
+}
+
+fn decode_attitude_command(bytes: &[u8]) -> Option<Value> {
+    let data = decode_struct::<AttitudeCommandData>(bytes, 48)?;
+    let attitude = data.attitude();
+    let rates = data.body_rate_flu_rad_s();
+    Some(json!({
+        "data": {
+            "timestamp_us": data.timestamp_us(),
+            "attitude": {
+                "w": attitude.w(),
+                "x": attitude.x(),
+                "y": attitude.y(),
+                "z": attitude.z()
+            },
+            "body_rate_flu_rad_s": {
+                "roll": rates.roll(),
+                "pitch": rates.pitch(),
+                "yaw": rates.yaw()
+            },
+            "thrust": data.thrust(),
+            "type_mask": data.type_mask()
+        }
+    }))
+}
+
+fn decode_navigation_target(bytes: &[u8]) -> Option<Value> {
+    let data = decode_struct::<NavigationTargetData>(bytes, 32)?;
+    Some(json!({
+        "data": {
+            "timestamp_us": data.timestamp_us(),
+            "altitude_error_m": data.altitude_error_m(),
+            "airspeed_error_m_s": data.airspeed_error_m_s(),
+            "xtrack_error_m": data.xtrack_error_m(),
+            "desired_roll_deg": f64::from(data.desired_roll_cdeg()) / 100.0,
+            "desired_pitch_deg": f64::from(data.desired_pitch_cdeg()) / 100.0,
+            "desired_yaw_deg": f64::from(data.desired_yaw_cdeg()) / 100.0,
+            "target_yaw_deg": f64::from(data.target_yaw_cdeg()) / 100.0,
+            "distance_to_waypoint_m": data.distance_to_waypoint_m()
+        }
+    }))
+}
+
+fn decode_control_loop_metrics(bytes: &[u8]) -> Option<Value> {
+    let data = decode_struct::<ControlLoopMetricsData>(bytes, 24)?;
+    Some(json!({
+        "data": {
+            "timestamp_us": data.timestamp_us(),
+            "period_us": data.period_us(),
+            "latency_us": data.latency_us(),
+            "overrun_count": data.overrun_count(),
+            "load_pct": f64::from(data.load_dpermille()) / 10.0
+        }
+    }))
 }
 
 fn decode_attitude_estimate(bytes: &[u8]) -> Option<Value> {

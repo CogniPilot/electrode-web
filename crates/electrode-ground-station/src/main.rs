@@ -23,13 +23,16 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use axum::body::Body;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{Request, StatusCode};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
 use electrode_command_authority::{CommandAuthority, CommandAuthorityConfig};
 use serde::Serialize;
+use tower::{service_fn, ServiceExt};
 
 use autopilot::AutopilotProfile;
 use autopilot_link::{AutopilotLink, AutopilotRunStatus};
@@ -83,11 +86,56 @@ struct AppState {
     autopilot_file: PathBuf,
     simulation: RwLock<SimulationProfile>,
     simulation_file: PathBuf,
-    _sim_bridge: sim_bridge::SimBridge,
+    sim_bridge: sim_bridge::SimBridge,
     supervisor: Supervisor,
     ppm_supervisor: Supervisor,
     autopilot_link: AutopilotLink,
     _command_authority: CommandAuthority,
+}
+
+fn should_serve_spa_fallback(path: &str) -> bool {
+    let last_segment = path.rsplit('/').next().unwrap_or_default();
+
+    !path.starts_with("/_app/") && !path.starts_with("/assets/") && !last_segment.contains('.')
+}
+
+async fn serve_spa_fallback(
+    index: PathBuf,
+    req: Request<Body>,
+) -> Result<axum::response::Response, std::convert::Infallible> {
+    if !should_serve_spa_fallback(req.uri().path()) {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+
+    let response = match tower_http::services::ServeFile::new(index)
+        .oneshot(req)
+        .await
+    {
+        Ok(response) => response.map(Body::new),
+        Err(err) => match err {},
+    };
+    Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_serve_spa_fallback;
+
+    #[test]
+    fn spa_fallback_accepts_client_routes() {
+        assert!(should_serve_spa_fallback("/"));
+        assert!(should_serve_spa_fallback("/manual-control"));
+        assert!(should_serve_spa_fallback("/nested/route"));
+    }
+
+    #[test]
+    fn spa_fallback_rejects_asset_paths() {
+        assert!(!should_serve_spa_fallback(
+            "/_app/immutable/entry/start.missing.js"
+        ));
+        assert!(!should_serve_spa_fallback("/assets/models/missing.glb"));
+        assert!(!should_serve_spa_fallback("/favicon.ico"));
+    }
 }
 
 type Shared = Arc<AppState>;
@@ -152,9 +200,11 @@ async fn put_autopilot(
     State(state): State<Shared>,
     Json(profile): Json<AutopilotProfile>,
 ) -> Result<Json<AutopilotProfile>, (StatusCode, String)> {
+    let profile = profile.normalized();
     profile
         .save(&state.autopilot_file)
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+    state.sim_bridge.set_mocap_source(profile.mocap_source);
     *state.autopilot.write().expect("autopilot lock poisoned") = profile.clone();
     Ok(Json(profile))
 }
@@ -172,7 +222,11 @@ async fn autopilot_start(
         .expect("autopilot lock poisoned")
         .clone();
     // The link blocks briefly on zenoh open; keep the async runtime free.
-    let link = tokio::task::block_in_place(|| state.autopilot_link.start(&profile));
+    let link = tokio::task::block_in_place(|| {
+        state
+            .autopilot_link
+            .start(&profile, Some(state._command_authority.vehicle_session()))
+    });
     link.map(Json)
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
 }
@@ -335,16 +389,20 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let command_authority = CommandAuthority::start(CommandAuthorityConfig::from_env())?;
     let zenoh_listeners = command_authority.listeners().to_vec();
-    let sim_bridge = sim_bridge::SimBridge::start("udp/127.0.0.1:7447")?;
+    let autopilot_profile = AutopilotProfile::load_or_default(&cli.autopilot_file);
+    let sim_bridge = sim_bridge::SimBridge::start(
+        command_authority.vehicle_session(),
+        autopilot_profile.mocap_source,
+    )?;
 
     let state: Shared = Arc::new(AppState {
         mapping: RwLock::new(MappingProfile::load_or_default(&cli.mapping_file)),
         mapping_file: cli.mapping_file.clone(),
-        autopilot: RwLock::new(AutopilotProfile::load_or_default(&cli.autopilot_file)),
+        autopilot: RwLock::new(autopilot_profile),
         autopilot_file: cli.autopilot_file.clone(),
         simulation: RwLock::new(SimulationProfile::load_or_default(&cli.simulation_file)),
         simulation_file: cli.simulation_file.clone(),
-        _sim_bridge: sim_bridge,
+        sim_bridge,
         supervisor: Supervisor::manual_control(),
         ppm_supervisor: Supervisor::ppm_bridge(),
         autopilot_link: AutopilotLink::new(),
@@ -376,11 +434,15 @@ async fn main() -> anyhow::Result<()> {
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
 
-    // SPA static hosting: serve built assets, falling back to index.html so the
-    // client-rendered app loads on any path.
+    // SPA static hosting: serve built assets and fall back to index.html for
+    // client-rendered routes without masking missing JS/CSS/model assets.
     let index = cli.web_dir.join("index.html");
-    let static_service = tower_http::services::ServeDir::new(&cli.web_dir)
-        .not_found_service(tower_http::services::ServeFile::new(index));
+    let static_service = tower_http::services::ServeDir::new(&cli.web_dir).fallback(service_fn(
+        move |req: Request<Body>| {
+            let index = index.clone();
+            serve_spa_fallback(index, req)
+        },
+    ));
 
     let app = Router::new()
         .nest("/gcs", gcs)

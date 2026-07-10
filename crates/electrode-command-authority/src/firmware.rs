@@ -377,6 +377,7 @@ fn firmware_key(prefix: &str, operation: &str) -> String {
 
 /// Transfer an already validated firmware candidate through the receiver's
 /// info/prepare/chunk/commit/status query protocol.
+#[allow(clippy::excessive_nesting)]
 pub fn transfer_firmware<F>(
     session: &Session,
     config: &TransferConfig,

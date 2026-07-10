@@ -13,8 +13,11 @@
 // is a real root TABLE.
 import * as flatbuffers from 'flatbuffers';
 
+import { AttitudeCommandData } from './generated/synapse/topic/attitude-command-data.js';
 import { AttitudeEstimateData } from './generated/synapse/topic/attitude-estimate-data.js';
 import { AttitudeEstimateFlags } from './generated/synapse/topic/attitude-estimate-flags.js';
+import { ControlLoopMetricsData } from './generated/synapse/topic/control-loop-metrics-data.js';
+import { NavigationTargetData } from './generated/synapse/topic/navigation-target-data.js';
 import { LocalPositionCommandData } from './generated/synapse/topic/local-position-command-data.js';
 import { ManualControlData } from './generated/synapse/topic/manual-control-data.js';
 import { ManualControlFlags } from './generated/synapse/topic/manual-control-flags.js';
@@ -47,7 +50,8 @@ export function classify(key: string): string {
   if (
     key.includes('mocap_frame') ||
     key.endsWith('mocap/frame') ||
-    key.includes('synapse/mocap/rigid_body/')
+    key.includes('synapse/mocap/rigid_body/') ||
+    key.includes('synapse/mocap/selected/rigid_body/')
   ) {
     return 'MocapFrame';
   }
@@ -62,6 +66,15 @@ export function classify(key: string): string {
   }
   if (key.includes('attitude_estimate')) {
     return 'AttitudeEstimate';
+  }
+  if (key.includes('attitude_command')) {
+    return 'AttitudeCommand';
+  }
+  if (key.includes('navigation_target')) {
+    return 'NavigationTarget';
+  }
+  if (key.includes('control_loop_metrics')) {
+    return 'ControlLoopMetrics';
   }
   if (key.includes('vehicle_health')) {
     return 'VehicleHealth';
@@ -88,6 +101,12 @@ export function decode(key: string, bytes: Uint8Array): Decoded {
   switch (schema) {
     case 'AttitudeEstimate':
       return decodeOrRaw(schema, bytes, decodeAttitudeEstimate);
+    case 'AttitudeCommand':
+      return decodeOrRaw(schema, bytes, decodeAttitudeCommand);
+    case 'NavigationTarget':
+      return decodeOrRaw(schema, bytes, decodeNavigationTarget);
+    case 'ControlLoopMetrics':
+      return decodeOrRaw(schema, bytes, decodeControlLoopMetrics);
     case 'VehicleHealth':
       return decodeOrRaw(schema, bytes, decodeVehicleHealth);
     case 'PowerStatus':
@@ -194,6 +213,54 @@ function decodeAttitudeEstimate(bytes: Uint8Array): unknown | null {
       angular_velocity: { roll: rates.roll(), pitch: rates.pitch(), yaw: rates.yaw() },
       attitude_valid: hasFlag(flags, AttitudeEstimateFlags.AttitudeValid),
       rates_valid: hasFlag(flags, AttitudeEstimateFlags.RatesValid)
+    }
+  };
+}
+
+function decodeAttitudeCommand(bytes: Uint8Array): unknown | null {
+  const data = new AttitudeCommandData().__init(0, byteBuffer(bytes));
+  const attitude = data.attitude();
+  const rates = data.bodyRateFluRadS();
+  if (!attitude || !rates) {
+    return null;
+  }
+  return {
+    data: {
+      timestamp_us: Number(data.timestampUs()),
+      attitude: { w: attitude.w(), x: attitude.x(), y: attitude.y(), z: attitude.z() },
+      body_rate_flu_rad_s: { roll: rates.roll(), pitch: rates.pitch(), yaw: rates.yaw() },
+      thrust: data.thrust(),
+      type_mask: data.typeMask()
+    }
+  };
+}
+
+function decodeNavigationTarget(bytes: Uint8Array): unknown | null {
+  const data = new NavigationTargetData().__init(0, byteBuffer(bytes));
+  return {
+    data: {
+      timestamp_us: Number(data.timestampUs()),
+      altitude_error_m: data.altitudeErrorM(),
+      airspeed_error_m_s: data.airspeedErrorMS(),
+      xtrack_error_m: data.xtrackErrorM(),
+      desired_roll_deg: data.desiredRollCdeg() / 100,
+      desired_pitch_deg: data.desiredPitchCdeg() / 100,
+      desired_yaw_deg: data.desiredYawCdeg() / 100,
+      target_yaw_deg: data.targetYawCdeg() / 100,
+      distance_to_waypoint_m: data.distanceToWaypointM()
+    }
+  };
+}
+
+function decodeControlLoopMetrics(bytes: Uint8Array): unknown | null {
+  const data = new ControlLoopMetricsData().__init(0, byteBuffer(bytes));
+  return {
+    data: {
+      timestamp_us: Number(data.timestampUs()),
+      period_us: data.periodUs(),
+      latency_us: data.latencyUs(),
+      overrun_count: data.overrunCount(),
+      load_pct: data.loadDpermille() / 10
     }
   };
 }

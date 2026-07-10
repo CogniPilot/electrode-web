@@ -50,7 +50,16 @@ type WasmSubscriber = import('@cognipilot/zenoh-wasm').WasmSubscriber;
 const ZENOH_CONNECT_TIMEOUT_MS = 15_000;
 const ZENOH_PUBLISH_TIMEOUT_MS = 2_000;
 const CATALOG_INTERVAL_MS = 500;
-const DEFAULT_KEY_EXPR = 'synapse/**';
+const SYNAPSE_CATALOG_KEY = 'electrode/catalog/synapse';
+// Keep normal vehicle telemetry live, but subscribe to only cub1's compact
+// pose for 3D visualization. Other Synapse topics are discovered through the
+// catalog above and subscribed to only when the operator selects them.
+const DEFAULT_KEY_EXPRS = [
+  'synapse/v1/**',
+  'synapse/motor_output',
+  'synapse/mocap/rigid_body/cub1/pose',
+  'synapse/mocap/selected/rigid_body/cub1/pose'
+];
 // Matches electrode_web_core::SCHEMA_VERSION on the native side.
 const SCHEMA_VERSION = 1;
 
@@ -68,14 +77,16 @@ interface TopicStat {
 
 /**
  * Connects the browser directly to a Zenoh router via the `@cognipilot/zenoh-wasm`
- * client. Publishes commands, subscribes to `synapse/**`, maintains a discovery
- * catalog, and decodes selected topics into telemetry frames — everything the
- * native ground-bridge did, without the bridge process.
+ * client. Publishes commands, consumes payload-free Synapse discovery
+ * announcements, subscribes to selected topics on demand, and decodes those
+ * topics into telemetry frames.
  */
 export class ZenohWasmTransport {
   #session: ZenohSession | null = null;
   #zenoh: ZenohWasmModule | null = null;
-  #subscriber: WasmSubscriber | null = null;
+  #baseSubscribers: WasmSubscriber[] = [];
+  #dynamicSubscribers = new Map<string, WasmSubscriber>();
+  #subscriptionSync: Promise<void> = Promise.resolve();
   #version = 'unknown';
   #registry = new Map<string, TopicStat>();
   #selected = new Set<string>();
@@ -83,7 +94,7 @@ export class ZenohWasmTransport {
   #connected = false;
   #sequence = 1;
   readonly #vehicleId: string;
-  readonly #keyExpr: string;
+  readonly #keyExprs: string[];
   readonly #autoSelectKnown: boolean;
   readonly #wasmUrl?: string;
 
@@ -95,7 +106,8 @@ export class ZenohWasmTransport {
     options: ZenohTransportOptions = {}
   ) {
     this.#vehicleId = options.vehicleId ?? 'electrode-01';
-    this.#keyExpr = options.keyExpr ?? DEFAULT_KEY_EXPR;
+    const payloadExprs = options.keyExpr ? [options.keyExpr] : DEFAULT_KEY_EXPRS;
+    this.#keyExprs = [...payloadExprs, SYNAPSE_CATALOG_KEY];
     this.#autoSelectKnown = options.autoSelectKnown ?? true;
     this.#wasmUrl = options.wasmUrl;
   }
@@ -121,10 +133,15 @@ export class ZenohWasmTransport {
         `opening Zenoh endpoint ${this.endpointOrConfig}`
       );
 
-      this.#subscriber = await this.#session.declareSubscriber(
-        this.#keyExpr,
-        (key: string, payload: Uint8Array) => this.#onSample(key, payload)
-      );
+      this.#baseSubscribers = [];
+      for (const keyExpr of this.#keyExprs) {
+        this.#baseSubscribers.push(
+          await this.#session.declareSubscriber(
+            keyExpr,
+            (key: string, payload: Uint8Array) => this.#onSample(key, payload)
+          )
+        );
+      }
 
       this.#connected = true;
       this.#catalogTimer = setInterval(() => this.#emitCatalog(), CATALOG_INTERVAL_MS);
@@ -134,7 +151,7 @@ export class ZenohWasmTransport {
         mode: 'zenoh',
         status: 'connected',
         url: this.endpointOrConfig,
-        message: `zenoh-wasm ${this.#version} · ${this.#keyExpr}`
+        message: `zenoh-wasm ${this.#version} · ${this.#keyExprs.join(' ')}`
       });
     } catch (error) {
       this.onConnection({
@@ -150,6 +167,17 @@ export class ZenohWasmTransport {
   /** Replace the set of discovered keys we forward as telemetry. */
   setSubscriptions(keys: string[]): void {
     this.#selected = new Set(keys);
+    this.#subscriptionSync = this.#subscriptionSync
+      .then(() => this.#reconcileDynamicSubscriptions())
+      .catch((error) => {
+        this.onConnection({
+          mode: 'zenoh',
+          status: 'error',
+          url: this.endpointOrConfig,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      });
+    this.#emitCatalog();
   }
 
   async publishBytes(topic: string, payload: Uint8Array): Promise<void> {
@@ -171,9 +199,14 @@ export class ZenohWasmTransport {
     }
     this.#connected = false;
 
-    const subscriber = this.#subscriber;
-    this.#subscriber = null;
-    if (subscriber) {
+    await this.#subscriptionSync.catch(() => {});
+    const subscribers = [
+      ...this.#baseSubscribers,
+      ...this.#dynamicSubscribers.values()
+    ];
+    this.#baseSubscribers = [];
+    this.#dynamicSubscribers.clear();
+    for (const subscriber of subscribers) {
       try {
         await subscriber.undeclare();
       } catch {
@@ -200,6 +233,11 @@ export class ZenohWasmTransport {
   }
 
   #onSample(key: string, payload: Uint8Array): void {
+    if (key === SYNAPSE_CATALOG_KEY) {
+      this.#onCatalogAnnouncement(payload);
+      return;
+    }
+
     const now = Date.now();
     let stat = this.#registry.get(key);
     if (!stat) {
@@ -227,6 +265,86 @@ export class ZenohWasmTransport {
     if (this.#selected.has(key)) {
       this.onMessage(this.#buildFrame(key, payload));
     }
+  }
+
+  #onCatalogAnnouncement(payload: Uint8Array): void {
+    try {
+      const announcement = JSON.parse(new TextDecoder().decode(payload)) as {
+        key?: unknown;
+        lastBytes?: unknown;
+      };
+      if (typeof announcement.key !== 'string' || !announcement.key.startsWith('synapse/')) {
+        return;
+      }
+      const now = Date.now();
+      const existing = this.#registry.get(announcement.key);
+      if (existing) {
+        existing.lastSeenMs = now;
+        if (typeof announcement.lastBytes === 'number') {
+          existing.lastBytes = announcement.lastBytes;
+        }
+      } else {
+        const schema = classify(announcement.key);
+        this.#registry.set(announcement.key, {
+          schema,
+          decodable: schema !== 'Raw',
+          count: 0,
+          prevCount: 0,
+          lastBytes: typeof announcement.lastBytes === 'number' ? announcement.lastBytes : 0,
+          rateHz: 0,
+          firstSeenMs: now,
+          lastSeenMs: now
+        });
+      }
+    } catch {
+      // Ignore malformed catalog announcements at the browser boundary.
+    }
+  }
+
+  async #reconcileDynamicSubscriptions(): Promise<void> {
+    const session = this.#session;
+    if (!session || session.isClosed()) {
+      return;
+    }
+
+    for (const [key, subscriber] of this.#dynamicSubscribers) {
+      if (!this.#selected.has(key) || this.#coveredByBaseSubscription(key)) {
+        this.#dynamicSubscribers.delete(key);
+        await subscriber.undeclare();
+      }
+    }
+
+    for (const key of this.#selected) {
+      if (
+        !key.startsWith('synapse/') ||
+        this.#coveredByBaseSubscription(key) ||
+        this.#dynamicSubscribers.has(key)
+      ) {
+        continue;
+      }
+      const subscriber = await session.declareSubscriber(
+        key,
+        (sampleKey: string, payload: Uint8Array) => this.#onSample(sampleKey, payload)
+      );
+      if (this.#session !== session || !this.#selected.has(key)) {
+        await subscriber.undeclare();
+      } else {
+        this.#dynamicSubscribers.set(key, subscriber);
+      }
+    }
+  }
+
+  #coveredByBaseSubscription(key: string): boolean {
+    return this.#keyExprs.some((expression) => {
+      if (expression === key) {
+        return true;
+      }
+      if (expression.endsWith('/**')) {
+        const prefix = expression.slice(0, -3);
+        return key === prefix || key.startsWith(`${prefix}/`);
+      }
+      return false;
+    });
   }
 
   #buildFrame(key: string, payload: Uint8Array): TransportMessage {

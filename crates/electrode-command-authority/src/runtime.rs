@@ -1,10 +1,11 @@
 //! Zenoh runtime with a hard browser/vehicle session boundary.
 
+use std::collections::HashMap;
 use std::env;
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use synapse_fbs::cmd::ParamSetReply;
@@ -18,6 +19,8 @@ use crate::policy::{AuthorizedCommand, CommandPolicy, Delivery, PolicyConfig};
 const PARAMETER_QUEUE_CAPACITY: usize = 8;
 const PRIVATE_MOCAP_TOPIC: &str = "electrode/sim/rumoca/mocap_frame";
 const PRIVATE_PWM_TOPIC: &str = "electrode/sim/rumoca/radio_pwm_signal_outputs";
+const SYNAPSE_CATALOG_KEY: &str = "electrode/catalog/synapse";
+const SYNAPSE_CATALOG_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Runtime endpoints. The two sessions never discover one another directly.
 #[derive(Clone, Debug)]
@@ -100,6 +103,7 @@ pub struct CommandAuthority {
 }
 
 impl CommandAuthority {
+    #[allow(clippy::excessive_nesting)]
     pub fn start(config: CommandAuthorityConfig) -> Result<Self> {
         let browser_session =
             open_session(&config.browser_listen, config.browser_connect.as_deref())?;
@@ -147,8 +151,7 @@ impl CommandAuthority {
                 query_sender.clone(),
                 &config,
             )?,
-            relay_to_browser(&vehicle_session, &browser_session, "synapse/v1/topic/**")?,
-            relay_to_browser(&vehicle_session, &browser_session, "synapse/mocap/**")?,
+            relay_synapse_to_browser(&vehicle_session, &browser_session)?,
             relay_to_browser(&vehicle_session, &browser_session, PRIVATE_PWM_TOPIC)?,
             relay_verified_mocap(&browser_session, &vehicle_session)?,
         ];
@@ -176,6 +179,15 @@ impl CommandAuthority {
     #[must_use]
     pub fn listeners(&self) -> &[String] {
         &self.listeners
+    }
+
+    /// A trusted vehicle-side session for in-process ground-station services.
+    ///
+    /// Browser traffic still crosses the policy boundary above; this clone is
+    /// only used by native components owned by the ground-station daemon.
+    #[must_use]
+    pub fn vehicle_session(&self) -> Session {
+        self.vehicle_session.clone()
     }
 }
 
@@ -438,6 +450,65 @@ fn relay_to_browser(
         .map_err(|error| anyhow!("subscribe vehicle relay {key}: {error}"))
 }
 
+/// Relay Synapse payloads into the isolated browser session and publish a
+/// throttled, payload-free catalog announcement for every observed key. Zenoh
+/// only delivers the relayed payload when a browser subscriber requests that
+/// key, while the catalog lets the UI discover topics without subscribing to
+/// every high-rate stream.
+fn relay_synapse_to_browser(
+    vehicle: &Session,
+    browser: &Session,
+) -> Result<zenoh::pubsub::Subscriber<()>> {
+    let destination = browser.clone();
+    let announcements = Arc::new(Mutex::new(HashMap::<String, Instant>::new()));
+    vehicle
+        .declare_subscriber("synapse/**")
+        .callback(move |sample| {
+            let key = sample.key_expr().as_str().to_string();
+            let payload = sample.payload().to_bytes().to_vec();
+            let now = Instant::now();
+            let should_announce = should_announce_topic(&announcements, &key, now);
+
+            if should_announce {
+                let announcement = serde_json::json!({
+                    "key": key,
+                    "lastBytes": payload.len(),
+                })
+                .to_string();
+                if let Err(error) = destination.put(SYNAPSE_CATALOG_KEY, announcement).wait() {
+                    tracing::warn!(%error, "Synapse catalog announcement failed");
+                }
+            }
+
+            if let Err(error) = destination.put(key.clone(), payload).wait() {
+                tracing::warn!(%key, %error, "vehicle Synapse relay failed");
+            }
+        })
+        .wait()
+        .map_err(|error| anyhow!("subscribe vehicle relay synapse/**: {error}"))
+}
+
+fn should_announce_topic(
+    announcements: &Mutex<HashMap<String, Instant>>,
+    key: &str,
+    now: Instant,
+) -> bool {
+    let mut announcements = announcements
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match announcements.get_mut(key) {
+        Some(last) if now.duration_since(*last) < SYNAPSE_CATALOG_INTERVAL => false,
+        Some(last) => {
+            *last = now;
+            true
+        }
+        None => {
+            announcements.insert(key.to_string(), now);
+            true
+        }
+    }
+}
+
 fn relay_verified_mocap(
     browser: &Session,
     vehicle: &Session,
@@ -536,7 +607,11 @@ fn value_or(key: &str, default: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parameter_reply_status;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    use super::{parameter_reply_status, should_announce_topic};
     use flatbuffers::FlatBufferBuilder;
     use synapse_fbs::cmd::{ParamSetReply, ParamSetReplyArgs};
     use synapse_fbs::types::CommandResultCode;
@@ -574,5 +649,32 @@ mod tests {
             .to_string();
         assert!(denied.contains("Denied"));
         assert!(denied.contains("detail 7"));
+    }
+
+    #[test]
+    fn synapse_catalog_announcements_are_immediate_and_throttled_per_key() {
+        let announcements = Mutex::new(HashMap::new());
+        let start = Instant::now();
+
+        assert!(should_announce_topic(
+            &announcements,
+            "synapse/v1/topic/attitude_estimate",
+            start
+        ));
+        assert!(!should_announce_topic(
+            &announcements,
+            "synapse/v1/topic/attitude_estimate",
+            start + Duration::from_millis(999)
+        ));
+        assert!(should_announce_topic(
+            &announcements,
+            "synapse/v1/topic/vehicle_health",
+            start + Duration::from_millis(999)
+        ));
+        assert!(should_announce_topic(
+            &announcements,
+            "synapse/v1/topic/attitude_estimate",
+            start + Duration::from_secs(1)
+        ));
     }
 }
