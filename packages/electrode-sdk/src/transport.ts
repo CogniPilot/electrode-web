@@ -50,7 +50,16 @@ type WasmSubscriber = import('@cognipilot/zenoh-wasm').WasmSubscriber;
 const ZENOH_CONNECT_TIMEOUT_MS = 15_000;
 const ZENOH_PUBLISH_TIMEOUT_MS = 2_000;
 const CATALOG_INTERVAL_MS = 500;
-const DEFAULT_KEY_EXPR = 'synapse/**';
+// Not `synapse/**`: the raw per-body compact poses for bodies the viewer
+// doesn't control (cameras, props) arrive at 240 Hz each and drown the tab —
+// `synapse/mocap/frame` already carries every body for display.
+const DEFAULT_KEY_EXPRS = [
+  'synapse/v1/**',
+  'synapse/motor_output',
+  'synapse/mocap/frame',
+  'synapse/mocap/rigid_body/cub1/pose',
+  'synapse/mocap/selected/**'
+];
 // Matches electrode_web_core::SCHEMA_VERSION on the native side.
 const SCHEMA_VERSION = 1;
 
@@ -75,7 +84,7 @@ interface TopicStat {
 export class ZenohWasmTransport {
   #session: ZenohSession | null = null;
   #zenoh: ZenohWasmModule | null = null;
-  #subscriber: WasmSubscriber | null = null;
+  #subscribers: WasmSubscriber[] = [];
   #version = 'unknown';
   #registry = new Map<string, TopicStat>();
   #selected = new Set<string>();
@@ -83,7 +92,7 @@ export class ZenohWasmTransport {
   #connected = false;
   #sequence = 1;
   readonly #vehicleId: string;
-  readonly #keyExpr: string;
+  readonly #keyExprs: string[];
   readonly #autoSelectKnown: boolean;
   readonly #wasmUrl?: string;
 
@@ -95,7 +104,7 @@ export class ZenohWasmTransport {
     options: ZenohTransportOptions = {}
   ) {
     this.#vehicleId = options.vehicleId ?? 'electrode-01';
-    this.#keyExpr = options.keyExpr ?? DEFAULT_KEY_EXPR;
+    this.#keyExprs = options.keyExpr ? [options.keyExpr] : DEFAULT_KEY_EXPRS;
     this.#autoSelectKnown = options.autoSelectKnown ?? true;
     this.#wasmUrl = options.wasmUrl;
   }
@@ -121,10 +130,15 @@ export class ZenohWasmTransport {
         `opening Zenoh endpoint ${this.endpointOrConfig}`
       );
 
-      this.#subscriber = await this.#session.declareSubscriber(
-        this.#keyExpr,
-        (key: string, payload: Uint8Array) => this.#onSample(key, payload)
-      );
+      this.#subscribers = [];
+      for (const keyExpr of this.#keyExprs) {
+        this.#subscribers.push(
+          await this.#session.declareSubscriber(
+            keyExpr,
+            (key: string, payload: Uint8Array) => this.#onSample(key, payload)
+          )
+        );
+      }
 
       this.#connected = true;
       this.#catalogTimer = setInterval(() => this.#emitCatalog(), CATALOG_INTERVAL_MS);
@@ -134,7 +148,7 @@ export class ZenohWasmTransport {
         mode: 'zenoh',
         status: 'connected',
         url: this.endpointOrConfig,
-        message: `zenoh-wasm ${this.#version} · ${this.#keyExpr}`
+        message: `zenoh-wasm ${this.#version} · ${this.#keyExprs.join(' ')}`
       });
     } catch (error) {
       this.onConnection({
@@ -171,9 +185,9 @@ export class ZenohWasmTransport {
     }
     this.#connected = false;
 
-    const subscriber = this.#subscriber;
-    this.#subscriber = null;
-    if (subscriber) {
+    const subscribers = this.#subscribers;
+    this.#subscribers = [];
+    for (const subscriber of subscribers) {
       try {
         await subscriber.undeclare();
       } catch {

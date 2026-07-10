@@ -748,6 +748,7 @@ dependencies = [
  "serde_json",
  "synapse_fbs",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",

@@ -122,3 +122,54 @@ describe('state store telemetry pipeline', () => {
     expect(Object.values(state.topics).some((topic) => topic.stale)).toBe(true);
   });
 });
+
+describe('mocap state handling', () => {
+  it('preserves the last mocap pose when rigid body 0 becomes invalid', () => {
+    let state = createInitialVehicleState('cubs2');
+    const valid = telemetryFrame(
+      'synapse/mocap/frame',
+      {
+        rigid_bodies: [
+          {
+            position: { x: 7.4, y: -10.3, z: 0.32 },
+            attitude: { w: 1, x: 0, y: 0, z: 0 },
+            residual: 0.001,
+            tracking_valid: true
+          }
+        ]
+      },
+      10_000
+    );
+    const invalid = telemetryFrame(
+      'synapse/mocap/frame',
+      {
+        rigid_bodies: [
+          {
+            position: { x: Number.NaN, y: Number.NaN, z: Number.NaN },
+            attitude: { w: Number.NaN, x: Number.NaN, y: Number.NaN, z: Number.NaN },
+            residual: Number.NaN,
+            tracking_valid: false
+          },
+          {
+            position: { x: 0, y: 0, z: 0 },
+            attitude: { w: 1, x: 0, y: 0, z: 0 },
+            residual: 0,
+            tracking_valid: true
+          }
+        ]
+      },
+      10_050
+    );
+
+    state = applyGcsFrame(state, valid, 10_000);
+    expect(state.pose).toMatchObject({ xM: 7.4, yM: -10.3, altM: 0.32 });
+    expect(state.localization).toMatchObject({ source: 'mocap', fresh: true });
+
+    state = applyGcsFrame(state, invalid, 10_050);
+
+    expect(state.pose).toMatchObject({ xM: 7.4, yM: -10.3, altM: 0.32 });
+    expect(state.attitude?.yawDeg).toBeCloseTo(0, 6);
+    expect(state.lastMocap).toMatchObject({ xM: 7.4, yM: -10.3, altM: 0.32 });
+    expect(state.localization).toMatchObject({ source: 'mocap', fresh: false, quality: 0 });
+  });
+});

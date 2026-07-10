@@ -9,12 +9,13 @@
 //!   - `synapse/mocap/rigid_body/cub1/pose`   — compact 28-byte pose
 //!     (little-endian f32 `[px, py, pz, qx, qy, qz, qw]`, ENU metres, w last)
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::autopilot::MocapSource;
 use electrode_ppm_bridge::{
-    channels_to_pwm_signal_outputs_payload, manual_control_to_channels,
-    pwm_signal_outputs_to_channels, PpmChannels, FAILSAFE_CHANNELS,
+    FAILSAFE_CHANNELS, PpmChannels, channels_to_pwm_signal_outputs_payload,
+    manual_control_to_channels, pwm_signal_outputs_to_channels,
 };
 use synapse_fbs::topic::{ManualControlData, ManualControlFlags, MocapFrame, MocapRigidBodyData};
 use synapse_fbs::types::RotationMatrix3f;
@@ -32,6 +33,7 @@ const MANUAL_CONTROL_PAYLOAD_SIZE: usize = 40;
 pub(crate) struct SimBridge {
     _session: zenoh::Session,
     _subscribers: Vec<zenoh::pubsub::Subscriber<()>>,
+    mocap_source: Arc<AtomicU8>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -50,47 +52,39 @@ struct RadioState {
 }
 
 impl SimBridge {
-    pub(crate) fn start(endpoint: &str) -> anyhow::Result<Self> {
-        let session = open_session(endpoint)?;
+    pub(crate) fn start(
+        session: zenoh::Session,
+        mocap_source: MocapSource,
+    ) -> anyhow::Result<Self> {
         let radio_pwm_frames = Arc::new(AtomicU64::new(0));
         let mocap_frames = Arc::new(AtomicU64::new(0));
         let radio_state = initial_radio_state();
+        let mocap_source = Arc::new(AtomicU8::new(mocap_source_code(mocap_source)));
         let subscribers = vec![
             subscribe_public_pwm(&session, radio_state.clone(), radio_pwm_frames.clone())?,
             subscribe_public_manual(&session, radio_state, radio_pwm_frames.clone())?,
-            subscribe_private_mocap(&session, mocap_frames.clone())?,
+            subscribe_private_mocap(&session, mocap_frames.clone(), mocap_source.clone())?,
         ];
 
         tracing::info!(
             radio_pwm = PRIVATE_RADIO_PWM_TOPIC,
             mocap_in = PRIVATE_MOCAP_TOPIC,
-            mocap_frame_out = PUBLIC_MOCAP_FRAME_TOPIC,
-            mocap_pose_out = PUBLIC_MOCAP_POSE_TOPIC,
-            "ground-station sim plant bridge listening"
+            mocap_out = PUBLIC_MOCAP_POSE_TOPIC,
+            ?mocap_source,
+            "ground-station sim mocap bridge listening"
         );
 
         Ok(Self {
             _session: session,
             _subscribers: subscribers,
+            mocap_source,
         })
     }
-}
 
-fn open_session(endpoint: &str) -> anyhow::Result<zenoh::Session> {
-    let mut config = zenoh::Config::default();
-    config
-        .insert_json5("mode", "\"peer\"")
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let endpoint = endpoint.trim();
-    if !endpoint.is_empty() {
-        config
-            .insert_json5("connect/endpoints", &format!("[\"{endpoint}\"]"))
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    pub(crate) fn set_mocap_source(&self, source: MocapSource) {
+        self.mocap_source
+            .store(mocap_source_code(source), Ordering::Relaxed);
     }
-
-    zenoh::open(config)
-        .wait()
-        .map_err(|error| anyhow::anyhow!("sim bridge zenoh open failed: {error}"))
 }
 
 fn initial_radio_state() -> Arc<Mutex<RadioState>> {
@@ -142,6 +136,7 @@ fn subscribe_public_manual(
 fn subscribe_private_mocap(
     session: &zenoh::Session,
     count: Arc<AtomicU64>,
+    source: Arc<AtomicU8>,
 ) -> anyhow::Result<zenoh::pubsub::Subscriber<()>> {
     let subscribe_session = session.clone();
     let publish_session = session.clone();
@@ -149,7 +144,9 @@ fn subscribe_private_mocap(
         .declare_subscriber(PRIVATE_MOCAP_TOPIC)
         .callback(move |sample| {
             let bytes = sample.payload().to_bytes();
-            publish_mocap_sample(&publish_session, &count, &bytes);
+            if selected_mocap_source(&source) == MocapSource::Sim {
+                publish_sim_mocap_sample(&publish_session, &count, &bytes);
+            }
         })
         .wait()
         .map_err(|error| {
@@ -192,7 +189,7 @@ fn handle_public_manual_sample(
     publish_selected_radio_pwm(session, state, count);
 }
 
-fn publish_mocap_sample(session: &zenoh::Session, count: &AtomicU64, bytes: &[u8]) {
+fn publish_sim_mocap_sample(session: &zenoh::Session, count: &AtomicU64, bytes: &[u8]) {
     // The plant publishes schema-verified MocapFrame FlatBuffers; drop anything
     // else rather than republishing garbage on the public wire.
     let Ok(frame) = flatbuffers::root::<MocapFrame>(bytes) else {
@@ -213,6 +210,20 @@ fn publish_mocap_sample(session: &zenoh::Session, count: &AtomicU64, bytes: &[u8
         .is_ok();
     if frame_ok && pose_ok {
         count.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn mocap_source_code(source: MocapSource) -> u8 {
+    match source {
+        MocapSource::Sim => 1,
+        MocapSource::Real => 2,
+    }
+}
+
+fn selected_mocap_source(source: &AtomicU8) -> MocapSource {
+    match source.load(Ordering::Relaxed) {
+        1 => MocapSource::Sim,
+        _ => MocapSource::Real,
     }
 }
 

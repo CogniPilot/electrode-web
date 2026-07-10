@@ -7,6 +7,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) const MOCAP_POSE_TOPIC: &str = "synapse/mocap/rigid_body/cub1/pose";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AutopilotProfile {
@@ -35,6 +37,11 @@ pub(crate) struct AutopilotProfile {
     /// the autopilot consumes — its own publications must not loop back.
     #[serde(default = "default_inbound_topics")]
     pub inbound_topics: Vec<String>,
+    /// Which mocap producer is allowed onto the public pose topic the firmware
+    /// subscribes to directly: real capture publishes there natively, and the
+    /// sim bridge republishes the sim plant only when `Sim` is selected.
+    #[serde(default)]
+    pub mocap_source: MocapSource,
 }
 
 fn default_native_binary() -> String {
@@ -52,9 +59,17 @@ fn default_udp_tx_port() -> u16 {
 
 fn default_inbound_topics() -> Vec<String> {
     vec![
-        "synapse/mocap/rigid_body/cub1/pose".to_string(),
+        MOCAP_POSE_TOPIC.to_string(),
         "manual_control_command".to_string(),
     ]
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum MocapSource {
+    Sim,
+    #[default]
+    Real,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +125,7 @@ impl Default for AutopilotProfile {
             udp_rx_port: default_udp_rx_port(),
             udp_tx_port: default_udp_tx_port(),
             inbound_topics: default_inbound_topics(),
+            mocap_source: MocapSource::default(),
         }
     }
 }
@@ -120,8 +136,22 @@ impl AutopilotProfile {
         self.inbound_topics
             .iter()
             .map(|suffix| suffix.trim().to_string())
+            .map(|suffix| normalize_inbound_topic(&suffix))
             .filter(|suffix| !suffix.is_empty())
             .collect()
+    }
+
+    pub(crate) fn normalized(mut self) -> Self {
+        self.inbound_topics = self
+            .inbound_topics
+            .into_iter()
+            .map(|topic| normalize_inbound_topic(&topic))
+            .filter(|topic| !topic.is_empty())
+            .collect();
+        if self.inbound_topics.is_empty() {
+            self.inbound_topics = default_inbound_topics();
+        }
+        self
     }
 
     /// Firmware console log written by the autopilot link, next to the binary
@@ -140,8 +170,9 @@ impl AutopilotProfile {
     pub(crate) fn load_or_default(path: &Path) -> Self {
         std::fs::read_to_string(path)
             .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
+            .and_then(|text| serde_json::from_str::<Self>(&text).ok())
             .unwrap_or_default()
+            .normalized()
     }
 
     /// Persist the profile as pretty JSON.
@@ -151,5 +182,38 @@ impl AutopilotProfile {
         }
         let text = serde_json::to_string_pretty(self).unwrap_or_default();
         std::fs::write(path, text)
+    }
+}
+
+fn normalize_inbound_topic(topic: &str) -> String {
+    let topic = topic.trim();
+    if topic.contains("/mocap/rigid_body/")
+        || topic.contains("/mocap/selected/rigid_body/")
+        || topic.ends_with("mocap/frame")
+    {
+        return MOCAP_POSE_TOPIC.to_string();
+    }
+    topic.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AutopilotProfile, MOCAP_POSE_TOPIC, MocapSource};
+
+    #[test]
+    fn normalizes_legacy_selected_mocap_inbound_topic_to_direct_pose() {
+        let profile = AutopilotProfile {
+            inbound_topics: vec![
+                "synapse/mocap/selected/rigid_body/cub1/pose".to_string(),
+                "manual_control_command".to_string(),
+            ],
+            mocap_source: MocapSource::Sim,
+            ..AutopilotProfile::default()
+        }
+        .normalized();
+
+        assert_eq!(profile.inbound_topics[0], MOCAP_POSE_TOPIC);
+        assert_eq!(profile.inbound_topics[1], "manual_control_command");
+        assert_eq!(profile.mocap_source, MocapSource::Sim);
     }
 }

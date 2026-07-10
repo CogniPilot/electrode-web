@@ -1,18 +1,18 @@
 //! Zenoh runtime with a hard browser/vehicle session boundary.
 
 use std::env;
-use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::Arc;
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use synapse_fbs::cmd::ParamSetReply;
 use synapse_fbs::topic::MocapFrame;
 use synapse_fbs::types::CommandResultCode;
 use zenoh::{Session, Wait};
 
-use crate::firmware_gate::{publish_policy_rejection, FirmwareGate};
+use crate::firmware_gate::{FirmwareGate, publish_policy_rejection};
 use crate::policy::{AuthorizedCommand, CommandPolicy, Delivery, PolicyConfig};
 
 const PARAMETER_QUEUE_CAPACITY: usize = 8;
@@ -176,6 +176,15 @@ impl CommandAuthority {
     #[must_use]
     pub fn listeners(&self) -> &[String] {
         &self.listeners
+    }
+
+    /// A trusted vehicle-side session for in-process ground-station services.
+    ///
+    /// Browser traffic still crosses the policy boundary above; this clone is
+    /// only used by native components owned by the ground-station daemon.
+    #[must_use]
+    pub fn vehicle_session(&self) -> Session {
+        self.vehicle_session.clone()
     }
 }
 

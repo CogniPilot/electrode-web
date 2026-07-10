@@ -392,14 +392,14 @@ model RumocaFixedWingFlight
   // (crisp turn entry / tightens the turn), r_coord is CLOSED-LOOP coordination on
   // the ACTUAL bank angle phi (keeps any held bank coordinated).
   parameter Real e_Kp = 4.0;
-  parameter Real e_scale = 0.32;
-  parameter Real e_env = 0.32;
+  parameter Real e_scale = 0.5236 "full pitch stick = 30 deg (S2 spec)";
+  parameter Real e_env = 0.5236;
   parameter Real e_Kd = 0.25;
   parameter Real e_off = 0.0;
-  parameter Real theta_trim = -0.09 "Level-cruise pitch attitude [rad] (~-5 deg in up_body frame)";
-  parameter Real a_Kp = 2.5;
-  parameter Real a_scale = 0.567;
-  parameter Real a_env = 0.567;
+  parameter Real theta_trim = 0.066 "Level-cruise pitch attitude [rad] (+3.8 deg, real-plane trim 2026-07-07)";
+  parameter Real a_Kp = 4.0;
+  parameter Real a_scale = 0.7854 "full bank stick = 45 deg (S2 spec, linear)";
+  parameter Real a_env = 0.7854 "full bank stick = 45 deg (S2 spec)";
   parameter Real a_Kd = 0.25;
   parameter Real a_off = 0.0;
   parameter Real r_Kp = 0.5;
@@ -556,20 +556,24 @@ model FixedWingTrueSILFull
   output Real log_theta_deg;
   output Real log_psi_deg;
 
-  // YOUR closed loop, unchanged. Start airborne at cerebri's wp1 in ENU
-  // (E=-4, N=-5, U=3), cruise 4.5 m/s, heading North (+90 deg yaw about Up:
-  // q0 = {cos45, 0, 0, sin45}). Only the plant's stiff default gear is
-  // overridden (nested modifier) so it is stable at dt=0.01; aero / mass /
-  // thr_max / the controller are untouched.
+  // YOUR closed loop, unchanged. Start ON THE GROUND at the route origin
+  // (0,0) heading down leg 1 (yaw -135 deg, toward wp1) so the firmware's own
+  // takeoff mode rolls/climbs along the first leg. Origin matters: cerebri's
+  // estimator inits previousPosition at (0,0,0), so a spawn elsewhere makes
+  // the first pose sample a phantom 10+ m/s velocity spike that poisons TECS
+  // right at the airborne latch (dives/loops). Grounded start also lets the
+  // speed estimate converge on true data before guidance engages.
+  // Only the plant's stiff default gear is overridden (nested modifier) so it
+  // is stable at dt=0.01; aero / mass / thr_max / the controller are untouched.
   RumocaFixedWingFlight flight(
-    p0_e = -4.0,
-    p0_n = -5.0,
-    p0_u = 3.0,
-    u0 = 4.5,
-    q0_w = 0.7071067811865476,
+    p0_e = 0.0,
+    p0_n = 0.0,
+    p0_u = 0.149,
+    u0 = 0.0,
+    q0_w = 0.3826834323650898,
     q0_x = 0.0,
     q0_y = 0.0,
-    q0_z = 0.7071067811865476,
+    q0_z = -0.9238795325112867,
     vehicle(
       ground_k = 60,
       ground_c = 8,

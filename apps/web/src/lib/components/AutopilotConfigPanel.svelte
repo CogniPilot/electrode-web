@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { fetchAutopilotProfile, saveAutopilotProfile, type AutopilotProfile } from '$lib/gcs';
+  import { fetchAutopilotProfile, saveAutopilotProfile, type AutopilotProfile, type MocapSource } from '$lib/gcs';
 
   export let theme: 'light' | 'dark' = 'dark';
   export let embedded = false;
@@ -101,6 +101,17 @@
       </label>
 
       <label>
+        <span>Mocap source</span>
+        <select
+          value={profile.mocapSource}
+          onchange={(e) => setField('mocapSource', e.currentTarget.value as MocapSource)}
+        >
+          <option value="real">Real mocap</option>
+          <option value="sim">Simulation</option>
+        </select>
+      </label>
+
+      <label>
         <span>UDP firmware listens</span>
         <input
           type="number"
@@ -189,6 +200,7 @@
   }
 
   input,
+  select,
   textarea {
     width: 100%;
     min-width: 0;
@@ -201,7 +213,8 @@
     font-size: 0.72rem;
   }
 
-  input {
+  input,
+  select {
     height: 34px;
   }
 
@@ -212,6 +225,7 @@
   }
 
   .light input,
+  .light select,
   .light textarea {
     background: rgba(255, 255, 255, 0.8);
     border-color: rgba(25, 63, 92, 0.2);

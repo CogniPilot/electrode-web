@@ -171,6 +171,7 @@ export type FirmwareSource = 'localBuild' | 'releaseArtifact' | 'ciArtifact' | '
 export type FlashMethod = 'usbBootloader' | 'dfu' | 'serialBootloader' | 'sdCard' | 'externalTool';
 export type RuntimeTransport = 'zenoh' | 'mavlinkSerial' | 'mavlinkUdp' | 'mavlinkTcp';
 export type RuntimeProtocol = 'synapseZenoh' | 'mavlink';
+export type MocapSource = 'sim' | 'real';
 
 export interface AutopilotProfile {
   stackName: string;
@@ -188,6 +189,7 @@ export interface AutopilotProfile {
   udpRxPort: number;
   udpTxPort: number;
   inboundTopics: string[];
+  mocapSource: MocapSource;
 }
 
 export async function fetchAutopilotProfile(signal?: AbortSignal): Promise<AutopilotProfile> {
