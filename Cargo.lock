@@ -689,6 +689,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
+name = "electrode-command-authority"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flatbuffers",
+ "serde_json",
+ "sha2",
+ "synapse_fbs",
+ "thiserror 2.0.18",
+ "tracing",
+ "zenoh",
+]
+
+[[package]]
 name = "electrode-fake-sim"
 version = "0.1.0"
 dependencies = [
@@ -726,6 +740,7 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "electrode-command-authority",
  "electrode-ppm-bridge",
  "electrode-web-core",
  "flatbuffers",

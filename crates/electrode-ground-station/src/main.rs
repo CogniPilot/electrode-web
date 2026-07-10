@@ -18,7 +18,6 @@ mod mapping;
 mod sim_bridge;
 mod simulation;
 mod supervisor;
-mod zenoh_hub;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -29,6 +28,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
+use electrode_command_authority::{CommandAuthority, CommandAuthorityConfig};
 use serde::Serialize;
 
 use autopilot::AutopilotProfile;
@@ -36,7 +36,6 @@ use autopilot_link::{AutopilotLink, AutopilotRunStatus};
 use mapping::MappingProfile;
 use simulation::{ModelicaFile, ModelicaFileSave, SimulationProfile};
 use supervisor::Supervisor;
-use zenoh_hub::{ZenohHub, ZenohHubConfig};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -88,7 +87,7 @@ struct AppState {
     supervisor: Supervisor,
     ppm_supervisor: Supervisor,
     autopilot_link: AutopilotLink,
-    _zenoh_hub: ZenohHub,
+    _command_authority: CommandAuthority,
 }
 
 type Shared = Arc<AppState>;
@@ -334,8 +333,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let zenoh_hub = ZenohHub::start(ZenohHubConfig::from_env())?;
-    let zenoh_listeners = zenoh_hub.listeners().to_vec();
+    let command_authority = CommandAuthority::start(CommandAuthorityConfig::from_env())?;
+    let zenoh_listeners = command_authority.listeners().to_vec();
     let sim_bridge = sim_bridge::SimBridge::start("udp/127.0.0.1:7447")?;
 
     let state: Shared = Arc::new(AppState {
@@ -349,7 +348,7 @@ async fn main() -> anyhow::Result<()> {
         supervisor: Supervisor::manual_control(),
         ppm_supervisor: Supervisor::ppm_bridge(),
         autopilot_link: AutopilotLink::new(),
-        _zenoh_hub: zenoh_hub,
+        _command_authority: command_authority,
     });
 
     // The gcs/* API is same-origin in production; permissive CORS lets the Vite
@@ -395,7 +394,10 @@ async fn main() -> anyhow::Result<()> {
         cli.addr
     );
     if !zenoh_listeners.is_empty() {
-        println!("    Zenoh hub: {}\n", zenoh_listeners.join(", "));
+        println!(
+            "    Zenoh command authority: {}\n",
+            zenoh_listeners.join(", ")
+        );
     }
     axum::serve(listener, app).await?;
     Ok(())

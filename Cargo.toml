@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/electrode-command-authority",
   "crates/electrode-web-core",
   "crates/electrode-fake-sim",
   "crates/electrode-ground-bridge",
@@ -24,6 +25,7 @@ flatbuffers = "=25.12.19"
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 serialport = "4.9"
 synapse_fbs = "0.5.0"
 thiserror = "2"
