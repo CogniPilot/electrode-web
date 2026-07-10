@@ -247,6 +247,8 @@ function frameSampleTimeMs(frame: TelemetryFrame, fallbackMs: number): number {
  */
 const CUBS2_FLIGHT_MODES: Record<number, string> = { 0: 'manual', 1: 'auto' };
 const SELECTED_MOCAP_TOPIC_FRAGMENT = 'synapse/mocap/selected/rigid_body/';
+const CUB1_EXTERNAL_ODOMETRY_SUFFIX = '/external_odometry/1';
+const mocapRigidBodyNames = new Map<number, string>();
 
 /**
  * Adapter: map raw Synapse wire topics onto the canonical vehicle state. Most
@@ -255,7 +257,11 @@ const SELECTED_MOCAP_TOPIC_FRAGMENT = 'synapse/mocap/selected/rigid_body/';
  */
 function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: number): void {
   const topic = frame.topic;
-  if (
+  if (topic.endsWith('rigid_body_names')) {
+    updateMocapRigidBodyNames(frame.payload);
+  } else if (topic.includes('/external_odometry/') && isCub1ExternalOdometry(frame.payload, topic)) {
+    applyExternalOdometry(state, frame.payload, nowMs, frameSampleTimeMs(frame, nowMs));
+  } else if (
     topic.endsWith('mocap_frame') ||
     topic.endsWith('mocap/frame') ||
     topic.includes('synapse/mocap/rigid_body/') ||
@@ -318,8 +324,94 @@ function shouldIgnoreUnselectedMocap(state: VehicleState, topic: string): boolea
     return false;
   }
   return Object.values(state.topics).some(
-    (snapshot) => snapshot.topic.includes(SELECTED_MOCAP_TOPIC_FRAGMENT) && !snapshot.stale
+    (snapshot) =>
+      snapshot.topic.includes(SELECTED_MOCAP_TOPIC_FRAGMENT) &&
+      !snapshot.stale
   );
+}
+
+function updateMocapRigidBodyNames(payload: unknown): void {
+  const bodies = (payload as { rigidBodies?: unknown[] } | null)?.rigidBodies;
+  if (!Array.isArray(bodies)) return;
+  for (const body of bodies) {
+    const item = body as { id?: unknown; name?: unknown };
+    const id = toFiniteNumber(item.id);
+    if (id !== null && typeof item.name === 'string' && item.name.trim()) {
+      mocapRigidBodyNames.set(id, item.name.trim().toLowerCase());
+    }
+  }
+}
+
+function isCub1ExternalOdometry(payload: unknown, topic: string): boolean {
+  const data = ((payload as { data?: unknown } | null)?.data ?? payload) as { id?: unknown } | null;
+  const id = toFiniteNumber(data?.id);
+  return (id !== null && mocapRigidBodyNames.get(id) === 'cub1') ||
+    (mocapRigidBodyNames.size === 0 && topic.endsWith(CUB1_EXTERNAL_ODOMETRY_SUFFIX));
+}
+
+function applyExternalOdometry(
+  state: VehicleState,
+  payload: unknown,
+  nowMs: number,
+  sampleMs: number
+): void {
+  const record = payload as Record<string, unknown> | null | undefined;
+  const data = (record?.data ?? record) as Record<string, unknown> | undefined;
+  const position = data?.position as Record<string, unknown> | undefined;
+  const attitudeValue = data?.attitude as Record<string, unknown> | undefined;
+  const positionValid = data?.position_valid === true;
+  const attitudeValid = data?.attitude_valid === true;
+  const xM = toFiniteNumber(position?.x);
+  const yM = toFiniteNumber(position?.y);
+  const altM = toFiniteNumber(position?.z);
+
+  if (!positionValid || xM === null || yM === null || altM === null) {
+    state.localization = {
+      source: 'external odometry',
+      fresh: false,
+      quality: 0,
+      updatedAtMs: nowMs
+    };
+    return;
+  }
+
+  state.pose = { lat: 0, lon: 0, altM, xM, yM, zM: -altM };
+  state.lastMocap = { tMs: sampleMs, xM, yM, altM };
+
+  if (attitudeValid) {
+    const attitude = quaternionToEuler(attitudeValue);
+    if (attitude) {
+      state.attitude = attitude;
+    }
+  }
+
+  const velocity = data.linear_velocity as Record<string, unknown> | undefined;
+  const eastMps = toFiniteNumber(velocity?.x);
+  const northMps = toFiniteNumber(velocity?.y);
+  const upMps = toFiniteNumber(velocity?.z);
+  if (
+    data.linear_velocity_valid === true &&
+    eastMps !== null &&
+    northMps !== null &&
+    upMps !== null
+  ) {
+    state.velocity = {
+      northMps,
+      eastMps,
+      downMps: -upMps,
+      groundSpeedMps: Math.hypot(northMps, eastMps)
+    };
+  }
+
+  const lost = data.lost === true;
+  const degraded = data.degraded === true || data.outlier_rejected === true;
+  const extrapolated = data.extrapolated === true;
+  state.localization = {
+    source: 'external odometry',
+    fresh: !lost,
+    quality: lost ? 0 : degraded ? 0.35 : extrapolated ? 0.7 : 1,
+    updatedAtMs: nowMs
+  };
 }
 const MISSION_STATES = new Set(['unknown', 'idle', 'active', 'paused', 'complete']);
 
@@ -425,7 +517,12 @@ function applyMocapFrame(
 ): void {
   const record = payload as Record<string, unknown> | null | undefined;
   const bodies = record?.rigid_bodies;
-  const body = Array.isArray(bodies) ? (bodies[0] as Record<string, unknown> | undefined) : undefined;
+  const body = Array.isArray(bodies)
+    ? bodies.map((item) => item as Record<string, unknown>).find((item) => {
+        const id = toFiniteNumber(item.id);
+        return id !== null && (mocapRigidBodyNames.get(id) === 'cub1' || (mocapRigidBodyNames.size === 0 && id === 1));
+      }) ?? (bodies[0] as Record<string, unknown> | undefined)
+    : undefined;
   const position = body?.position as Record<string, unknown> | undefined;
   if (!body || !position || !isValidMocapBody(body)) {
     markMocapStale(state, nowMs);
@@ -487,7 +584,7 @@ function applyMocapFrame(
   const trackingValid = body.tracking_valid !== false;
   const residual = toFiniteNumber(body.residual) ?? 0;
   state.localization = {
-    source: 'mocap',
+    source: trackingValid ? 'mocap' : 'mocap (degraded)',
     fresh: trackingValid,
     quality: trackingValid ? Math.max(0, 1 - Math.min(residual / 0.05, 1)) : 0,
     updatedAtMs: nowMs
@@ -496,7 +593,7 @@ function applyMocapFrame(
 
 function isValidMocapBody(body: unknown): body is Record<string, unknown> {
   const record = body as Record<string, unknown> | null | undefined;
-  if (!record || record.tracking_valid === false) {
+  if (!record) {
     return false;
   }
   const position = record.position as Record<string, unknown> | undefined;

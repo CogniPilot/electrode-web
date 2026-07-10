@@ -26,10 +26,9 @@ browser-to-vehicle relay is the schema-verified private Rumoca `MocapFrame`.
 The browser's staged namespace is
 `gcs/v1/cmd/firmware/<update-id>/{start,chunk/<index>,commit}`. The vehicle-side
 query keys are `synapse/v1/cmd/firmware_{info,status,prepare,chunk,commit,abort}`.
-Published `synapse_fbs` 0.5.0 does not export these generated request/reply
-types. Until the additive schema release lands, this crate uses bounded
-low-level FlatBuffer readers/builders for those exact table layouts. It
-assembles and hashes the browser upload, compares it with a trusted baseline,
+The request and reply payloads use the generated firmware bindings exported by
+`synapse_fbs` 0.5.1. This crate assembles and hashes the browser upload,
+compares it with a trusted baseline,
 allows differences only inside configured gain windows, and only then performs
 the vehicle query transfer with chunk retries. Progress is published on
 `gcs/v1/status/firmware/<update-id>`.

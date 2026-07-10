@@ -5,8 +5,9 @@
 //!   cargo run -p electrode-fake-sim --bin wsprobe -- ws/127.0.0.1:7447 synapse/** 5
 //!   cargo run -p electrode-fake-sim --bin wsprobe -- peer synapse/** 5
 use synapse_fbs::topic::{
-    AttitudeEstimateData, AttitudeEstimateFlags, ManualControlData, ManualControlFlags, MocapFrame,
-    MocapRawFlags, PwmSignalOutputsData, RadioControlData, VehicleHealthData, VehicleHealthFlags,
+    AttitudeEstimateData, AttitudeEstimateFlags, ExternalOdometryData, ExternalOdometryFlags,
+    ManualControlData, ManualControlFlags, MocapFrame, MocapRawFlags, PwmSignalOutputsData,
+    RadioControlData, VehicleHealthData, VehicleHealthFlags,
 };
 use synapse_fbs::types::RotationMatrix3f;
 use zenoh::Wait;
@@ -88,6 +89,28 @@ fn hex_preview(bytes: &[u8]) -> String {
 
 #[allow(clippy::too_many_lines, clippy::excessive_nesting)]
 fn decode_sample(key: &str, bytes: &[u8]) -> String {
+    if key.contains("external_odometry") && bytes.len() == 64 {
+        let data = ExternalOdometryData(bytes.try_into().unwrap_or([0; 64]));
+        let flags = data.flags();
+        return format!(
+            "external_odometry id={} status={:?} p=[{:.4},{:.4},{:.4}] v=[{:.4},{:.4},{:.4}] position_valid={} attitude_valid={} velocity_valid={} extrapolated={} degraded={} lost={} timestamp_us={}",
+            data.id(),
+            data.status(),
+            data.position_enu_m().x(),
+            data.position_enu_m().y(),
+            data.position_enu_m().z(),
+            data.linear_velocity_enu_m_s().x(),
+            data.linear_velocity_enu_m_s().y(),
+            data.linear_velocity_enu_m_s().z(),
+            flags.contains(ExternalOdometryFlags::PositionValid),
+            flags.contains(ExternalOdometryFlags::AttitudeValid),
+            flags.contains(ExternalOdometryFlags::LinearVelocityValid),
+            flags.contains(ExternalOdometryFlags::Extrapolated),
+            flags.contains(ExternalOdometryFlags::Degraded),
+            flags.contains(ExternalOdometryFlags::Lost),
+            data.timestamp_us()
+        );
+    }
     if key.ends_with("manual_control_command") && bytes.len() == 40 {
         let data = unsafe { <ManualControlData as flatbuffers::Follow>::follow(bytes, 0) };
         let flags = ManualControlFlags::from_bits_retain(data.flags());
@@ -194,9 +217,11 @@ fn decode_sample(key: &str, bytes: &[u8]) -> String {
                 }
             }
             return format!(
-                "mocap_frame timestamp_us={} frame={} bodies={}",
+                "mocap_frame timestamp_us={} frame={} drop_rate_2d_dpermille={} out_of_sync_rate_2d_dpermille={} bodies={}",
                 frame.timestamp_us(),
                 frame.frame_number(),
+                frame.drop_rate_2d_dpermille(),
+                frame.out_of_sync_rate_2d_dpermille(),
                 body_text.join("; ")
             );
         }

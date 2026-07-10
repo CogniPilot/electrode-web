@@ -16,7 +16,7 @@ const WAYPOINTS: Array<[number, number, number]> = [
 ];
 const MISSION_ID = 1;
 
-// Wire encoders matching the synapse_fbs 0.5.0 fixed-layout structs the
+// Wire encoders matching the synapse_fbs 0.5.1 fixed-layout structs the
 // firmware transmits (bare struct bytes, little-endian).
 function encodeMissionProgress(currentSeq: number, total: number, state: number): Uint8Array {
   const bytes = new Uint8Array(32);

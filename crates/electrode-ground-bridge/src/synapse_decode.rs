@@ -6,7 +6,7 @@
 //! topics we understand. Anything we do not recognize is still surfaced to the
 //! operator as a raw payload so it remains discoverable.
 //!
-//! Wire encoding (synapse_fbs 0.5.0): every fixed-layout topic is transmitted
+//! Wire encoding (synapse_fbs 0.5.1): every fixed-layout topic is transmitted
 //! as the *bare* `*Data` struct (raw fixed-size bytes), not a FlatBuffers root
 //! table. We decode those exactly like `synapse_fbs::topic_decode::decode_struct`
 //! (size-check then `Follow::follow`). Only `mocap_frame` is a root table.

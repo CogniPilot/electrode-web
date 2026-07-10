@@ -57,6 +57,8 @@ const SYNAPSE_CATALOG_KEY = 'electrode/catalog/synapse';
 const DEFAULT_KEY_EXPRS = [
   'synapse/v1/**',
   'synapse/motor_output',
+  'synapse/mocap/frame',
+  'synapse/mocap/rigid_body_names',
   'synapse/mocap/rigid_body/cub1/pose',
   'synapse/mocap/selected/rigid_body/cub1/pose'
 ];
@@ -253,10 +255,17 @@ export class ZenohWasmTransport {
         lastSeenMs: now
       };
       this.#registry.set(key, stat);
-      // Auto-select decodable topics on first sight so data flows immediately.
-      if (this.#autoSelectKnown && schema !== 'Raw') {
-        this.#selected.add(key);
-      }
+    }
+
+    // A payload-free catalog announcement may create the registry entry before
+    // the first payload arrives. Base subscriptions (including cub1 mocap and
+    // synapse/v1 telemetry) must still auto-select when their payload is seen.
+    if (
+      this.#autoSelectKnown &&
+      stat.decodable &&
+      this.#coveredByBaseSubscription(key)
+    ) {
+      this.#selected.add(key);
     }
     stat.count += 1;
     stat.lastBytes = payload.length;

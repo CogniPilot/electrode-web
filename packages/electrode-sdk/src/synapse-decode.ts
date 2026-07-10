@@ -6,7 +6,7 @@
 // committed readers were generated from the published `@cognipilot/synapse-fbs`
 // schemas; normal development and CI do not require `flatc`.
 //
-// Wire encoding (synapse_fbs 0.5.0): every topic is `table X { data: XData; }`
+// Wire encoding (synapse_fbs 0.5.1): every topic is `table X { data: XData; }`
 // EXCEPT fixed-layout structs, which are transmitted as the *bare* `*Data`
 // struct on the wire (raw fixed-size struct bytes, NOT a flatbuffer root table).
 // Struct topics are decoded with `new XData().__init(0, bb)`; only `mocap_frame`
@@ -17,6 +17,9 @@ import { AttitudeCommandData } from './generated/synapse/topic/attitude-command-
 import { AttitudeEstimateData } from './generated/synapse/topic/attitude-estimate-data.js';
 import { AttitudeEstimateFlags } from './generated/synapse/topic/attitude-estimate-flags.js';
 import { ControlLoopMetricsData } from './generated/synapse/topic/control-loop-metrics-data.js';
+import { ExternalOdometryData } from './generated/synapse/topic/external-odometry-data.js';
+import { ExternalOdometryFlags } from './generated/synapse/topic/external-odometry-flags.js';
+import { ExternalOdometryStatus } from './generated/synapse/topic/external-odometry-status.js';
 import { NavigationTargetData } from './generated/synapse/topic/navigation-target-data.js';
 import { LocalPositionCommandData } from './generated/synapse/topic/local-position-command-data.js';
 import { ManualControlData } from './generated/synapse/topic/manual-control-data.js';
@@ -47,6 +50,12 @@ export interface Decoded {
  * and/or instance-suffixed, so we test with `includes`).
  */
 export function classify(key: string): string {
+  if (key.includes('rigid_body_names')) {
+    return 'MocapRigidBodyNames';
+  }
+  if (key.includes('external_odometry')) {
+    return 'ExternalOdometry';
+  }
   if (
     key.includes('mocap_frame') ||
     key.endsWith('mocap/frame') ||
@@ -117,8 +126,12 @@ export function decode(key: string, bytes: Uint8Array): Decoded {
       return decodeOrRaw(schema, bytes, decodeRadioControl);
     case 'PwmSignalOutputs':
       return decodeOrRaw(schema, bytes, decodePwmSignalOutputs);
+    case 'ExternalOdometry':
+      return decodeOrRaw(schema, bytes, decodeExternalOdometry);
     case 'MocapFrame':
       return decodeOrRaw(schema, bytes, decodeMocapFrame);
+    case 'MocapRigidBodyNames':
+      return decodeOrRaw(schema, bytes, (value) => JSON.parse(new TextDecoder().decode(value)));
     case 'MissionProgress':
       return decodeOrRaw(schema, bytes, decodeMissionProgress);
     case 'LocalPositionCommand':
@@ -128,6 +141,54 @@ export function decode(key: string, bytes: Uint8Array): Decoded {
     default:
       return { schema, payload: rawPayload(bytes), decoded: false };
   }
+}
+
+function decodeExternalOdometry(bytes: Uint8Array): unknown | null {
+  if (bytes.length !== ExternalOdometryData.sizeOf()) {
+    return null;
+  }
+  const data = new ExternalOdometryData().__init(0, byteBuffer(bytes));
+  const position = data.positionEnuM();
+  const attitude = data.attitude();
+  const linearVelocity = data.linearVelocityEnuMS();
+  const angularVelocity = data.angularVelocityFluRadS();
+  if (!position || !attitude || !linearVelocity || !angularVelocity) {
+    return null;
+  }
+  const flags = data.flags();
+  return {
+    data: {
+      timestamp_us: Number(data.timestampUs()),
+      position: { x: position.x(), y: position.y(), z: position.z() },
+      attitude: { w: attitude.w(), x: attitude.x(), y: attitude.y(), z: attitude.z() },
+      linear_velocity: {
+        x: linearVelocity.x(),
+        y: linearVelocity.y(),
+        z: linearVelocity.z()
+      },
+      angular_velocity: {
+        roll: angularVelocity.roll(),
+        pitch: angularVelocity.pitch(),
+        yaw: angularVelocity.yaw()
+      },
+      flags,
+      status: externalOdometryStatusName(data.status()),
+      source_id: data.sourceId(),
+      id: data.id(),
+      position_valid: hasFlag(flags, ExternalOdometryFlags.PositionValid),
+      attitude_valid: hasFlag(flags, ExternalOdometryFlags.AttitudeValid),
+      linear_velocity_valid: hasFlag(flags, ExternalOdometryFlags.LinearVelocityValid),
+      angular_velocity_valid: hasFlag(flags, ExternalOdometryFlags.AngularVelocityValid),
+      extrapolated: hasFlag(flags, ExternalOdometryFlags.Extrapolated),
+      outlier_rejected: hasFlag(flags, ExternalOdometryFlags.OutlierRejected),
+      degraded: hasFlag(flags, ExternalOdometryFlags.Degraded),
+      lost: hasFlag(flags, ExternalOdometryFlags.Lost)
+    }
+  };
+}
+
+function externalOdometryStatusName(status: ExternalOdometryStatus): string {
+  return ExternalOdometryStatus[status] ?? `Unknown(${status})`;
 }
 
 function decodeRadioControl(bytes: Uint8Array): unknown | null {
@@ -436,6 +497,8 @@ function decodeMocapFrame(bytes: Uint8Array): unknown | null {
   return {
     timestamp_us: Number(frame.timestampUs()),
     frame_number: frame.frameNumber(),
+    drop_rate_2d_dpermille: frame.dropRate2dDpermille(),
+    out_of_sync_rate_2d_dpermille: frame.outOfSyncRate2dDpermille(),
     rigid_bodies: rigidBodies,
     labeled_markers: labeledMarkers
   };

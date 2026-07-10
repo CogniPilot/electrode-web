@@ -123,6 +123,51 @@ describe('state store telemetry pipeline', () => {
   });
 });
 
+describe('external odometry state handling', () => {
+  it('uses CUB1 external odometry for pose, attitude, and velocity', () => {
+    let state = createInitialVehicleState('cubs2');
+    const frame = telemetryFrame(
+      'synapse/v1/topic/external_odometry/1',
+      {
+        data: {
+          timestamp_us: 1_000_000,
+          position: { x: 10, y: 20, z: 3 },
+          attitude: { w: 1, x: 0, y: 0, z: 0 },
+          linear_velocity: { x: 4, y: 5, z: 2 },
+          angular_velocity: { roll: 0.1, pitch: 0.2, yaw: 0.3 },
+          position_valid: true,
+          attitude_valid: true,
+          linear_velocity_valid: true,
+          angular_velocity_valid: true,
+          extrapolated: false,
+          degraded: false,
+          outlier_rejected: false,
+          lost: false,
+          source_id: 1,
+          id: 1
+        }
+      },
+      10_000
+    );
+
+    state = applyGcsFrame(state, frame, 10_000);
+
+    expect(state.pose).toMatchObject({ xM: 10, yM: 20, altM: 3 });
+    expect(state.attitude).toMatchObject({ rollDeg: 0, pitchDeg: -0, yawDeg: 0 });
+    expect(state.velocity).toMatchObject({
+      eastMps: 4,
+      northMps: 5,
+      downMps: -2,
+      groundSpeedMps: Math.hypot(4, 5)
+    });
+    expect(state.localization).toMatchObject({
+      source: 'external odometry',
+      fresh: true,
+      quality: 1
+    });
+  });
+});
+
 describe('mocap state handling', () => {
   it('preserves the last mocap pose when rigid body 0 becomes invalid', () => {
     let state = createInitialVehicleState('cubs2');

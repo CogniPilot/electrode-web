@@ -230,7 +230,11 @@
   $: ioSelectedPwm = topicBySuffix(vehicle, 'motor_output');
   $: ioPwm = ioSelectedPwm && !ioSelectedPwm.stale ? ioSelectedPwm : topicBySuffix(vehicle, 'pwm_signal_outputs');
   $: ioManual = topicBySuffix(vehicle, 'manual_control_command');
-  $: ioMocap = topicBySuffix(vehicle, 'mocap_frame') ?? topicBySuffix(vehicle, 'pose');
+  $: ioMocap =
+    topicBySuffix(vehicle, 'external_odometry/1') ??
+    topicBySuffix(vehicle, 'mocap_frame') ??
+    topicBySuffix(vehicle, 'mocap/frame') ??
+    topicBySuffix(vehicle, 'pose');
   $: requestedControlSource = manualControl
     ? manualControl.valid
       ? manualControl.flightMode > 0

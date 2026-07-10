@@ -149,6 +149,29 @@ const ELECTRODE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
 
 const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
   {
+    topic: 'synapse/v1/topic/external_odometry/1',
+    schema: 'synapse.topic.ExternalOdometry',
+    label: 'ExternalOdometry CUB1',
+    source: 'synapse_fbs',
+    fields: [
+      numberField('data.timestamp_us', 'Timestamp', 'us'),
+      ...vec3Fields('data.position', 'Position ENU', 'm'),
+      ...quatFields('data.attitude', 'Attitude'),
+      ...vec3Fields('data.linear_velocity', 'Linear velocity ENU', 'm/s'),
+      ...rateFields('data.angular_velocity', 'Angular velocity FLU'),
+      numberField('data.flags', 'Flags', ''),
+      numberField('data.source_id', 'Source ID', ''),
+      numberField('data.id', 'Rigid body ID', ''),
+      booleanField('data.position_valid', 'Position valid'),
+      booleanField('data.attitude_valid', 'Attitude valid'),
+      booleanField('data.linear_velocity_valid', 'Linear velocity valid'),
+      booleanField('data.angular_velocity_valid', 'Angular velocity valid'),
+      booleanField('data.extrapolated', 'Extrapolated'),
+      booleanField('data.degraded', 'Degraded'),
+      booleanField('data.lost', 'Lost')
+    ]
+  },
+  {
     topic: 'synapse/v1/topic/manual_control_command',
     schema: 'synapse.topic.ManualControlCommand',
     label: 'ManualControl',

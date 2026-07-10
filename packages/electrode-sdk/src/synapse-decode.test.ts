@@ -11,6 +11,7 @@ describe('Synapse decoder', () => {
     expect(classify('robot/synapse/v1/topic/manual_control_command')).toBe('ManualControl');
     expect(classify('synapse/mocap/rigid_body/cub1/pose')).toBe('MocapFrame');
     expect(classify('synapse/mocap/frame')).toBe('MocapFrame');
+    expect(classify('synapse/v1/topic/external_odometry/1')).toBe('ExternalOdometry');
     expect(classify('synapse/mocap/definition')).toBe('Raw');
     expect(classify('synapse/v1/topic/unknown')).toBe('Raw');
   });
@@ -55,6 +56,40 @@ describe('Synapse decoder', () => {
       schema: 'Raw',
       decoded: false,
       payload: { bytes: 4, hexPreview: '000102ff' }
+    });
+  });
+
+  it('decodes the bridge external odometry fixed-layout payload', () => {
+    const bytes = new Uint8Array(64);
+    const view = new DataView(bytes.buffer);
+    view.setBigUint64(0, 123_456n, true);
+    [1, 2, 3].forEach((value, index) => view.setFloat32(8 + index * 4, value, true));
+    [1, 0, 0, 0].forEach((value, index) => view.setFloat32(20 + index * 4, value, true));
+    [4, 5, 6].forEach((value, index) => view.setFloat32(36 + index * 4, value, true));
+    [0.1, 0.2, 0.3].forEach((value, index) => view.setFloat32(48 + index * 4, value, true));
+    view.setUint8(60, 0x0f);
+    view.setUint8(61, 1);
+    view.setUint8(62, 1);
+    view.setUint8(63, 1);
+
+    const decoded = decode('synapse/v1/topic/external_odometry/1', bytes);
+
+    expect(decoded.decoded).toBe(true);
+    expect(decoded.schema).toBe('ExternalOdometry');
+    expect(decoded.payload).toMatchObject({
+      data: {
+        timestamp_us: 123_456,
+        position: { x: 1, y: 2, z: 3 },
+        attitude: { w: 1, x: 0, y: 0, z: 0 },
+        linear_velocity: { x: 4, y: 5, z: 6 },
+        status: 'Filtered',
+        source_id: 1,
+        id: 1,
+        position_valid: true,
+        attitude_valid: true,
+        linear_velocity_valid: true,
+        angular_velocity_valid: true
+      }
     });
   });
 });
