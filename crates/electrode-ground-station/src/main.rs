@@ -32,7 +32,7 @@ use axum::{Json, Router};
 use clap::Parser;
 use electrode_command_authority::{CommandAuthority, CommandAuthorityConfig};
 use serde::Serialize;
-use tower::{ServiceExt, service_fn};
+use tower::{service_fn, ServiceExt};
 
 use autopilot::AutopilotProfile;
 use autopilot_link::{AutopilotLink, AutopilotRunStatus};
@@ -97,6 +97,24 @@ fn should_serve_spa_fallback(path: &str) -> bool {
     let last_segment = path.rsplit('/').next().unwrap_or_default();
 
     !path.starts_with("/_app/") && !path.starts_with("/assets/") && !last_segment.contains('.')
+}
+
+async fn serve_spa_fallback(
+    index: PathBuf,
+    req: Request<Body>,
+) -> Result<axum::response::Response, std::convert::Infallible> {
+    if !should_serve_spa_fallback(req.uri().path()) {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+
+    let response = match tower_http::services::ServeFile::new(index)
+        .oneshot(req)
+        .await
+    {
+        Ok(response) => response.map(Body::new),
+        Err(err) => match err {},
+    };
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -422,22 +440,7 @@ async fn main() -> anyhow::Result<()> {
     let static_service = tower_http::services::ServeDir::new(&cli.web_dir).fallback(service_fn(
         move |req: Request<Body>| {
             let index = index.clone();
-            async move {
-                if !should_serve_spa_fallback(req.uri().path()) {
-                    return Ok::<_, std::convert::Infallible>(
-                        StatusCode::NOT_FOUND.into_response(),
-                    );
-                }
-
-                let response = match tower_http::services::ServeFile::new(index)
-                    .oneshot(req)
-                    .await
-                {
-                    Ok(response) => response.map(Body::new),
-                    Err(err) => match err {},
-                };
-                Ok(response)
-            }
+            serve_spa_fallback(index, req)
         },
     ));
 

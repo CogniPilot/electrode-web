@@ -12,7 +12,7 @@
 //! (size-check then `Follow::follow`). Only `mocap_frame` is a root table.
 
 use flatbuffers::root;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use synapse_fbs::topic::{
     AttitudeCommandData, AttitudeEstimateData, AttitudeEstimateFlags, ControlLoopMetricsData,
     ManualControlData, ManualControlFlags, MocapFrame, MocapRawFlags, NavigationTargetData,

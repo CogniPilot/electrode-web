@@ -9,13 +9,13 @@
 //!   - `synapse/mocap/rigid_body/cub1/pose`   — compact 28-byte pose
 //!     (little-endian f32 `[px, py, pz, qx, qy, qz, qw]`, ENU metres, w last)
 
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::autopilot::MocapSource;
 use electrode_ppm_bridge::{
-    FAILSAFE_CHANNELS, PpmChannels, channels_to_pwm_signal_outputs_payload,
-    manual_control_to_channels, pwm_signal_outputs_to_channels,
+    channels_to_pwm_signal_outputs_payload, manual_control_to_channels,
+    pwm_signal_outputs_to_channels, PpmChannels, FAILSAFE_CHANNELS,
 };
 use synapse_fbs::topic::{ManualControlData, ManualControlFlags, MocapFrame, MocapRigidBodyData};
 use synapse_fbs::types::RotationMatrix3f;

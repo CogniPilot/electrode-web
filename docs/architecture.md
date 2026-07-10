@@ -43,6 +43,8 @@ The Qualisys bridge belongs on the mocap Windows computer because it owns the QT
 
 This keeps traffic shaping at the correct boundary: the mocap bridge publishes selected motion-capture streams into Zenoh, and Zenoh routes only the key expressions requested by downstream clients instead of forcing every ground-station client to receive a raw QTM UDP stream.
 
+The command authority observes `synapse/**` on its trusted vehicle session and publishes throttled, payload-free topic announcements to the browser session. This lets the topic browser discover every Synapse key on the LAN. Normal vehicle telemetry and the `cub1` compact pose remain subscribed by default; other payloads cross into the browser only after the operator selects their announced key.
+
 ## Mocap Wire Contract
 
 Every mocap producer — the Qualisys bridge on real hardware, and the Ground Station's sim bridge when a plant (in-browser Rumoca WASM or the native sim executable) is running — publishes the same two data streams, so downstream consumers use one wire contract for simulation and live capture:

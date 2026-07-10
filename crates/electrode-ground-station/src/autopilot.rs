@@ -198,7 +198,7 @@ fn normalize_inbound_topic(topic: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AutopilotProfile, MOCAP_POSE_TOPIC, MocapSource};
+    use super::{AutopilotProfile, MocapSource, MOCAP_POSE_TOPIC};
 
     #[test]
     fn normalizes_legacy_selected_mocap_inbound_topic_to_direct_pose() {

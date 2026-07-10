@@ -86,6 +86,7 @@ fn hex_preview(bytes: &[u8]) -> String {
         .join("")
 }
 
+#[allow(clippy::too_many_lines, clippy::excessive_nesting)]
 fn decode_sample(key: &str, bytes: &[u8]) -> String {
     if key.ends_with("manual_control_command") && bytes.len() == 40 {
         let data = unsafe { <ManualControlData as flatbuffers::Follow>::follow(bytes, 0) };
