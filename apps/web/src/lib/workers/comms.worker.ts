@@ -3,6 +3,7 @@ import {
   appendEvent,
   createDemoReplay,
   createInitialVehicleState,
+  setMocapDisplaySource,
   framesThroughCursor,
   normalizeReplayFrames,
   refreshStaleTopics,
@@ -28,6 +29,7 @@ type WorkerIn =
   | { type: 'connect'; mode: RuntimeMode; url: string; vehicleId: string }
   | { type: 'disconnect' }
   | { type: 'setSubscriptions'; keys: string[] }
+  | { type: 'setMocapDisplaySource'; source: 'auto' | 'raw' | 'external' }
   | { type: 'virtualManual'; enabled: boolean; input?: VirtualManualInput }
   | { type: 'startRecording' }
   | { type: 'stopRecording' }
@@ -102,6 +104,9 @@ ctx.addEventListener('message', (event: MessageEvent<WorkerIn>) => {
     disconnect();
   } else if (message.type === 'setSubscriptions') {
     zenoh?.setSubscriptions(message.keys);
+  } else if (message.type === 'setMocapDisplaySource') {
+    state = setMocapDisplaySource(state, message.source);
+    postState();
   } else if (message.type === 'virtualManual') {
     setVirtualManual(message.enabled, message.input);
   } else if (message.type === 'startRecording') {

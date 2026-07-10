@@ -42,6 +42,7 @@
     plotPacketKey,
     type ConnectionState,
     type MissionWaypoint,
+    type MocapDisplaySource,
     type PlotFieldDefinition,
     type PlotPacketDefinition,
     type PlotSeries,
@@ -544,6 +545,11 @@
     worker?.postMessage({ type: 'setSubscriptions', keys: [...selected] });
   }
 
+  function setMocapDisplaySource(event: Event): void {
+    const source = (event.currentTarget as HTMLSelectElement).value as MocapDisplaySource;
+    worker?.postMessage({ type: 'setMocapDisplaySource', source });
+  }
+
   function startRecording(): void {
     worker?.postMessage({ type: 'startRecording' });
   }
@@ -860,6 +866,14 @@
 
       <div class="io-group">
         <h3>Mocap 6DOF pose</h3>
+        <div class="io-row">
+          <span>Display source</span>
+          <select value={vehicle.mocapDisplaySource} onchange={setMocapDisplaySource}>
+            <option value="auto">Auto (EKF, raw fallback)</option>
+            <option value="raw">Raw mocap</option>
+            <option value="external">External odometry</option>
+          </select>
+        </div>
         <div class="io-row">
           <span>Position <em>{ioRate(ioMocap)}</em></span>
           <strong>

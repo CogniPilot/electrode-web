@@ -15,6 +15,7 @@ import type {
   Pose,
   TelemetryFrame,
   TopicSnapshot,
+  MocapDisplaySource,
   VehicleState,
   Velocity
 } from './types';
@@ -50,11 +51,16 @@ export function createInitialVehicleState(vehicleId = DEFAULT_VEHICLE_ID): Vehic
       quality: 0,
       updatedAtMs: 0
     },
+    mocapDisplaySource: 'auto',
     mission: null,
     events: [],
     topics: {},
     lastMocap: null
   };
+}
+
+export function setMocapDisplaySource(state: VehicleState, source: MocapDisplaySource): VehicleState {
+  return { ...state, mocapDisplaySource: source };
 }
 
 export function applyGcsFrame(state: VehicleState, frame: GcsFrame, nowMs = Date.now()): VehicleState {
@@ -259,7 +265,11 @@ function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: nu
   const topic = frame.topic;
   if (topic.endsWith('rigid_body_names')) {
     updateMocapRigidBodyNames(frame.payload);
-  } else if (topic.includes('/external_odometry/') && isCub1ExternalOdometry(frame.payload, topic)) {
+  } else if (
+    state.mocapDisplaySource !== 'raw' &&
+    topic.includes('/external_odometry/') &&
+    isCub1ExternalOdometry(frame.payload, topic)
+  ) {
     applyExternalOdometry(state, frame.payload, nowMs, frameSampleTimeMs(frame, nowMs));
   } else if (
     topic.endsWith('mocap_frame') ||
@@ -320,8 +330,20 @@ function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: nu
 }
 
 function shouldIgnoreUnselectedMocap(state: VehicleState, topic: string): boolean {
+  if (state.mocapDisplaySource === 'raw') {
+    return false;
+  }
+  if (state.mocapDisplaySource === 'external') {
+    return true;
+  }
   if (topic.includes(SELECTED_MOCAP_TOPIC_FRAGMENT)) {
     return false;
+  }
+  // Raw frames remain in the topic registry for inspection and plotting, but must not
+  // overwrite a fresh EKF pose on every 240 Hz sample.  They become the display
+  // fallback as soon as the EKF reports Lost (or disappears).
+  if (state.localization.source === 'external odometry' && state.localization.fresh) {
+    return true;
   }
   return Object.values(state.topics).some(
     (snapshot) =>
@@ -361,11 +383,18 @@ function applyExternalOdometry(
   const attitudeValue = data?.attitude as Record<string, unknown> | undefined;
   const positionValid = data?.position_valid === true;
   const attitudeValid = data?.attitude_valid === true;
+  const lost = data?.lost === true;
   const xM = toFiniteNumber(position?.x);
   const yM = toFiniteNumber(position?.y);
   const altM = toFiniteNumber(position?.z);
 
   if (!positionValid || xM === null || yM === null || altM === null) {
+    if (
+      state.mocapDisplaySource === 'auto' &&
+      (state.localization.source === 'mocap' || state.localization.source === 'mocap (degraded)')
+    ) {
+      return;
+    }
     state.localization = {
       source: 'external odometry',
       fresh: false,
@@ -403,7 +432,13 @@ function applyExternalOdometry(
     };
   }
 
-  const lost = data.lost === true;
+  if (
+    lost &&
+    state.mocapDisplaySource === 'auto' &&
+    (state.localization.source === 'mocap' || state.localization.source === 'mocap (degraded)')
+  ) {
+    return;
+  }
   const degraded = data.degraded === true || data.outlier_rejected === true;
   const extrapolated = data.extrapolated === true;
   state.localization = {

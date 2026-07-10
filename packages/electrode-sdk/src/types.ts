@@ -181,6 +181,8 @@ export interface TopicSnapshot {
   arrivalTimesMs: number[];
 }
 
+export type MocapDisplaySource = 'auto' | 'raw' | 'external';
+
 export interface VehicleState {
   vehicleId: string;
   connected: boolean;
@@ -202,6 +204,8 @@ export interface VehicleState {
   link: LinkStatus | null;
   mode: ModeState;
   localization: LocalizationState;
+  /** Operator-selected source for the displayed mocap pose. */
+  mocapDisplaySource: MocapDisplaySource;
   mission: MissionPlanState | null;
   events: EventMessage[];
   topics: Record<string, TopicSnapshot>;

@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { ELECTRODE_SCHEMA_VERSION } from '@electrode/flatbuffers';
-import { applyGcsFrame, createInitialVehicleState, refreshStaleTopics } from './state-store';
+import {
+  applyGcsFrame,
+  createInitialVehicleState,
+  refreshStaleTopics,
+  setMocapDisplaySource
+} from './state-store';
 import { makeSimulatedTelemetryBundle } from './simulator';
 import type { TelemetryFrame } from './types';
 
@@ -165,6 +170,112 @@ describe('external odometry state handling', () => {
       fresh: true,
       quality: 1
     });
+  });
+
+  it('keeps fresh external odometry selected over incoming raw mocap frames', () => {
+    let state = createInitialVehicleState('cubs2');
+    state = applyGcsFrame(
+      state,
+      telemetryFrame(
+        'synapse/v1/topic/external_odometry/1',
+        {
+          data: {
+            position: { x: 10, y: 20, z: 3 },
+            attitude: { w: 1, x: 0, y: 0, z: 0 },
+            position_valid: true,
+            attitude_valid: true,
+            linear_velocity_valid: false,
+            lost: false,
+            degraded: false,
+            extrapolated: false,
+            outlier_rejected: false,
+            id: 1
+          }
+        },
+        10_000
+      ),
+      10_000
+    );
+    state = applyGcsFrame(
+      state,
+      telemetryFrame(
+        'synapse/mocap/frame',
+        {
+          rigid_bodies: [{
+            id: 1,
+            position: { x: 99, y: 88, z: 7 },
+            attitude: { w: 1, x: 0, y: 0, z: 0 },
+            tracking_valid: true
+          }]
+        },
+        10_005
+      ),
+      10_005
+    );
+
+    expect(state.localization).toMatchObject({ source: 'external odometry', fresh: true });
+    expect(state.pose).toMatchObject({ xM: 10, yM: 20, altM: 3 });
+  });
+
+});
+
+describe('mocap display source selection', () => {
+  it('keeps raw mocap selected when Auto receives a lost EKF sample', () => {
+    let state = createInitialVehicleState('cubs2');
+    state = applyGcsFrame(
+      state,
+      telemetryFrame(
+        'synapse/mocap/frame',
+        { rigid_bodies: [{ id: 1, position: { x: 2, y: 3, z: 4 }, attitude: { w: 1, x: 0, y: 0, z: 0 }, tracking_valid: true }] },
+        10_000
+      ),
+      10_000
+    );
+    state = applyGcsFrame(
+      state,
+      telemetryFrame(
+        'synapse/v1/topic/external_odometry/1',
+        { data: { position_valid: false, lost: true, id: 1 } },
+        10_005
+      ),
+      10_005
+    );
+
+    expect(state.localization).toMatchObject({ source: 'mocap', fresh: true });
+    expect(state.pose).toMatchObject({ xM: 2, yM: 3, altM: 4 });
+  });
+
+  it('lets the operator select raw mocap over external odometry', () => {
+    let state = setMocapDisplaySource(createInitialVehicleState('cubs2'), 'raw');
+    state = applyGcsFrame(
+      state,
+      telemetryFrame(
+        'synapse/v1/topic/external_odometry/1',
+        { data: { position: { x: 10, y: 20, z: 3 }, position_valid: true, id: 1 } },
+        10_000
+      ),
+      10_000
+    );
+    state = applyGcsFrame(
+      state,
+      telemetryFrame(
+        'synapse/mocap/frame',
+        {
+          rigid_bodies: [{
+            id: 1,
+            position: { x: 99, y: 88, z: 7 },
+            attitude: { w: 1, x: 0, y: 0, z: 0 },
+            tracking_valid: true
+          }]
+        },
+        10_005
+      ),
+      10_005
+    );
+
+    expect(state.mocapDisplaySource).toBe('raw');
+    expect(state.localization).toMatchObject({ source: 'mocap', fresh: true });
+    expect(state.pose).toMatchObject({ xM: 99, yM: 88, altM: 7 });
   });
 });
 
