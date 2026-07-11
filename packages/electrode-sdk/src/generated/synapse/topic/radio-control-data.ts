@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class RadioControlData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -126,4 +128,108 @@ static createRadioControlData(builder:flatbuffers.Builder, timestamp_us: bigint,
   return builder.offset();
 }
 
+
+unpack(): RadioControlDataT {
+  return new RadioControlDataT(
+    this.timestampUs(),
+    this.channelCount(),
+    this.linkQualityPct(),
+    this.chan0RawUs(),
+    this.chan1RawUs(),
+    this.chan2RawUs(),
+    this.chan3RawUs(),
+    this.chan4RawUs(),
+    this.chan5RawUs(),
+    this.chan6RawUs(),
+    this.chan7RawUs(),
+    this.chan8RawUs(),
+    this.chan9RawUs(),
+    this.chan10RawUs(),
+    this.chan11RawUs(),
+    this.chan12RawUs(),
+    this.chan13RawUs(),
+    this.chan14RawUs(),
+    this.chan15RawUs(),
+    this.chan16RawUs(),
+    this.chan17RawUs()
+  );
+}
+
+
+unpackTo(_o: RadioControlDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.channelCount = this.channelCount();
+  _o.linkQualityPct = this.linkQualityPct();
+  _o.chan0RawUs = this.chan0RawUs();
+  _o.chan1RawUs = this.chan1RawUs();
+  _o.chan2RawUs = this.chan2RawUs();
+  _o.chan3RawUs = this.chan3RawUs();
+  _o.chan4RawUs = this.chan4RawUs();
+  _o.chan5RawUs = this.chan5RawUs();
+  _o.chan6RawUs = this.chan6RawUs();
+  _o.chan7RawUs = this.chan7RawUs();
+  _o.chan8RawUs = this.chan8RawUs();
+  _o.chan9RawUs = this.chan9RawUs();
+  _o.chan10RawUs = this.chan10RawUs();
+  _o.chan11RawUs = this.chan11RawUs();
+  _o.chan12RawUs = this.chan12RawUs();
+  _o.chan13RawUs = this.chan13RawUs();
+  _o.chan14RawUs = this.chan14RawUs();
+  _o.chan15RawUs = this.chan15RawUs();
+  _o.chan16RawUs = this.chan16RawUs();
+  _o.chan17RawUs = this.chan17RawUs();
+}
+}
+
+export class RadioControlDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public channelCount: number = 0,
+  public linkQualityPct: number = 0,
+  public chan0RawUs: number = 0,
+  public chan1RawUs: number = 0,
+  public chan2RawUs: number = 0,
+  public chan3RawUs: number = 0,
+  public chan4RawUs: number = 0,
+  public chan5RawUs: number = 0,
+  public chan6RawUs: number = 0,
+  public chan7RawUs: number = 0,
+  public chan8RawUs: number = 0,
+  public chan9RawUs: number = 0,
+  public chan10RawUs: number = 0,
+  public chan11RawUs: number = 0,
+  public chan12RawUs: number = 0,
+  public chan13RawUs: number = 0,
+  public chan14RawUs: number = 0,
+  public chan15RawUs: number = 0,
+  public chan16RawUs: number = 0,
+  public chan17RawUs: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return RadioControlData.createRadioControlData(builder,
+    this.timestampUs,
+    this.channelCount,
+    this.linkQualityPct,
+    this.chan0RawUs,
+    this.chan1RawUs,
+    this.chan2RawUs,
+    this.chan3RawUs,
+    this.chan4RawUs,
+    this.chan5RawUs,
+    this.chan6RawUs,
+    this.chan7RawUs,
+    this.chan8RawUs,
+    this.chan9RawUs,
+    this.chan10RawUs,
+    this.chan11RawUs,
+    this.chan12RawUs,
+    this.chan13RawUs,
+    this.chan14RawUs,
+    this.chan15RawUs,
+    this.chan16RawUs,
+    this.chan17RawUs
+  );
+}
 }

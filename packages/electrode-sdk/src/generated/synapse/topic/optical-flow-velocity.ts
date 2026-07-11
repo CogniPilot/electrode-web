@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { OpticalFlowVelocityData } from '../../synapse/topic/optical-flow-velocity-data.js';
+import { OpticalFlowVelocityData, OpticalFlowVelocityDataT } from '../../synapse/topic/optical-flow-velocity-data';
 
 
 export class OpticalFlowVelocity {
@@ -45,5 +45,29 @@ static createOpticalFlowVelocity(builder:flatbuffers.Builder, dataOffset:flatbuf
   OpticalFlowVelocity.startOpticalFlowVelocity(builder);
   OpticalFlowVelocity.addData(builder, dataOffset);
   return OpticalFlowVelocity.endOpticalFlowVelocity(builder);
+}
+
+unpack(): OpticalFlowVelocityT {
+  return new OpticalFlowVelocityT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: OpticalFlowVelocityT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class OpticalFlowVelocityT {
+constructor(
+  public data: OpticalFlowVelocityDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return OpticalFlowVelocity.createOpticalFlowVelocity(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

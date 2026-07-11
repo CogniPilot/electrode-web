@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class AirDataData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -76,4 +78,68 @@ static createAirDataData(builder:flatbuffers.Builder, timestamp_us: bigint, abso
   return builder.offset();
 }
 
+
+unpack(): AirDataDataT {
+  return new AirDataDataT(
+    this.timestampUs(),
+    this.absolutePressureHpa(),
+    this.differentialPressureHpa(),
+    this.pressureAltitudeM(),
+    this.indicatedAirspeedMS(),
+    this.trueAirspeedMS(),
+    this.angleOfAttackRad(),
+    this.sideslipRad(),
+    this.temperatureCdeg(),
+    this.differentialPressureTemperatureCdeg(),
+    this.flags()
+  );
+}
+
+
+unpackTo(_o: AirDataDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.absolutePressureHpa = this.absolutePressureHpa();
+  _o.differentialPressureHpa = this.differentialPressureHpa();
+  _o.pressureAltitudeM = this.pressureAltitudeM();
+  _o.indicatedAirspeedMS = this.indicatedAirspeedMS();
+  _o.trueAirspeedMS = this.trueAirspeedMS();
+  _o.angleOfAttackRad = this.angleOfAttackRad();
+  _o.sideslipRad = this.sideslipRad();
+  _o.temperatureCdeg = this.temperatureCdeg();
+  _o.differentialPressureTemperatureCdeg = this.differentialPressureTemperatureCdeg();
+  _o.flags = this.flags();
+}
+}
+
+export class AirDataDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public absolutePressureHpa: number = 0.0,
+  public differentialPressureHpa: number = 0.0,
+  public pressureAltitudeM: number = 0.0,
+  public indicatedAirspeedMS: number = 0.0,
+  public trueAirspeedMS: number = 0.0,
+  public angleOfAttackRad: number = 0.0,
+  public sideslipRad: number = 0.0,
+  public temperatureCdeg: number = 0,
+  public differentialPressureTemperatureCdeg: number = 0,
+  public flags: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return AirDataData.createAirDataData(builder,
+    this.timestampUs,
+    this.absolutePressureHpa,
+    this.differentialPressureHpa,
+    this.pressureAltitudeM,
+    this.indicatedAirspeedMS,
+    this.trueAirspeedMS,
+    this.angleOfAttackRad,
+    this.sideslipRad,
+    this.temperatureCdeg,
+    this.differentialPressureTemperatureCdeg,
+    this.flags
+  );
+}
 }

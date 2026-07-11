@@ -60,7 +60,7 @@ export interface Attitude {
 /**
  * Normalized control inputs driving the vehicle. Roll/pitch/yaw are bipolar
  * stick/surface commands in [-1, 1]; throttle is [0, 1]. Populated from the
- * live `synapse/v1/topic/manual_control_command` axes (or, in the future, controller surface
+ * live `manual` (ManualControlCommand) axes (or, in the future, controller surface
  * commands) so the 3D vehicle view can animate control-surface deflection.
  */
 export interface ControlInputs {
@@ -71,7 +71,7 @@ export interface ControlInputs {
 }
 
 /**
- * Full decoded `synapse/v1/topic/manual_control_command` frame: the raw transmitter stick axes
+ * Full decoded `manual` (ManualControlCommand) frame: the raw transmitter stick axes
  * plus the arm/kill/mode switches. Unlike {@link ControlInputs} (which is
  * remapped to control-surface names for the 3D view), this preserves the
  * pilot-facing roll/pitch/yaw/throttle stick values and switch states so the
@@ -132,10 +132,10 @@ export interface MissionWaypoint {
 }
 
 /**
- * Mission plan and progress derived from the Synapse wire: `mission_progress`
- * carries the active item and count, `local_position_command` the active
+ * Mission plan and progress derived from the Synapse wire: `mission`
+ * carries the active item and count, `pos_sp` the active
  * target setpoint, and the waypoint table arrives segment-by-segment over
- * `trajectory_segment`.
+ * `traj`.
  */
 export interface MissionPlanState {
   missionId: number;
@@ -191,7 +191,7 @@ export interface VehicleState {
   velocity: Velocity | null;
   attitude: Attitude | null;
   /**
-   * Attitude from the autopilot's estimator (`attitude_estimate`), kept apart
+   * Attitude from the autopilot's estimator (`att`), kept apart
    * from the canonical `attitude` so estimator output never fights mocap
    * ground truth for the displayed vehicle pose.
    */

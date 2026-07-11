@@ -2,8 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { MissionItemData } from '../../synapse/cmd/mission-item-data.js';
-import { CommandResultCode } from '../../synapse/types/command-result-code.js';
+import { MissionItemData, MissionItemDataT } from '../../synapse/cmd/mission-item-data';
+import { CommandResultCode } from '../../synapse/types/command-result-code';
 
 
 export class MissionGetReply {
@@ -135,5 +135,63 @@ static createMissionGetReply(builder:flatbuffers.Builder, result:CommandResultCo
   MissionGetReply.addFlags(builder, flags);
   MissionGetReply.addItems(builder, itemsOffset);
   return MissionGetReply.endMissionGetReply(builder);
+}
+
+unpack(): MissionGetReplyT {
+  return new MissionGetReplyT(
+    this.result(),
+    this.missionId(),
+    this.planVersion(),
+    this.offset(),
+    this.total(),
+    this.resultDetail(),
+    this.failedSeq(),
+    this.flags(),
+    this.bb!.createObjList(this.items.bind(this), this.itemsLength())
+  );
+}
+
+
+unpackTo(_o: MissionGetReplyT): void {
+  _o.result = this.result();
+  _o.missionId = this.missionId();
+  _o.planVersion = this.planVersion();
+  _o.offset = this.offset();
+  _o.total = this.total();
+  _o.resultDetail = this.resultDetail();
+  _o.failedSeq = this.failedSeq();
+  _o.flags = this.flags();
+  _o.items = this.bb!.createObjList(this.items.bind(this), this.itemsLength());
+}
+}
+
+export class MissionGetReplyT {
+constructor(
+  public result: CommandResultCode = CommandResultCode.Accepted,
+  public missionId: number = 0,
+  public planVersion: number = 0,
+  public offset: number = 0,
+  public total: number = 0,
+  public resultDetail: number = 0,
+  public failedSeq: number = 0,
+  public flags: number = 0,
+  public items: (MissionItemDataT)[] = []
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  const items = builder.createStructOffsetList(this.items, MissionGetReply.startItemsVector);
+
+  return MissionGetReply.createMissionGetReply(builder,
+    this.result,
+    this.missionId,
+    this.planVersion,
+    this.offset,
+    this.total,
+    this.resultDetail,
+    this.failedSeq,
+    this.flags,
+    items
+  );
 }
 }

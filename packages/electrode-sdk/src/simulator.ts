@@ -174,7 +174,7 @@ function createSynapseFrameBuilder(options: SimulationOptions, state: Simulation
 
 function makePowerStatusFrame(state: SimulationState, frame: SynapseFrameBuilder): TelemetryFrame {
   return frame(
-    'synapse/v1/topic/power_status',
+    'power',
     'synapse.topic.PowerStatus',
     'synapse_power_status',
     {
@@ -194,7 +194,7 @@ function makePowerStatusFrame(state: SimulationState, frame: SynapseFrameBuilder
 
 function makeVehicleHealthFrame(state: SimulationState, frame: SynapseFrameBuilder): TelemetryFrame {
   return frame(
-    'synapse/v1/topic/vehicle_health',
+    'health',
     'synapse.topic.VehicleHealth',
     'synapse_vehicle_health',
     {
@@ -217,7 +217,7 @@ function makeVehicleHealthFrame(state: SimulationState, frame: SynapseFrameBuild
 
 function makeManualControlFrame(state: SimulationState, frame: SynapseFrameBuilder): TelemetryFrame {
   return frame(
-    'synapse/v1/topic/manual_control_command',
+    'manual',
     'synapse.topic.ManualControlCommand',
     'synapse_manual_control_command',
     {
@@ -244,7 +244,7 @@ function makeManualControlFrame(state: SimulationState, frame: SynapseFrameBuild
 
 function makeAttitudeFrame(state: SimulationState, frame: SynapseFrameBuilder): TelemetryFrame {
   return frame(
-    'synapse/v1/topic/attitude_estimate',
+    'att',
     'synapse.topic.AttitudeEstimate',
     'synapse_attitude_estimate',
     {
@@ -266,7 +266,7 @@ function makeAttitudeFrame(state: SimulationState, frame: SynapseFrameBuilder): 
 
 function makePwmOutputsFrame(state: SimulationState, frame: SynapseFrameBuilder): TelemetryFrame {
   return frame(
-    'synapse/v1/topic/pwm_signal_outputs',
+    'pwm',
     'synapse.topic.PwmSignalOutputs',
     'synapse_pwm_signal_outputs',
     {
@@ -284,7 +284,7 @@ function makePwmOutputsFrame(state: SimulationState, frame: SynapseFrameBuilder)
 
 function makeRadioControlFrame(state: SimulationState, frame: SynapseFrameBuilder): TelemetryFrame {
   return frame(
-    'synapse/v1/topic/radio_control',
+    'rc',
     'synapse.topic.RadioControl',
     'synapse_radio_control',
     state.rc,
@@ -355,7 +355,7 @@ function makeMocapFrame(
 
 function makeOpticalFlowFrame(state: SimulationState, frame: SynapseFrameBuilder): TelemetryFrame {
   return frame(
-    'synapse/v1/topic/optical_flow',
+    'flow',
     'synapse.topic.OpticalFlow',
     'synapse_optical_flow',
     {
@@ -381,7 +381,7 @@ function makeOpticalFlowFrame(state: SimulationState, frame: SynapseFrameBuilder
 
 function makeOpticalFlowVelocityFrame(state: SimulationState, frame: SynapseFrameBuilder): TelemetryFrame {
   return frame(
-    'synapse/v1/topic/optical_flow_velocity',
+    'flow_vel',
     'synapse.topic.OpticalFlowVelocity',
     'synapse_optical_flow_velocity',
     {
@@ -406,7 +406,7 @@ function makeLockstepTickFrame(
   frame: SynapseFrameBuilder
 ): TelemetryFrame {
   return frame(
-    'synapse/v1/topic/lockstep_tick',
+    'tick',
     'synapse.topic.LockstepTick',
     'synapse_lockstep_tick',
     {

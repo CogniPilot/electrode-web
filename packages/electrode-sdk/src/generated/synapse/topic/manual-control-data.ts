@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class ManualControlData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -96,4 +98,84 @@ static createManualControlData(builder:flatbuffers.Builder, timestamp_us: bigint
   return builder.offset();
 }
 
+
+unpack(): ManualControlDataT {
+  return new ManualControlDataT(
+    this.timestampUs(),
+    this.buttons(),
+    this.activeAxes(),
+    this.pitchMilli(),
+    this.rollMilli(),
+    this.throttleMilli(),
+    this.yawMilli(),
+    this.aux0Milli(),
+    this.aux1Milli(),
+    this.aux2Milli(),
+    this.aux3Milli(),
+    this.aux4Milli(),
+    this.aux5Milli(),
+    this.flightMode(),
+    this.flags()
+  );
+}
+
+
+unpackTo(_o: ManualControlDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.buttons = this.buttons();
+  _o.activeAxes = this.activeAxes();
+  _o.pitchMilli = this.pitchMilli();
+  _o.rollMilli = this.rollMilli();
+  _o.throttleMilli = this.throttleMilli();
+  _o.yawMilli = this.yawMilli();
+  _o.aux0Milli = this.aux0Milli();
+  _o.aux1Milli = this.aux1Milli();
+  _o.aux2Milli = this.aux2Milli();
+  _o.aux3Milli = this.aux3Milli();
+  _o.aux4Milli = this.aux4Milli();
+  _o.aux5Milli = this.aux5Milli();
+  _o.flightMode = this.flightMode();
+  _o.flags = this.flags();
+}
+}
+
+export class ManualControlDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public buttons: number = 0,
+  public activeAxes: number = 0,
+  public pitchMilli: number = 0,
+  public rollMilli: number = 0,
+  public throttleMilli: number = 0,
+  public yawMilli: number = 0,
+  public aux0Milli: number = 0,
+  public aux1Milli: number = 0,
+  public aux2Milli: number = 0,
+  public aux3Milli: number = 0,
+  public aux4Milli: number = 0,
+  public aux5Milli: number = 0,
+  public flightMode: number = 0,
+  public flags: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return ManualControlData.createManualControlData(builder,
+    this.timestampUs,
+    this.buttons,
+    this.activeAxes,
+    this.pitchMilli,
+    this.rollMilli,
+    this.throttleMilli,
+    this.yawMilli,
+    this.aux0Milli,
+    this.aux1Milli,
+    this.aux2Milli,
+    this.aux3Milli,
+    this.aux4Milli,
+    this.aux5Milli,
+    this.flightMode,
+    this.flags
+  );
+}
 }

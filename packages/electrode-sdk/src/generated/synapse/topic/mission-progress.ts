@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { MissionProgressData } from '../../synapse/topic/mission-progress-data.js';
+import { MissionProgressData, MissionProgressDataT } from '../../synapse/topic/mission-progress-data';
 
 
 export class MissionProgress {
@@ -45,5 +45,29 @@ static createMissionProgress(builder:flatbuffers.Builder, dataOffset:flatbuffers
   MissionProgress.startMissionProgress(builder);
   MissionProgress.addData(builder, dataOffset);
   return MissionProgress.endMissionProgress(builder);
+}
+
+unpack(): MissionProgressT {
+  return new MissionProgressT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: MissionProgressT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class MissionProgressT {
+constructor(
+  public data: MissionProgressDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return MissionProgress.createMissionProgress(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

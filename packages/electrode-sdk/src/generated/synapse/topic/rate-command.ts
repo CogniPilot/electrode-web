@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { RateCommandData } from '../../synapse/topic/rate-command-data.js';
+import { RateCommandData, RateCommandDataT } from '../../synapse/topic/rate-command-data';
 
 
 export class RateCommand {
@@ -45,5 +45,29 @@ static createRateCommand(builder:flatbuffers.Builder, dataOffset:flatbuffers.Off
   RateCommand.startRateCommand(builder);
   RateCommand.addData(builder, dataOffset);
   return RateCommand.endRateCommand(builder);
+}
+
+unpack(): RateCommandT {
+  return new RateCommandT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: RateCommandT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class RateCommandT {
+constructor(
+  public data: RateCommandDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return RateCommand.createRateCommand(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

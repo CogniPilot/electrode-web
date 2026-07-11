@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { parseKey } from '@cognipilot/synapse-fbs/topic_catalog';
 
 import { ELECTRODE_SCHEMA_VERSION } from '@electrode/flatbuffers';
 import { applyGcsFrame, createInitialVehicleState } from './state-store';
-import { classify, decode } from './synapse-decode';
+import { classify, decode, expectedTopicEncoding } from './synapse-decode';
 import type { TelemetryFrame } from './types';
+
+/** Valid value-contract encoding for a catalog-keyed sample. */
+function encodingFor(topic: string): string {
+  return expectedTopicEncoding(parseKey(topic)!.topic);
+}
 
 // The cubs2 fixed-wing mission (generated_fixed_wing model waypoint table).
 const WAYPOINTS: Array<[number, number, number]> = [
@@ -16,7 +22,7 @@ const WAYPOINTS: Array<[number, number, number]> = [
 ];
 const MISSION_ID = 1;
 
-// Wire encoders matching the synapse_fbs 0.5.1 fixed-layout structs the
+// Wire encoders matching the synapse_fbs 0.6.0 fixed-layout structs the
 // firmware transmits (bare struct bytes, little-endian).
 function encodeMissionProgress(currentSeq: number, total: number, state: number): Uint8Array {
   const bytes = new Uint8Array(32);
@@ -60,7 +66,7 @@ function encodeTrajectorySegment(seq: number, trajectoryId = MISSION_ID): Uint8A
 }
 
 function frameFor(topic: string, bytes: Uint8Array, sequence: number): TelemetryFrame {
-  const decoded = decode(topic, bytes);
+  const decoded = decode(topic, bytes, encodingFor(topic));
   expect(decoded.decoded).toBe(true);
   return {
     kind: 'telemetry',
@@ -82,13 +88,13 @@ function frameFor(topic: string, bytes: Uint8Array, sequence: number): Telemetry
 
 describe('mission telemetry pipeline', () => {
   it('classifies the mission wire topics', () => {
-    expect(classify('synapse/v1/topic/mission_progress')).toBe('MissionProgress');
-    expect(classify('synapse/v1/topic/local_position_command')).toBe('LocalPositionCommand');
-    expect(classify('synapse/v1/topic/trajectory_segment')).toBe('TrajectorySegment');
+    expect(classify('mission')).toBe('MissionProgress');
+    expect(classify('pos_sp')).toBe('LocalPositionCommand');
+    expect(classify('traj')).toBe('TrajectorySegment');
     // Must not shadow neighbouring topics.
-    expect(classify('synapse/v1/topic/local_position_estimate')).toBe('Raw');
-    expect(classify('synapse/v1/topic/vehicle_command')).toBe('Raw');
-    expect(classify('synapse/v1/topic/vehicle_health')).toBe('VehicleHealth');
+    expect(classify('local_pos')).toBe('Raw');
+    expect(classify('unknown_topic')).toBe('Raw');
+    expect(classify('health')).toBe('VehicleHealth');
   });
 
   it('assembles the mission plan from progress, target, and item broadcasts', () => {
@@ -97,7 +103,7 @@ describe('mission telemetry pipeline', () => {
 
     state = applyGcsFrame(
       state,
-      frameFor('synapse/v1/topic/mission_progress', encodeMissionProgress(2, WAYPOINTS.length, 2), sequence++),
+      frameFor('mission', encodeMissionProgress(2, WAYPOINTS.length, 2), sequence++),
       10_000
     );
     expect(state.mission).toMatchObject({
@@ -111,7 +117,7 @@ describe('mission telemetry pipeline', () => {
     state = applyGcsFrame(
       state,
       frameFor(
-        'synapse/v1/topic/local_position_command',
+        'pos_sp',
         encodeLocalPositionCommand(16.2, 2.0, 3.0, 1.25),
         sequence++
       ),
@@ -127,7 +133,7 @@ describe('mission telemetry pipeline', () => {
       const seq = (i + 3) % WAYPOINTS.length;
       state = applyGcsFrame(
         state,
-        frameFor('synapse/v1/topic/trajectory_segment', encodeTrajectorySegment(seq), sequence++),
+        frameFor('traj', encodeTrajectorySegment(seq), sequence++),
         10_000
       );
     }
@@ -146,12 +152,12 @@ describe('mission telemetry pipeline', () => {
     let state = createInitialVehicleState('cubs2');
     state = applyGcsFrame(
       state,
-      frameFor('synapse/v1/topic/mission_progress', encodeMissionProgress(0, WAYPOINTS.length, 2), 1),
+      frameFor('mission', encodeMissionProgress(0, WAYPOINTS.length, 2), 1),
       10_000
     );
     state = applyGcsFrame(
       state,
-      frameFor('synapse/v1/topic/trajectory_segment', encodeTrajectorySegment(0), 2),
+      frameFor('traj', encodeTrajectorySegment(0), 2),
       10_000
     );
     expect(state.mission?.waypoints[0]).toMatchObject({ seq: 0 });
@@ -159,11 +165,11 @@ describe('mission telemetry pipeline', () => {
     // Invalid coordinates must not disturb the plan.
     const other = encodeTrajectorySegment(1);
     new DataView(other.buffer).setFloat32(16, Number.NaN, true);
-    const decoded = decode('synapse/v1/topic/trajectory_segment', other);
+    const decoded = decode('traj', other, encodingFor('traj'));
     state = applyGcsFrame(
       state,
       {
-        ...frameFor('synapse/v1/topic/trajectory_segment', encodeTrajectorySegment(1), 3),
+        ...frameFor('traj', encodeTrajectorySegment(1), 3),
         payload: decoded.payload
       },
       10_000
@@ -175,8 +181,8 @@ describe('mission telemetry pipeline', () => {
     state = applyGcsFrame(
       state,
       {
-        ...frameFor('synapse/v1/topic/trajectory_segment', renumbered, 4),
-        payload: decode('synapse/v1/topic/trajectory_segment', renumbered).payload
+        ...frameFor('traj', renumbered, 4),
+        payload: decode('traj', renumbered, encodingFor('traj')).payload
       },
       10_000
     );

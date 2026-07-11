@@ -27,7 +27,7 @@ struct Cli {
         alias = "zenoh-topic",
         env = "ZENOH_TOPIC",
         value_name = "KEYEXPR",
-        default_value = "synapse/v1/topic/radio_control",
+        default_value = "rc",
         help = "Zenoh key expression for synapse.topic.RadioControlData bare structs"
     )]
     topic: String,

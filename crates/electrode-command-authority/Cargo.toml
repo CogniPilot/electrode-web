@@ -13,6 +13,7 @@ workspace = true
 anyhow.workspace = true
 flatbuffers.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 sha2.workspace = true
 synapse_fbs.workspace = true
 thiserror.workspace = true

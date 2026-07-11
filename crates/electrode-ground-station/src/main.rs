@@ -31,7 +31,13 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
 use electrode_command_authority::{CommandAuthority, CommandAuthorityConfig};
-use serde::Serialize;
+use flatbuffers::FlatBufferBuilder;
+use serde::{Deserialize, Serialize};
+use synapse_fbs::cmd::{
+    ParamGetReply, ParamGetRequest, ParamGetRequestArgs, ParamKind, ParamSetReply, ParamSetRequest,
+    ParamSetRequestArgs, ParamValue, ParamValueArgs,
+};
+use synapse_fbs::types::CommandResultCode;
 use tower::{service_fn, ServiceExt};
 
 use autopilot::AutopilotProfile;
@@ -91,6 +97,96 @@ struct AppState {
     ppm_supervisor: Supervisor,
     autopilot_link: AutopilotLink,
     _command_authority: CommandAuthority,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeParameterRequest {
+    name: String,
+    value: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeParameterResponse {
+    name: String,
+    value: f64,
+}
+
+async fn runtime_parameter(
+    State(state): State<Shared>,
+    Json(request): Json<RuntimeParameterRequest>,
+) -> Result<Json<RuntimeParameterResponse>, (StatusCode, String)> {
+    let name = request.name.trim().to_string();
+    if name.is_empty() || name.len() > 128 {
+        return Err((StatusCode::BAD_REQUEST, "invalid parameter name".into()));
+    }
+    if request.value.is_some_and(|value| !value.is_finite()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "parameter value must be finite".into(),
+        ));
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        let mut builder = FlatBufferBuilder::new();
+        let name_offset = builder.create_string(&name);
+        let (target, expected_set) = if let Some(value) = request.value {
+            let parameter = ParamValue::create(
+                &mut builder,
+                &ParamValueArgs {
+                    name: Some(name_offset),
+                    kind: ParamKind::Float,
+                    float_value: value,
+                    ..Default::default()
+                },
+            );
+            let root = ParamSetRequest::create(
+                &mut builder,
+                &ParamSetRequestArgs {
+                    value: Some(parameter),
+                },
+            );
+            builder.finish(root, None);
+            ("cmd/param_set", true)
+        } else {
+            let root = ParamGetRequest::create(
+                &mut builder,
+                &ParamGetRequestArgs {
+                    name: Some(name_offset),
+                    offset: 0,
+                    limit: 1,
+                },
+            );
+            builder.finish(root, None);
+            ("cmd/param_get", false)
+        };
+        let payload = state
+            ._command_authority
+            .trusted_query(target, builder.finished_data().to_vec())?;
+        let value = if expected_set {
+            let reply = flatbuffers::root::<ParamSetReply<'_>>(&payload)?;
+            anyhow::ensure!(
+                reply.result() == CommandResultCode::Accepted,
+                "parameter set rejected"
+            );
+            reply.value().map(|value| value.float_value())
+        } else {
+            let reply = flatbuffers::root::<ParamGetReply<'_>>(&payload)?;
+            anyhow::ensure!(
+                reply.result() == CommandResultCode::Accepted,
+                "parameter get rejected"
+            );
+            reply
+                .values()
+                .and_then(|values| (!values.is_empty()).then(|| values.get(0).float_value()))
+        }
+        .ok_or_else(|| anyhow::anyhow!("parameter reply contained no value"))?;
+        Ok::<_, anyhow::Error>(RuntimeParameterResponse { name, value })
+    })
+    .await
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+    .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
+    Ok(Json(result))
 }
 
 fn should_serve_spa_fallback(path: &str) -> bool {
@@ -223,9 +319,8 @@ async fn autopilot_start(
         .clone();
     // The link blocks briefly on zenoh open; keep the async runtime free.
     let link = tokio::task::block_in_place(|| {
-        state
-            .autopilot_link
-            .start(&profile, Some(state._command_authority.vehicle_session()))
+        let session = state._command_authority.vehicle_client()?;
+        state.autopilot_link.start(&profile, Some(session))
     });
     link.map(Json)
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
@@ -391,7 +486,7 @@ async fn main() -> anyhow::Result<()> {
     let zenoh_listeners = command_authority.listeners().to_vec();
     let autopilot_profile = AutopilotProfile::load_or_default(&cli.autopilot_file);
     let sim_bridge = sim_bridge::SimBridge::start(
-        command_authority.vehicle_session(),
+        command_authority.vehicle_client()?,
         autopilot_profile.mocap_source,
     )?;
 
@@ -411,6 +506,7 @@ async fn main() -> anyhow::Result<()> {
 
     // The gcs/* API is same-origin in production; permissive CORS lets the Vite
     // dev server (a different port) probe it during development.
+    let shutdown_state = state.clone();
     let gcs = Router::new()
         .route("/health", get(health))
         .route("/devices", get(devices))
@@ -420,6 +516,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/autopilot/status", get(autopilot_run_status))
         .route("/autopilot/start", post(autopilot_start))
         .route("/autopilot/stop", post(autopilot_stop))
+        .route("/runtime/parameter", post(runtime_parameter))
         .route("/simulation", get(get_simulation).put(put_simulation))
         .route(
             "/simulation/model",
@@ -461,6 +558,34 @@ async fn main() -> anyhow::Result<()> {
             zenoh_listeners.join(", ")
         );
     }
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    shutdown_state.autopilot_link.stop_for_shutdown();
+    shutdown_state.supervisor.stop();
+    shutdown_state.ppm_supervisor.stop();
     Ok(())
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut terminate = signal(SignalKind::terminate()).ok();
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = async {
+                if let Some(signal) = terminate.as_mut() {
+                    signal.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }

@@ -2,8 +2,50 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { FrameHeader } from '../../synapse/topic/frame-header.js';
-import { SynapseMessage, unionToSynapseMessage, unionListToSynapseMessage } from '../../synapse/topic/synapse-message.js';
+import { ActuatorCommand, ActuatorCommandT } from '../../synapse/topic/actuator-command';
+import { ActuatorFeedback, ActuatorFeedbackT } from '../../synapse/topic/actuator-feedback';
+import { AirData, AirDataT } from '../../synapse/topic/air-data';
+import { AttitudeCommand, AttitudeCommandT } from '../../synapse/topic/attitude-command';
+import { AttitudeEstimate, AttitudeEstimateT } from '../../synapse/topic/attitude-estimate';
+import { ControlLoopMetrics, ControlLoopMetricsT } from '../../synapse/topic/control-loop-metrics';
+import { EstimatorHealth, EstimatorHealthT } from '../../synapse/topic/estimator-health';
+import { ExternalOdometry, ExternalOdometryT } from '../../synapse/topic/external-odometry';
+import { ExternalOdometryCovariance, ExternalOdometryCovarianceT } from '../../synapse/topic/external-odometry-covariance';
+import { FirmwareProgress, FirmwareProgressT } from '../../synapse/topic/firmware-progress';
+import { FrameHeader, FrameHeaderT } from '../../synapse/topic/frame-header';
+import { GcsStatus, GcsStatusT } from '../../synapse/topic/gcs-status';
+import { GlobalPositionEstimate, GlobalPositionEstimateT } from '../../synapse/topic/global-position-estimate';
+import { GnssFix, GnssFixT } from '../../synapse/topic/gnss-fix';
+import { HomeReference, HomeReferenceT } from '../../synapse/topic/home-reference';
+import { InertialSample, InertialSampleT } from '../../synapse/topic/inertial-sample';
+import { LocalPositionCommand, LocalPositionCommandT } from '../../synapse/topic/local-position-command';
+import { LocalPositionEstimate, LocalPositionEstimateT } from '../../synapse/topic/local-position-estimate';
+import { LockstepStatus, LockstepStatusT } from '../../synapse/topic/lockstep-status';
+import { LockstepTick, LockstepTickT } from '../../synapse/topic/lockstep-tick';
+import { ManualControlCommand, ManualControlCommandT } from '../../synapse/topic/manual-control-command';
+import { MissionProgress, MissionProgressT } from '../../synapse/topic/mission-progress';
+import { MocapFrame, MocapFrameT } from '../../synapse/topic/mocap-frame';
+import { MocapPoseFrame, MocapPoseFrameT } from '../../synapse/topic/mocap-pose-frame';
+import { NavigationTarget, NavigationTargetT } from '../../synapse/topic/navigation-target';
+import { Odometry, OdometryT } from '../../synapse/topic/odometry';
+import { OdometryEstimate, OdometryEstimateT } from '../../synapse/topic/odometry-estimate';
+import { OdometryWithCovariance, OdometryWithCovarianceT } from '../../synapse/topic/odometry-with-covariance';
+import { OpticalFlow, OpticalFlowT } from '../../synapse/topic/optical-flow';
+import { OpticalFlowVelocity, OpticalFlowVelocityT } from '../../synapse/topic/optical-flow-velocity';
+import { Pose, PoseT } from '../../synapse/topic/pose';
+import { PoseWithCovariance, PoseWithCovarianceT } from '../../synapse/topic/pose-with-covariance';
+import { PowerStatus, PowerStatusT } from '../../synapse/topic/power-status';
+import { PwmSignalOutputs, PwmSignalOutputsT } from '../../synapse/topic/pwm-signal-outputs';
+import { RadioControl, RadioControlT } from '../../synapse/topic/radio-control';
+import { RateCommand, RateCommandT } from '../../synapse/topic/rate-command';
+import { RawPose, RawPoseT } from '../../synapse/topic/raw-pose';
+import { SynapseMessage, unionToSynapseMessage, unionListToSynapseMessage } from '../../synapse/topic/synapse-message';
+import { TextStatus, TextStatusT } from '../../synapse/topic/text-status';
+import { TimeReference, TimeReferenceT } from '../../synapse/topic/time-reference';
+import { TrajectorySegment, TrajectorySegmentT } from '../../synapse/topic/trajectory-segment';
+import { Twist, TwistT } from '../../synapse/topic/twist';
+import { TwistWithCovariance, TwistWithCovarianceT } from '../../synapse/topic/twist-with-covariance';
+import { VehicleHealth, VehicleHealthT } from '../../synapse/topic/vehicle-health';
 
 
 export class Frame {
@@ -22,10 +64,6 @@ static getRootAsFrame(bb:flatbuffers.ByteBuffer, obj?:Frame):Frame {
 static getSizePrefixedRootAsFrame(bb:flatbuffers.ByteBuffer, obj?:Frame):Frame {
   bb.setPosition(bb.position() + flatbuffers.SIZE_PREFIX_LENGTH);
   return (obj || new Frame()).__init(bb.readInt32(bb.position()) + bb.position(), bb);
-}
-
-static bufferHasIdentifier(bb:flatbuffers.ByteBuffer):boolean {
-  return bb.__has_identifier('SYFR');
 }
 
 header(obj?:FrameHeader):FrameHeader|null {
@@ -64,19 +102,53 @@ static endFrame(builder:flatbuffers.Builder):flatbuffers.Offset {
   return offset;
 }
 
-static finishFrameBuffer(builder:flatbuffers.Builder, offset:flatbuffers.Offset) {
-  builder.finish(offset, 'SYFR');
-}
-
-static finishSizePrefixedFrameBuffer(builder:flatbuffers.Builder, offset:flatbuffers.Offset) {
-  builder.finish(offset, 'SYFR', true);
-}
-
 static createFrame(builder:flatbuffers.Builder, headerOffset:flatbuffers.Offset, messageType:SynapseMessage, messageOffset:flatbuffers.Offset):flatbuffers.Offset {
   Frame.startFrame(builder);
   Frame.addHeader(builder, headerOffset);
   Frame.addMessageType(builder, messageType);
   Frame.addMessage(builder, messageOffset);
   return Frame.endFrame(builder);
+}
+
+unpack(): FrameT {
+  return new FrameT(
+    (this.header() !== null ? this.header()!.unpack() : null),
+    this.messageType(),
+    (() => {
+      let temp = unionToSynapseMessage(this.messageType(), this.message.bind(this));
+      if(temp === null) { return null; }
+      return temp.unpack()
+  })()
+  );
+}
+
+
+unpackTo(_o: FrameT): void {
+  _o.header = (this.header() !== null ? this.header()!.unpack() : null);
+  _o.messageType = this.messageType();
+  _o.message = (() => {
+      let temp = unionToSynapseMessage(this.messageType(), this.message.bind(this));
+      if(temp === null) { return null; }
+      return temp.unpack()
+  })();
+}
+}
+
+export class FrameT {
+constructor(
+  public header: FrameHeaderT|null = null,
+  public messageType: SynapseMessage = SynapseMessage.NONE,
+  public message: ActuatorCommandT|ActuatorFeedbackT|AirDataT|AttitudeCommandT|AttitudeEstimateT|ControlLoopMetricsT|EstimatorHealthT|ExternalOdometryCovarianceT|ExternalOdometryT|FirmwareProgressT|GcsStatusT|GlobalPositionEstimateT|GnssFixT|HomeReferenceT|InertialSampleT|LocalPositionCommandT|LocalPositionEstimateT|LockstepStatusT|LockstepTickT|ManualControlCommandT|MissionProgressT|MocapFrameT|MocapPoseFrameT|NavigationTargetT|OdometryEstimateT|OdometryT|OdometryWithCovarianceT|OpticalFlowT|OpticalFlowVelocityT|PoseT|PoseWithCovarianceT|PowerStatusT|PwmSignalOutputsT|RadioControlT|RateCommandT|RawPoseT|TextStatusT|TimeReferenceT|TrajectorySegmentT|TwistT|TwistWithCovarianceT|VehicleHealthT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  const message = builder.createObjectOffset(this.message);
+
+  return Frame.createFrame(builder,
+    (this.header !== null ? this.header!.pack(builder) : 0),
+    this.messageType,
+    message
+  );
 }
 }

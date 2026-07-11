@@ -2,8 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { Vec2f } from '../../synapse/types/vec2f.js';
-import { Vec3f } from '../../synapse/types/vec3f.js';
+import { Vec2f, Vec2fT } from '../../synapse/types/vec2f';
+import { Vec3f, Vec3fT } from '../../synapse/types/vec3f';
 
 
 export class OpticalFlowData {
@@ -75,4 +75,63 @@ static createOpticalFlowData(builder:flatbuffers.Builder, timestamp_us: bigint, 
   return builder.offset();
 }
 
+
+unpack(): OpticalFlowDataT {
+  return new OpticalFlowDataT(
+    this.timestampUs(),
+    (this.flowRad() !== null ? this.flowRad()!.unpack() : null),
+    (this.deltaAngleFluRad() !== null ? this.deltaAngleFluRad()!.unpack() : null),
+    this.distanceM(),
+    this.integrationTimespanUs(),
+    this.maxFlowRateRadS(),
+    this.minGroundDistanceM(),
+    this.maxGroundDistanceM(),
+    this.qualityPct()
+  );
+}
+
+
+unpackTo(_o: OpticalFlowDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.flowRad = (this.flowRad() !== null ? this.flowRad()!.unpack() : null);
+  _o.deltaAngleFluRad = (this.deltaAngleFluRad() !== null ? this.deltaAngleFluRad()!.unpack() : null);
+  _o.distanceM = this.distanceM();
+  _o.integrationTimespanUs = this.integrationTimespanUs();
+  _o.maxFlowRateRadS = this.maxFlowRateRadS();
+  _o.minGroundDistanceM = this.minGroundDistanceM();
+  _o.maxGroundDistanceM = this.maxGroundDistanceM();
+  _o.qualityPct = this.qualityPct();
+}
+}
+
+export class OpticalFlowDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public flowRad: Vec2fT|null = null,
+  public deltaAngleFluRad: Vec3fT|null = null,
+  public distanceM: number = 0.0,
+  public integrationTimespanUs: number = 0,
+  public maxFlowRateRadS: number = 0.0,
+  public minGroundDistanceM: number = 0.0,
+  public maxGroundDistanceM: number = 0.0,
+  public qualityPct: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return OpticalFlowData.createOpticalFlowData(builder,
+    this.timestampUs,
+    (this.flowRad?.x ?? 0),
+    (this.flowRad?.y ?? 0),
+    (this.deltaAngleFluRad?.x ?? 0),
+    (this.deltaAngleFluRad?.y ?? 0),
+    (this.deltaAngleFluRad?.z ?? 0),
+    this.distanceM,
+    this.integrationTimespanUs,
+    this.maxFlowRateRadS,
+    this.minGroundDistanceM,
+    this.maxGroundDistanceM,
+    this.qualityPct
+  );
+}
 }

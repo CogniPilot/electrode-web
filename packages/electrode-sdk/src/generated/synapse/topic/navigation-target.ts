@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { NavigationTargetData } from '../../synapse/topic/navigation-target-data.js';
+import { NavigationTargetData, NavigationTargetDataT } from '../../synapse/topic/navigation-target-data';
 
 
 export class NavigationTarget {
@@ -45,5 +45,29 @@ static createNavigationTarget(builder:flatbuffers.Builder, dataOffset:flatbuffer
   NavigationTarget.startNavigationTarget(builder);
   NavigationTarget.addData(builder, dataOffset);
   return NavigationTarget.endNavigationTarget(builder);
+}
+
+unpack(): NavigationTargetT {
+  return new NavigationTargetT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: NavigationTargetT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class NavigationTargetT {
+constructor(
+  public data: NavigationTargetDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return NavigationTarget.createNavigationTarget(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

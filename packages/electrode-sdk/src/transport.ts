@@ -1,3 +1,5 @@
+import { parseKey, topicCatalog } from '@cognipilot/synapse-fbs/topic_catalog';
+
 import { classify, decode } from './synapse-decode';
 import type { ConnectionState, GcsFrame } from './types';
 
@@ -41,6 +43,8 @@ export interface ZenohTransportOptions {
    * the glue's `import.meta.url` guess (which bundlers rewrite incorrectly).
    */
   wasmUrl?: string;
+  /** Observe original bytes before topic decoding, for typed command replies. */
+  onRawSample?: (key: string, payload: Uint8Array) => void;
 }
 
 type ZenohWasmModule = typeof import('@cognipilot/zenoh-wasm');
@@ -51,16 +55,18 @@ const ZENOH_CONNECT_TIMEOUT_MS = 15_000;
 const ZENOH_PUBLISH_TIMEOUT_MS = 2_000;
 const CATALOG_INTERVAL_MS = 500;
 const SYNAPSE_CATALOG_KEY = 'electrode/catalog/synapse';
-// Keep normal vehicle telemetry live, but subscribe to only cub1's compact
-// pose for 3D visualization. Other Synapse topics are discovered through the
-// catalog above and subscribed to only when the operator selects them.
+// Catalog topics live on bare compact keys (`att`, `manual`, ...); subscribe
+// to each key, plus `<key>/*` for multi-instance topics (`external_pose/1`).
+const CATALOG_KEY_EXPRS = topicCatalog.flatMap((topic) =>
+  topic.multiInstance ? [topic.key, `${topic.key}/*`] : [topic.key]
+);
+// Keep normal vehicle telemetry live and subscribe explicitly to the Qualisys
+// bridge's raw CUB1 pose. Do not use its pose/odometry EKF publications.
 const DEFAULT_KEY_EXPRS = [
-  'synapse/v1/**',
+  ...CATALOG_KEY_EXPRS,
+  'qualisys/cub1/pose_raw',
   'synapse/motor_output',
-  'synapse/mocap/frame',
-  'synapse/mocap/rigid_body_names',
-  'synapse/mocap/rigid_body/cub1/pose',
-  'synapse/mocap/selected/rigid_body/cub1/pose'
+  'gcs/v1/status/reply/parameters',
 ];
 // Matches electrode_web_core::SCHEMA_VERSION on the native side.
 const SCHEMA_VERSION = 1;
@@ -99,6 +105,7 @@ export class ZenohWasmTransport {
   readonly #keyExprs: string[];
   readonly #autoSelectKnown: boolean;
   readonly #wasmUrl?: string;
+  readonly #onRawSample?: (key: string, payload: Uint8Array) => void;
 
   constructor(
     private readonly endpointOrConfig: string,
@@ -112,6 +119,7 @@ export class ZenohWasmTransport {
     this.#keyExprs = [...payloadExprs, SYNAPSE_CATALOG_KEY];
     this.#autoSelectKnown = options.autoSelectKnown ?? true;
     this.#wasmUrl = options.wasmUrl;
+    this.#onRawSample = options.onRawSample;
   }
 
   async connect(): Promise<void> {
@@ -140,7 +148,8 @@ export class ZenohWasmTransport {
         this.#baseSubscribers.push(
           await this.#session.declareSubscriber(
             keyExpr,
-            (key: string, payload: Uint8Array) => this.#onSample(key, payload)
+            (key: string, payload: Uint8Array, encoding?: string) =>
+              this.#onSample(key, payload, encoding)
           )
         );
       }
@@ -234,7 +243,8 @@ export class ZenohWasmTransport {
     return this.#version;
   }
 
-  #onSample(key: string, payload: Uint8Array): void {
+  #onSample(key: string, payload: Uint8Array, encoding?: string): void {
+    this.#onRawSample?.(key, payload);
     if (key === SYNAPSE_CATALOG_KEY) {
       this.#onCatalogAnnouncement(payload);
       return;
@@ -258,8 +268,8 @@ export class ZenohWasmTransport {
     }
 
     // A payload-free catalog announcement may create the registry entry before
-    // the first payload arrives. Base subscriptions (including cub1 mocap and
-    // synapse/v1 telemetry) must still auto-select when their payload is seen.
+    // the first payload arrives. Base subscriptions (compact catalog keys and
+    // custom synapse keys) must still auto-select when their payload is seen.
     if (
       this.#autoSelectKnown &&
       stat.decodable &&
@@ -272,7 +282,7 @@ export class ZenohWasmTransport {
     stat.lastSeenMs = now;
 
     if (this.#selected.has(key)) {
-      this.onMessage(this.#buildFrame(key, payload));
+      this.onMessage(this.#buildFrame(key, payload, encoding));
     }
   }
 
@@ -282,7 +292,11 @@ export class ZenohWasmTransport {
         key?: unknown;
         lastBytes?: unknown;
       };
-      if (typeof announcement.key !== 'string' || !announcement.key.startsWith('synapse/')) {
+      if (typeof announcement.key !== 'string') {
+        return;
+      }
+      // Relay-worthy keys: bare catalog keys plus custom `synapse/...` keys.
+      if (!parseKey(announcement.key) && !announcement.key.startsWith('synapse/')) {
         return;
       }
       const now = Date.now();
@@ -325,7 +339,7 @@ export class ZenohWasmTransport {
 
     for (const key of this.#selected) {
       if (
-        !key.startsWith('synapse/') ||
+        (!parseKey(key) && !key.startsWith('synapse/')) ||
         this.#coveredByBaseSubscription(key) ||
         this.#dynamicSubscribers.has(key)
       ) {
@@ -333,7 +347,8 @@ export class ZenohWasmTransport {
       }
       const subscriber = await session.declareSubscriber(
         key,
-        (sampleKey: string, payload: Uint8Array) => this.#onSample(sampleKey, payload)
+        (sampleKey: string, payload: Uint8Array, encoding?: string) =>
+          this.#onSample(sampleKey, payload, encoding)
       );
       if (this.#session !== session || !this.#selected.has(key)) {
         await subscriber.undeclare();
@@ -352,12 +367,17 @@ export class ZenohWasmTransport {
         const prefix = expression.slice(0, -3);
         return key === prefix || key.startsWith(`${prefix}/`);
       }
+      if (expression.endsWith('/*')) {
+        // Single-level instance wildcard, e.g. `external_pose/*`.
+        const prefix = expression.slice(0, -1);
+        return key.startsWith(prefix) && !key.slice(prefix.length).includes('/');
+      }
       return false;
     });
   }
 
-  #buildFrame(key: string, payload: Uint8Array): TransportMessage {
-    const decoded = decode(key, payload);
+  #buildFrame(key: string, payload: Uint8Array, encoding?: string): TransportMessage {
+    const decoded = decode(key, payload, encoding);
     const now = Date.now();
     return {
       kind: 'telemetry',

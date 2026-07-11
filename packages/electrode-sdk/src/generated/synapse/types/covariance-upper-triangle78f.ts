@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class CovarianceUpperTriangle78f {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -410,4 +412,336 @@ static createCovarianceUpperTriangle78f(builder:flatbuffers.Builder, c0: number,
   return builder.offset();
 }
 
+
+unpack(): CovarianceUpperTriangle78fT {
+  return new CovarianceUpperTriangle78fT(
+    this.c0(),
+    this.c1(),
+    this.c2(),
+    this.c3(),
+    this.c4(),
+    this.c5(),
+    this.c6(),
+    this.c7(),
+    this.c8(),
+    this.c9(),
+    this.c10(),
+    this.c11(),
+    this.c12(),
+    this.c13(),
+    this.c14(),
+    this.c15(),
+    this.c16(),
+    this.c17(),
+    this.c18(),
+    this.c19(),
+    this.c20(),
+    this.c21(),
+    this.c22(),
+    this.c23(),
+    this.c24(),
+    this.c25(),
+    this.c26(),
+    this.c27(),
+    this.c28(),
+    this.c29(),
+    this.c30(),
+    this.c31(),
+    this.c32(),
+    this.c33(),
+    this.c34(),
+    this.c35(),
+    this.c36(),
+    this.c37(),
+    this.c38(),
+    this.c39(),
+    this.c40(),
+    this.c41(),
+    this.c42(),
+    this.c43(),
+    this.c44(),
+    this.c45(),
+    this.c46(),
+    this.c47(),
+    this.c48(),
+    this.c49(),
+    this.c50(),
+    this.c51(),
+    this.c52(),
+    this.c53(),
+    this.c54(),
+    this.c55(),
+    this.c56(),
+    this.c57(),
+    this.c58(),
+    this.c59(),
+    this.c60(),
+    this.c61(),
+    this.c62(),
+    this.c63(),
+    this.c64(),
+    this.c65(),
+    this.c66(),
+    this.c67(),
+    this.c68(),
+    this.c69(),
+    this.c70(),
+    this.c71(),
+    this.c72(),
+    this.c73(),
+    this.c74(),
+    this.c75(),
+    this.c76(),
+    this.c77()
+  );
+}
+
+
+unpackTo(_o: CovarianceUpperTriangle78fT): void {
+  _o.c0 = this.c0();
+  _o.c1 = this.c1();
+  _o.c2 = this.c2();
+  _o.c3 = this.c3();
+  _o.c4 = this.c4();
+  _o.c5 = this.c5();
+  _o.c6 = this.c6();
+  _o.c7 = this.c7();
+  _o.c8 = this.c8();
+  _o.c9 = this.c9();
+  _o.c10 = this.c10();
+  _o.c11 = this.c11();
+  _o.c12 = this.c12();
+  _o.c13 = this.c13();
+  _o.c14 = this.c14();
+  _o.c15 = this.c15();
+  _o.c16 = this.c16();
+  _o.c17 = this.c17();
+  _o.c18 = this.c18();
+  _o.c19 = this.c19();
+  _o.c20 = this.c20();
+  _o.c21 = this.c21();
+  _o.c22 = this.c22();
+  _o.c23 = this.c23();
+  _o.c24 = this.c24();
+  _o.c25 = this.c25();
+  _o.c26 = this.c26();
+  _o.c27 = this.c27();
+  _o.c28 = this.c28();
+  _o.c29 = this.c29();
+  _o.c30 = this.c30();
+  _o.c31 = this.c31();
+  _o.c32 = this.c32();
+  _o.c33 = this.c33();
+  _o.c34 = this.c34();
+  _o.c35 = this.c35();
+  _o.c36 = this.c36();
+  _o.c37 = this.c37();
+  _o.c38 = this.c38();
+  _o.c39 = this.c39();
+  _o.c40 = this.c40();
+  _o.c41 = this.c41();
+  _o.c42 = this.c42();
+  _o.c43 = this.c43();
+  _o.c44 = this.c44();
+  _o.c45 = this.c45();
+  _o.c46 = this.c46();
+  _o.c47 = this.c47();
+  _o.c48 = this.c48();
+  _o.c49 = this.c49();
+  _o.c50 = this.c50();
+  _o.c51 = this.c51();
+  _o.c52 = this.c52();
+  _o.c53 = this.c53();
+  _o.c54 = this.c54();
+  _o.c55 = this.c55();
+  _o.c56 = this.c56();
+  _o.c57 = this.c57();
+  _o.c58 = this.c58();
+  _o.c59 = this.c59();
+  _o.c60 = this.c60();
+  _o.c61 = this.c61();
+  _o.c62 = this.c62();
+  _o.c63 = this.c63();
+  _o.c64 = this.c64();
+  _o.c65 = this.c65();
+  _o.c66 = this.c66();
+  _o.c67 = this.c67();
+  _o.c68 = this.c68();
+  _o.c69 = this.c69();
+  _o.c70 = this.c70();
+  _o.c71 = this.c71();
+  _o.c72 = this.c72();
+  _o.c73 = this.c73();
+  _o.c74 = this.c74();
+  _o.c75 = this.c75();
+  _o.c76 = this.c76();
+  _o.c77 = this.c77();
+}
+}
+
+export class CovarianceUpperTriangle78fT {
+constructor(
+  public c0: number = 0.0,
+  public c1: number = 0.0,
+  public c2: number = 0.0,
+  public c3: number = 0.0,
+  public c4: number = 0.0,
+  public c5: number = 0.0,
+  public c6: number = 0.0,
+  public c7: number = 0.0,
+  public c8: number = 0.0,
+  public c9: number = 0.0,
+  public c10: number = 0.0,
+  public c11: number = 0.0,
+  public c12: number = 0.0,
+  public c13: number = 0.0,
+  public c14: number = 0.0,
+  public c15: number = 0.0,
+  public c16: number = 0.0,
+  public c17: number = 0.0,
+  public c18: number = 0.0,
+  public c19: number = 0.0,
+  public c20: number = 0.0,
+  public c21: number = 0.0,
+  public c22: number = 0.0,
+  public c23: number = 0.0,
+  public c24: number = 0.0,
+  public c25: number = 0.0,
+  public c26: number = 0.0,
+  public c27: number = 0.0,
+  public c28: number = 0.0,
+  public c29: number = 0.0,
+  public c30: number = 0.0,
+  public c31: number = 0.0,
+  public c32: number = 0.0,
+  public c33: number = 0.0,
+  public c34: number = 0.0,
+  public c35: number = 0.0,
+  public c36: number = 0.0,
+  public c37: number = 0.0,
+  public c38: number = 0.0,
+  public c39: number = 0.0,
+  public c40: number = 0.0,
+  public c41: number = 0.0,
+  public c42: number = 0.0,
+  public c43: number = 0.0,
+  public c44: number = 0.0,
+  public c45: number = 0.0,
+  public c46: number = 0.0,
+  public c47: number = 0.0,
+  public c48: number = 0.0,
+  public c49: number = 0.0,
+  public c50: number = 0.0,
+  public c51: number = 0.0,
+  public c52: number = 0.0,
+  public c53: number = 0.0,
+  public c54: number = 0.0,
+  public c55: number = 0.0,
+  public c56: number = 0.0,
+  public c57: number = 0.0,
+  public c58: number = 0.0,
+  public c59: number = 0.0,
+  public c60: number = 0.0,
+  public c61: number = 0.0,
+  public c62: number = 0.0,
+  public c63: number = 0.0,
+  public c64: number = 0.0,
+  public c65: number = 0.0,
+  public c66: number = 0.0,
+  public c67: number = 0.0,
+  public c68: number = 0.0,
+  public c69: number = 0.0,
+  public c70: number = 0.0,
+  public c71: number = 0.0,
+  public c72: number = 0.0,
+  public c73: number = 0.0,
+  public c74: number = 0.0,
+  public c75: number = 0.0,
+  public c76: number = 0.0,
+  public c77: number = 0.0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return CovarianceUpperTriangle78f.createCovarianceUpperTriangle78f(builder,
+    this.c0,
+    this.c1,
+    this.c2,
+    this.c3,
+    this.c4,
+    this.c5,
+    this.c6,
+    this.c7,
+    this.c8,
+    this.c9,
+    this.c10,
+    this.c11,
+    this.c12,
+    this.c13,
+    this.c14,
+    this.c15,
+    this.c16,
+    this.c17,
+    this.c18,
+    this.c19,
+    this.c20,
+    this.c21,
+    this.c22,
+    this.c23,
+    this.c24,
+    this.c25,
+    this.c26,
+    this.c27,
+    this.c28,
+    this.c29,
+    this.c30,
+    this.c31,
+    this.c32,
+    this.c33,
+    this.c34,
+    this.c35,
+    this.c36,
+    this.c37,
+    this.c38,
+    this.c39,
+    this.c40,
+    this.c41,
+    this.c42,
+    this.c43,
+    this.c44,
+    this.c45,
+    this.c46,
+    this.c47,
+    this.c48,
+    this.c49,
+    this.c50,
+    this.c51,
+    this.c52,
+    this.c53,
+    this.c54,
+    this.c55,
+    this.c56,
+    this.c57,
+    this.c58,
+    this.c59,
+    this.c60,
+    this.c61,
+    this.c62,
+    this.c63,
+    this.c64,
+    this.c65,
+    this.c66,
+    this.c67,
+    this.c68,
+    this.c69,
+    this.c70,
+    this.c71,
+    this.c72,
+    this.c73,
+    this.c74,
+    this.c75,
+    this.c76,
+    this.c77
+  );
+}
 }

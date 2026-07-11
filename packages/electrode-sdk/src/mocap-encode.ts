@@ -8,9 +8,11 @@
 import * as flatbuffers from 'flatbuffers';
 
 import { MocapFrame } from './generated/synapse/topic/mocap-frame.js';
+import { MocapPoseFrame } from './generated/synapse/topic/mocap-pose-frame.js';
 import { MocapRawComponent } from './generated/synapse/topic/mocap-raw-component.js';
 import { MocapRawFlags } from './generated/synapse/topic/mocap-raw-flags.js';
 import { MocapRigidBodyData } from './generated/synapse/topic/mocap-rigid-body-data.js';
+import { MocapRigidBodyPoseData } from './generated/synapse/topic/mocap-rigid-body-pose-data.js';
 
 export interface MocapPose {
   /** Rigid-body position, ENU metres (x=east, y=north, z=up). */
@@ -25,6 +27,21 @@ export interface MocapFrameOptions {
   bodyId?: number;
   residual?: number;
   trackingValid?: boolean;
+}
+
+/** Encode the bridge's bare 40-byte `RawPoseData` publication. */
+export function encodeRawPose(pose: MocapPose, timestampUs = 0): Uint8Array {
+  const bytes = new Uint8Array(40);
+  const view = new DataView(bytes.buffer);
+  view.setBigUint64(0, BigInt(timestampUs), true);
+  view.setFloat32(8, pose.position.x, true);
+  view.setFloat32(12, pose.position.y, true);
+  view.setFloat32(16, pose.position.z, true);
+  view.setFloat32(20, pose.attitude.w, true);
+  view.setFloat32(24, pose.attitude.x, true);
+  view.setFloat32(28, pose.attitude.y, true);
+  view.setFloat32(32, pose.attitude.z, true);
+  return bytes;
 }
 
 /** Serialize a single rigid-body pose as a `synapse.topic.MocapFrame`. */
@@ -57,6 +74,44 @@ export function encodeMocapFrame(pose: MocapPose, options: MocapFrameOptions = {
   );
   const bodies = builder.endVector();
   const message = MocapFrame.createMocapFrame(
+    builder,
+    BigInt(options.timestampUs ?? 0),
+    options.frameNumber ?? 0,
+    0,
+    0,
+    0,
+    flags,
+    0,
+    0,
+    bodies
+  );
+  builder.finish(message);
+  return builder.asUint8Array();
+}
+
+/** Serialize a raw pose using the Synapse 0.7 `MocapPoseFrame` wire type. */
+export function encodeMocapPoseFrame(pose: MocapPose, options: MocapFrameOptions = {}): Uint8Array {
+  const builder = new flatbuffers.Builder(256);
+  MocapPoseFrame.startRigidBodiesVector(builder, 1);
+  const flags =
+    (options.trackingValid ?? true ? MocapRawFlags.Valid : 0) |
+    MocapRawFlags.ResidualValid |
+    MocapRawFlags.LabelValid;
+  MocapRigidBodyPoseData.createMocapRigidBodyPoseData(
+    builder,
+    pose.position.x,
+    pose.position.y,
+    pose.position.z,
+    pose.attitude.w,
+    pose.attitude.x,
+    pose.attitude.y,
+    pose.attitude.z,
+    options.residual ?? 0,
+    options.bodyId ?? 0,
+    flags
+  );
+  const bodies = builder.endVector();
+  const message = MocapPoseFrame.createMocapPoseFrame(
     builder,
     BigInt(options.timestampUs ?? 0),
     options.frameNumber ?? 0,

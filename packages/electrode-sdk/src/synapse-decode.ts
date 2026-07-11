@@ -6,11 +6,19 @@
 // committed readers were generated from the published `@cognipilot/synapse-fbs`
 // schemas; normal development and CI do not require `flatc`.
 //
-// Wire encoding (synapse_fbs 0.5.1): every topic is `table X { data: XData; }`
+// Wire encoding (synapse_fbs 0.7.0): every topic is `table X { data: XData; }`
 // EXCEPT fixed-layout structs, which are transmitted as the *bare* `*Data`
 // struct on the wire (raw fixed-size struct bytes, NOT a flatbuffer root table).
-// Struct topics are decoded with `new XData().__init(0, bb)`; only `mocap_frame`
-// is a real root TABLE.
+// Struct topics are decoded with `new XData().__init(0, bb)`; only the `mocap`
+// topic is a real root TABLE.
+//
+// Topics use bare compact catalog keys (e.g. `att`, `manual`, `pwm`) resolved
+// through the published topic catalog, and every catalog-keyed sample must
+// carry the mandatory Zenoh encoding string
+// `application/x-synapse-struct;type=<wireType>;schema=sha256-128:<hash>`
+// (`application/x-flatbuffers;...` for root-table topics). Custom non-catalog
+// keys (`synapse/mocap/...`, `synapse/motor_output`) are exempt.
+import { parseKey, type TopicInfo } from '@cognipilot/synapse-fbs/topic_catalog';
 import * as flatbuffers from 'flatbuffers';
 
 import { AttitudeCommandData } from './generated/synapse/topic/attitude-command-data.js';
@@ -26,8 +34,10 @@ import { ManualControlData } from './generated/synapse/topic/manual-control-data
 import { ManualControlFlags } from './generated/synapse/topic/manual-control-flags.js';
 import { MissionProgressData } from './generated/synapse/topic/mission-progress-data.js';
 import { MocapFrame } from './generated/synapse/topic/mocap-frame.js';
+import { MocapPoseFrame } from './generated/synapse/topic/mocap-pose-frame.js';
 import { MocapRawFlags } from './generated/synapse/topic/mocap-raw-flags.js';
 import { PowerStatusData } from './generated/synapse/topic/power-status-data.js';
+import { RawPoseData } from './generated/synapse/topic/raw-pose-data.js';
 import { PwmSignalOutputsData } from './generated/synapse/topic/pwm-signal-outputs-data.js';
 import { RadioControlData } from './generated/synapse/topic/radio-control-data.js';
 import { TrajectorySegmentData } from './generated/synapse/topic/trajectory-segment-data.js';
@@ -44,69 +54,113 @@ export interface Decoded {
   decoded: boolean;
 }
 
+/** Decoder schema names by catalog topic name (topics we decode today). */
+const SCHEMA_BY_TOPIC_NAME: Record<string, string> = {
+  ExternalOdometry: 'ExternalOdometry',
+  MocapFrame: 'MocapFrame',
+  MocapPoseFrame: 'MocapPoseFrame',
+  ManualControlCommand: 'ManualControl',
+  RadioControl: 'RadioControl',
+  PwmSignalOutputs: 'PwmSignalOutputs',
+  AttitudeEstimate: 'AttitudeEstimate',
+  AttitudeCommand: 'AttitudeCommand',
+  NavigationTarget: 'NavigationTarget',
+  ControlLoopMetrics: 'ControlLoopMetrics',
+  VehicleHealth: 'VehicleHealth',
+  PowerStatus: 'PowerStatus',
+  RawPose: 'RawPose',
+  MissionProgress: 'MissionProgress',
+  LocalPositionCommand: 'LocalPositionCommand',
+  TrajectorySegment: 'TrajectorySegment'
+  // OpticalFlow / OpticalFlowVelocity / LockstepTick: raw passthrough for now.
+};
+
 /**
- * Classify a Zenoh key into the Synapse schema we expect on it, matching on the
- * `key_suffix` leaf of the `synapse/v1/topic/<suffix>` key (possibly namespaced
- * and/or instance-suffixed, so we test with `includes`).
+ * Classify a Zenoh key into the Synapse schema we expect on it. Catalog topics
+ * use bare compact keys (`att`, `manual`, possibly namespaced/instanced —
+ * `robot/manual`, `external_pose/1`) resolved via `parseKey`. Custom
+ * non-catalog keys (the bridge-parity mocap trio and `synapse/motor_output`)
+ * are matched explicitly.
  */
 export function classify(key: string): string {
   if (key.includes('rigid_body_names')) {
     return 'MocapRigidBodyNames';
   }
-  if (key.includes('external_odometry')) {
-    return 'ExternalOdometry';
-  }
   if (
-    key.includes('mocap_frame') ||
     key.endsWith('mocap/frame') ||
+    key.endsWith('mocap_frame') ||
     key.includes('synapse/mocap/rigid_body/') ||
     key.includes('synapse/mocap/selected/rigid_body/')
   ) {
     return 'MocapFrame';
   }
-  if (key.includes('manual_control_command')) {
-    return 'ManualControl';
+  const parsed = parseKey(key);
+  if (parsed) {
+    return SCHEMA_BY_TOPIC_NAME[parsed.topic.name] ?? 'Raw';
   }
-  if (key.includes('radio_control')) {
-    return 'RadioControl';
-  }
-  if (key.includes('pwm_signal_outputs') || key.endsWith('motor_output')) {
+  if (key.endsWith('motor_output')) {
     return 'PwmSignalOutputs';
   }
-  if (key.includes('attitude_estimate')) {
-    return 'AttitudeEstimate';
-  }
-  if (key.includes('attitude_command')) {
-    return 'AttitudeCommand';
-  }
-  if (key.includes('navigation_target')) {
-    return 'NavigationTarget';
-  }
-  if (key.includes('control_loop_metrics')) {
-    return 'ControlLoopMetrics';
-  }
-  if (key.includes('vehicle_health')) {
-    return 'VehicleHealth';
-  }
-  if (key.includes('power_status')) {
-    return 'PowerStatus';
-  }
-  if (key.includes('mission_progress')) {
-    return 'MissionProgress';
-  }
-  if (key.includes('local_position_command')) {
-    return 'LocalPositionCommand';
-  }
-  if (key.includes('trajectory_segment')) {
-    return 'TrajectorySegment';
-  }
-  // optical_flow / optical_flow_velocity: raw passthrough for now.
   return 'Raw';
 }
 
-/** Decode a Zenoh sample by key, falling back to a raw preview. */
-export function decode(key: string, bytes: Uint8Array): Decoded {
+/** Mandatory value-contract encoding string for a catalog topic. */
+export function expectedTopicEncoding(topic: TopicInfo): string {
+  const mediaType = topic.fixedLayout ? 'application/x-synapse-struct' : 'application/x-flatbuffers';
+  return `${mediaType};type=${topic.wireType};schema=sha256-128:${topic.schemaHash}`;
+}
+
+/**
+ * Strict value-contract check: catalog-keyed samples must carry the exact
+ * encoding string for their topic. Returns a human-readable error for a
+ * missing/mismatched encoding, or null when the sample may be decoded.
+ * Non-catalog (custom) keys are exempt.
+ */
+function contractError(key: string, encoding: string | null | undefined): string | null {
+  // Bridge-owned keys predate the compact catalog grammar. Some end in a
+  // catalog-looking leaf (for example `/pose`), but their wire contract is
+  // defined by synapse_qualisys_bridge, not by that leaf.
+  if (
+    key.endsWith('mocap_frame') ||
+    key.endsWith('mocap/frame') ||
+    key.includes('synapse/mocap/rigid_body/') ||
+    key.includes('synapse/mocap/selected/rigid_body/')
+  ) {
+    return null;
+  }
+  const topic = parseKey(key)?.topic;
+  if (!topic) {
+    return null;
+  }
+  const expected = expectedTopicEncoding(topic);
+  if (!encoding) {
+    return `missing encoding; expected ${expected}`;
+  }
+  // zenoh-pico represents unregistered/custom media types as the schema of
+  // its default byte encoding.  On the wire that round-trips as
+  // `zenoh/bytes;<original encoding>`.  The suffix is still the complete,
+  // exact Synapse value contract, so unwrap only this known transport prefix
+  // before enforcing the contract.
+  const normalized = encoding.startsWith('zenoh/bytes;')
+    ? encoding.slice('zenoh/bytes;'.length)
+    : encoding;
+  if (normalized !== expected) {
+    return `encoding mismatch: got ${encoding}; expected ${expected}`;
+  }
+  return null;
+}
+
+/**
+ * Decode a Zenoh sample by key, falling back to a raw preview. `encoding` is
+ * the sample's Zenoh encoding string; catalog-keyed samples with a missing or
+ * mismatched encoding are NOT decoded (raw fallback with `contractError`).
+ */
+export function decode(key: string, bytes: Uint8Array, encoding?: string | null): Decoded {
   const schema = classify(key);
+  const violation = contractError(key, encoding);
+  if (violation) {
+    return { schema, payload: { ...rawPayload(bytes), contractError: violation }, decoded: false };
+  }
   switch (schema) {
     case 'AttitudeEstimate':
       return decodeOrRaw(schema, bytes, decodeAttitudeEstimate);
@@ -128,8 +182,12 @@ export function decode(key: string, bytes: Uint8Array): Decoded {
       return decodeOrRaw(schema, bytes, decodePwmSignalOutputs);
     case 'ExternalOdometry':
       return decodeOrRaw(schema, bytes, decodeExternalOdometry);
+    case 'RawPose':
+      return decodeOrRaw(schema, bytes, decodeRawPose);
     case 'MocapFrame':
       return decodeOrRaw(schema, bytes, decodeMocapFrame);
+    case 'MocapPoseFrame':
+      return decodeOrRaw(schema, bytes, decodeMocapPoseFrame);
     case 'MocapRigidBodyNames':
       return decodeOrRaw(schema, bytes, (value) => JSON.parse(new TextDecoder().decode(value)));
     case 'MissionProgress':
@@ -499,6 +557,58 @@ function decodeMocapFrame(bytes: Uint8Array): unknown | null {
     frame_number: frame.frameNumber(),
     drop_rate_2d_dpermille: frame.dropRate2dDpermille(),
     out_of_sync_rate_2d_dpermille: frame.outOfSyncRate2dDpermille(),
+    rigid_bodies: rigidBodies,
+    labeled_markers: labeledMarkers
+  };
+}
+
+function decodeRawPose(bytes: Uint8Array): unknown | null {
+  const data = new RawPoseData().__init(0, byteBuffer(bytes));
+  const pose = data.pose();
+  const position = pose?.positionEnuM();
+  const attitude = pose?.attitude();
+  if (!pose || !position || !attitude) return null;
+  return {
+    data: {
+      timestamp_us: Number(data.timestampUs()),
+      position: { x: position.x(), y: position.y(), z: position.z() },
+      attitude: { x: attitude.x(), y: attitude.y(), z: attitude.z(), w: attitude.w() }
+    }
+  };
+}
+
+/** Decode Synapse 0.7's authoritative raw quaternion mocap stream. */
+function decodeMocapPoseFrame(bytes: Uint8Array): unknown | null {
+  if (bytes.byteLength < 4) return null;
+  const frame = MocapPoseFrame.getRootAsMocapPoseFrame(byteBuffer(bytes));
+  const rigidBodies = Array.from({ length: frame.rigidBodiesLength() }, (_, index) => {
+    const body = frame.rigidBodies(index);
+    const pose = body?.pose();
+    const position = pose?.positionEnuM();
+    const attitude = pose?.attitude();
+    if (!body || !position || !attitude) return null;
+    const flags = body.flags();
+    return {
+      id: body.id(),
+      position: { x: position.x(), y: position.y(), z: position.z() },
+      attitude: { x: attitude.x(), y: attitude.y(), z: attitude.z(), w: attitude.w() },
+      residual: body.residualMm(),
+      tracking_valid: (flags & MocapRawFlags.Valid) !== 0
+    };
+  }).filter((body) => body !== null);
+  const labeledMarkers = Array.from({ length: frame.markersLength() }, (_, index) => {
+    const marker = frame.markers(index);
+    const position = marker?.positionEnuM();
+    if (!marker || !position) return null;
+    return {
+      id: marker.id(),
+      position: { x: position.x(), y: position.y(), z: position.z() },
+      residual: marker.residualMm()
+    };
+  }).filter((marker) => marker !== null);
+  return {
+    timestamp_us: Number(frame.timestampUs()),
+    frame_number: frame.frameNumber(),
     rigid_bodies: rigidBodies,
     labeled_markers: labeledMarkers
   };

@@ -2,8 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { ParamValue } from '../../synapse/cmd/param-value.js';
-import { CommandResultCode } from '../../synapse/types/command-result-code.js';
+import { ParamValue, ParamValueT } from '../../synapse/cmd/param-value';
+import { CommandResultCode } from '../../synapse/types/command-result-code';
 
 
 export class ParamGetReply {
@@ -113,5 +113,51 @@ static createParamGetReply(builder:flatbuffers.Builder, result:CommandResultCode
   ParamGetReply.addResultDetail(builder, resultDetail);
   ParamGetReply.addFlags(builder, flags);
   return ParamGetReply.endParamGetReply(builder);
+}
+
+unpack(): ParamGetReplyT {
+  return new ParamGetReplyT(
+    this.result(),
+    this.bb!.createObjList(this.values.bind(this), this.valuesLength()),
+    this.offset(),
+    this.total(),
+    this.resultDetail(),
+    this.flags()
+  );
+}
+
+
+unpackTo(_o: ParamGetReplyT): void {
+  _o.result = this.result();
+  _o.values = this.bb!.createObjList(this.values.bind(this), this.valuesLength());
+  _o.offset = this.offset();
+  _o.total = this.total();
+  _o.resultDetail = this.resultDetail();
+  _o.flags = this.flags();
+}
+}
+
+export class ParamGetReplyT {
+constructor(
+  public result: CommandResultCode = CommandResultCode.Accepted,
+  public values: (ParamValueT)[] = [],
+  public offset: number = 0,
+  public total: number = 0,
+  public resultDetail: number = 0,
+  public flags: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  const values = ParamGetReply.createValuesVector(builder, builder.createObjectOffsetList(this.values));
+
+  return ParamGetReply.createParamGetReply(builder,
+    this.result,
+    values,
+    this.offset,
+    this.total,
+    this.resultDetail,
+    this.flags
+  );
 }
 }

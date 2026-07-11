@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { Severity } from '../../synapse/types/severity.js';
+import { Severity } from '../../synapse/types/severity';
 
 
 export class TextStatus {
@@ -67,5 +67,39 @@ static createTextStatus(builder:flatbuffers.Builder, timestampUs:bigint, severit
   TextStatus.addSeverity(builder, severity);
   TextStatus.addText(builder, textOffset);
   return TextStatus.endTextStatus(builder);
+}
+
+unpack(): TextStatusT {
+  return new TextStatusT(
+    this.timestampUs(),
+    this.severity(),
+    this.text()
+  );
+}
+
+
+unpackTo(_o: TextStatusT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.severity = this.severity();
+  _o.text = this.text();
+}
+}
+
+export class TextStatusT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public severity: Severity = Severity.Informational,
+  public text: string|Uint8Array|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  const text = (this.text !== null ? builder.createString(this.text!) : 0);
+
+  return TextStatus.createTextStatus(builder,
+    this.timestampUs,
+    this.severity,
+    text
+  );
 }
 }

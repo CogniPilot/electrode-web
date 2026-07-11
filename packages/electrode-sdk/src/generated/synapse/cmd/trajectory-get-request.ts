@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class TrajectoryGetRequest {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -62,5 +64,37 @@ static createTrajectoryGetRequest(builder:flatbuffers.Builder, trajectoryId:numb
   TrajectoryGetRequest.addOffset(builder, offset);
   TrajectoryGetRequest.addLimit(builder, limit);
   return TrajectoryGetRequest.endTrajectoryGetRequest(builder);
+}
+
+unpack(): TrajectoryGetRequestT {
+  return new TrajectoryGetRequestT(
+    this.trajectoryId(),
+    this.offset(),
+    this.limit()
+  );
+}
+
+
+unpackTo(_o: TrajectoryGetRequestT): void {
+  _o.trajectoryId = this.trajectoryId();
+  _o.offset = this.offset();
+  _o.limit = this.limit();
+}
+}
+
+export class TrajectoryGetRequestT {
+constructor(
+  public trajectoryId: number = 0,
+  public offset: number = 0,
+  public limit: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return TrajectoryGetRequest.createTrajectoryGetRequest(builder,
+    this.trajectoryId,
+    this.offset,
+    this.limit
+  );
 }
 }

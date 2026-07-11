@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { AirDataData } from '../../synapse/topic/air-data-data.js';
+import { AirDataData, AirDataDataT } from '../../synapse/topic/air-data-data';
 
 
 export class AirData {
@@ -45,5 +45,29 @@ static createAirData(builder:flatbuffers.Builder, dataOffset:flatbuffers.Offset)
   AirData.startAirData(builder);
   AirData.addData(builder, dataOffset);
   return AirData.endAirData(builder);
+}
+
+unpack(): AirDataT {
+  return new AirDataT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: AirDataT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class AirDataT {
+constructor(
+  public data: AirDataDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return AirData.createAirData(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

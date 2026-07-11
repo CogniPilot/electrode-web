@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { AttitudeEstimateData } from '../../synapse/topic/attitude-estimate-data.js';
+import { AttitudeEstimateData, AttitudeEstimateDataT } from '../../synapse/topic/attitude-estimate-data';
 
 
 export class AttitudeEstimate {
@@ -45,5 +45,29 @@ static createAttitudeEstimate(builder:flatbuffers.Builder, dataOffset:flatbuffer
   AttitudeEstimate.startAttitudeEstimate(builder);
   AttitudeEstimate.addData(builder, dataOffset);
   return AttitudeEstimate.endAttitudeEstimate(builder);
+}
+
+unpack(): AttitudeEstimateT {
+  return new AttitudeEstimateT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: AttitudeEstimateT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class AttitudeEstimateT {
+constructor(
+  public data: AttitudeEstimateDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return AttitudeEstimate.createAttitudeEstimate(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

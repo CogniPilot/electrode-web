@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { Vec3f } from '../../synapse/types/vec3f.js';
+import { Vec3f, Vec3fT } from '../../synapse/types/vec3f';
 
 
 export class InertialSampleData {
@@ -73,4 +73,62 @@ static createInertialSampleData(builder:flatbuffers.Builder, timestamp_us: bigin
   return builder.offset();
 }
 
+
+unpack(): InertialSampleDataT {
+  return new InertialSampleDataT(
+    this.timestampUs(),
+    (this.accelFluMS2() !== null ? this.accelFluMS2()!.unpack() : null),
+    (this.gyroFluRadS() !== null ? this.gyroFluRadS()!.unpack() : null),
+    (this.magFluTesla() !== null ? this.magFluTesla()!.unpack() : null),
+    this.absolutePressureHpa(),
+    this.temperatureC(),
+    this.flags(),
+    this.id()
+  );
+}
+
+
+unpackTo(_o: InertialSampleDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.accelFluMS2 = (this.accelFluMS2() !== null ? this.accelFluMS2()!.unpack() : null);
+  _o.gyroFluRadS = (this.gyroFluRadS() !== null ? this.gyroFluRadS()!.unpack() : null);
+  _o.magFluTesla = (this.magFluTesla() !== null ? this.magFluTesla()!.unpack() : null);
+  _o.absolutePressureHpa = this.absolutePressureHpa();
+  _o.temperatureC = this.temperatureC();
+  _o.flags = this.flags();
+  _o.id = this.id();
+}
+}
+
+export class InertialSampleDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public accelFluMS2: Vec3fT|null = null,
+  public gyroFluRadS: Vec3fT|null = null,
+  public magFluTesla: Vec3fT|null = null,
+  public absolutePressureHpa: number = 0.0,
+  public temperatureC: number = 0.0,
+  public flags: number = 0,
+  public id: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return InertialSampleData.createInertialSampleData(builder,
+    this.timestampUs,
+    (this.accelFluMS2?.x ?? 0),
+    (this.accelFluMS2?.y ?? 0),
+    (this.accelFluMS2?.z ?? 0),
+    (this.gyroFluRadS?.x ?? 0),
+    (this.gyroFluRadS?.y ?? 0),
+    (this.gyroFluRadS?.z ?? 0),
+    (this.magFluTesla?.x ?? 0),
+    (this.magFluTesla?.y ?? 0),
+    (this.magFluTesla?.z ?? 0),
+    this.absolutePressureHpa,
+    this.temperatureC,
+    this.flags,
+    this.id
+  );
+}
 }

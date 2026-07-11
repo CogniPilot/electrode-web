@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class RotationMatrix3f {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -65,4 +67,60 @@ static createRotationMatrix3f(builder:flatbuffers.Builder, r11: number, r12: num
   return builder.offset();
 }
 
+
+unpack(): RotationMatrix3fT {
+  return new RotationMatrix3fT(
+    this.r11(),
+    this.r12(),
+    this.r13(),
+    this.r21(),
+    this.r22(),
+    this.r23(),
+    this.r31(),
+    this.r32(),
+    this.r33()
+  );
+}
+
+
+unpackTo(_o: RotationMatrix3fT): void {
+  _o.r11 = this.r11();
+  _o.r12 = this.r12();
+  _o.r13 = this.r13();
+  _o.r21 = this.r21();
+  _o.r22 = this.r22();
+  _o.r23 = this.r23();
+  _o.r31 = this.r31();
+  _o.r32 = this.r32();
+  _o.r33 = this.r33();
+}
+}
+
+export class RotationMatrix3fT {
+constructor(
+  public r11: number = 0.0,
+  public r12: number = 0.0,
+  public r13: number = 0.0,
+  public r21: number = 0.0,
+  public r22: number = 0.0,
+  public r23: number = 0.0,
+  public r31: number = 0.0,
+  public r32: number = 0.0,
+  public r33: number = 0.0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return RotationMatrix3f.createRotationMatrix3f(builder,
+    this.r11,
+    this.r12,
+    this.r13,
+    this.r21,
+    this.r22,
+    this.r23,
+    this.r31,
+    this.r32,
+    this.r33
+  );
+}
 }

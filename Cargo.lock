@@ -694,6 +694,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flatbuffers",
+ "serde",
  "serde_json",
  "sha2",
  "synapse_fbs",
@@ -744,6 +745,7 @@ dependencies = [
  "electrode-ppm-bridge",
  "electrode-web-core",
  "flatbuffers",
+ "libc",
  "serde",
  "serde_json",
  "synapse_fbs",
@@ -2965,9 +2967,9 @@ dependencies = [
 
 [[package]]
 name = "synapse_fbs"
-version = "0.5.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f4f5a8d12a3bc79d0d8470a225a918f32faacf03ec22845aaf77024cb0b8056"
+checksum = "0e7de35db6d3c8aac4b4a4b806134f721fa9acf01bc7f9c41e2e47c8004523b1"
 dependencies = [
  "flatbuffers",
 ]

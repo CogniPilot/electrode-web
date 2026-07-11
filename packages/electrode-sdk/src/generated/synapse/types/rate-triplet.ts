@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class RateTriplet {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -35,4 +37,36 @@ static createRateTriplet(builder:flatbuffers.Builder, roll: number, pitch: numbe
   return builder.offset();
 }
 
+
+unpack(): RateTripletT {
+  return new RateTripletT(
+    this.roll(),
+    this.pitch(),
+    this.yaw()
+  );
+}
+
+
+unpackTo(_o: RateTripletT): void {
+  _o.roll = this.roll();
+  _o.pitch = this.pitch();
+  _o.yaw = this.yaw();
+}
+}
+
+export class RateTripletT {
+constructor(
+  public roll: number = 0.0,
+  public pitch: number = 0.0,
+  public yaw: number = 0.0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return RateTriplet.createRateTriplet(builder,
+    this.roll,
+    this.pitch,
+    this.yaw
+  );
+}
 }

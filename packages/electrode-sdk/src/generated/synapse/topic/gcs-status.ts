@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { GcsStatusData } from '../../synapse/topic/gcs-status-data.js';
+import { GcsStatusData, GcsStatusDataT } from '../../synapse/topic/gcs-status-data';
 
 
 export class GcsStatus {
@@ -45,5 +45,29 @@ static createGcsStatus(builder:flatbuffers.Builder, dataOffset:flatbuffers.Offse
   GcsStatus.startGcsStatus(builder);
   GcsStatus.addData(builder, dataOffset);
   return GcsStatus.endGcsStatus(builder);
+}
+
+unpack(): GcsStatusT {
+  return new GcsStatusT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: GcsStatusT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class GcsStatusT {
+constructor(
+  public data: GcsStatusDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return GcsStatus.createGcsStatus(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

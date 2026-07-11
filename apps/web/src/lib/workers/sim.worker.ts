@@ -47,7 +47,7 @@ let frameNumber = 0;
 let inputTopic = 'electrode/sim/rumoca/radio_pwm_signal_outputs';
 let mocapTopic = 'electrode/sim/rumoca/mocap_frame';
 
-// Latest actuator command (PWM microseconds) from pwm_signal_outputs; neutral
+// Latest actuator command (PWM microseconds) from the `pwm` topic; neutral
 // until the autopilot publishes. Matches the model's ail/elev/thr/rud_pwm inputs.
 const pwm = { ail_pwm: 1500, elev_pwm: 1500, thr_pwm: 1000, rud_pwm: 1500 };
 
@@ -61,9 +61,11 @@ async function loadRumoca(): Promise<void> {
   await rumocaReady;
 }
 
-function applyMotorOutput(payload: Uint8Array): void {
+function applyMotorOutput(payload: Uint8Array, encoding?: string): void {
   try {
-    const decoded = decode('synapse/v1/topic/pwm_signal_outputs', payload);
+    // The private wrapper topic relays PwmSignalOutputs samples; decode under
+    // the compact catalog key so the strict value contract applies.
+    const decoded = decode('pwm', payload, encoding);
     // `motors` carries the first four PWM outputs in microseconds.
     const motors = (decoded.payload as any)?.motors;
     if (motors) {
@@ -151,8 +153,9 @@ async function start(msg: StartMessage): Promise<void> {
   zenoh.initPanicHook();
   const input = msg.endpoint.trim();
   session = input.startsWith('{') ? await zenoh.openWithConfig(input) : await zenoh.open(input);
-  subscriber = await session.declareSubscriber(inputTopic, (_key: string, payload: Uint8Array) =>
-    applyMotorOutput(payload)
+  subscriber = await session.declareSubscriber(
+    inputTopic,
+    (_key: string, payload: Uint8Array, encoding?: string) => applyMotorOutput(payload, encoding)
   );
 
   // 3. Real-time loop: physics decoupled from publish cadence.

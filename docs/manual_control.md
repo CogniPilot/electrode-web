@@ -6,13 +6,13 @@ Electrode treats manual control as a first-class ground-station workflow with a 
 gamepad / joystick / touch input
   -> electrode-manual-control-bridge
   -> Synapse ManualControlData bare struct
-  -> Zenoh key expression: synapse/v1/topic/manual_control_command
+  -> Zenoh key expression: manual
 
 autopilot control output
   -> Synapse PwmSignalOutputsData bare struct
-  -> Zenoh key expression: synapse/v1/topic/pwm_signal_outputs
+  -> Zenoh key expression: pwm
 
-synapse/v1/topic/manual_control_command + synapse/v1/topic/pwm_signal_outputs
+manual + pwm
   -> electrode-ppm-bridge
   -> selected PWM: synapse/motor_output
   -> serial PPM encoder packet
@@ -29,7 +29,7 @@ Run the joystick/gamepad bridge from the Electrode workspace:
 npm run manual:bridge -- \
   --device /dev/input/js0 \
   --zenoh-connect udp/127.0.0.1:7447 \
-  --topic synapse/v1/topic/manual_control_command
+  --topic manual
 ```
 
 Useful options:
@@ -53,7 +53,7 @@ The bridge publishes `synapse.topic.ManualControlData` bare structs. The mode sw
 Use the dump tool to inspect published values:
 
 ```bash
-npm run manual:dump -- --topic synapse/v1/topic/manual_control_command
+npm run manual:dump -- --topic manual
 ```
 
 ## PPM Bridge
@@ -63,8 +63,8 @@ Run the PPM bridge from the Electrode workspace:
 ```bash
 npm run ppm:bridge -- \
   --zenoh-connect udp/127.0.0.1:7447 \
-  --manual-topic synapse/v1/topic/manual_control_command \
-  --control-output-topic synapse/v1/topic/pwm_signal_outputs \
+  --manual-topic manual \
+  --control-output-topic pwm \
   --pwm-output-topic synapse/motor_output \
   --serial-device /dev/ttyACM0 \
   --baud-rate 57600
@@ -75,8 +75,8 @@ Useful environment variables:
 ```bash
 JOYSTICK_DEVICE=/dev/input/js0
 ZENOH_CONNECT=udp/127.0.0.1:7447
-ZENOH_TOPIC=synapse/v1/topic/manual_control_command
-ZENOH_CONTROL_OUTPUT_TOPIC=synapse/v1/topic/pwm_signal_outputs
+ZENOH_TOPIC=manual
+ZENOH_CONTROL_OUTPUT_TOPIC=pwm
 ZENOH_PWM_OUTPUT_TOPIC=synapse/motor_output
 PPM_SERIAL_DEVICE=/dev/ttyACM0
 PPM_BAUD_RATE=57600
@@ -103,7 +103,7 @@ Base channel order before `PPM_CHANNEL_MAP`:
 
 The stabilization channel is operator-owned even in auto mode. The PPM bridge preserves channel 4 from manual input while using autopilot channels 0-3 in auto mode.
 
-`synapse/v1/topic/pwm_signal_outputs` and `synapse/motor_output` are interpreted as `synapse.topic.PwmSignalOutputsData` bare structs. The first five PWM outputs map to throttle, roll, pitch, yaw, stabilization before channel-map/invert settings are applied.
+`pwm` and `synapse/motor_output` are interpreted as `synapse.topic.PwmSignalOutputsData` bare structs. The first five PWM outputs map to throttle, roll, pitch, yaw, stabilization before channel-map/invert settings are applied.
 
 The serial packet is 14 bytes:
 

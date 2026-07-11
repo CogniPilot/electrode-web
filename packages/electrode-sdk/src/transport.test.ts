@@ -1,14 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-import { encodeCompactRigidBodyPose } from './mocap-encode';
+import { encodeCompactRigidBodyPose, encodeRawPose } from './mocap-encode';
+import { expectedTopicEncoding } from './synapse-decode';
+import { parseKey } from '@cognipilot/synapse-fbs/topic_catalog';
 import { ZenohWasmTransport } from './transport';
 
 const zenohMock = vi.hoisted(() => {
-  const subscribers = new Map<string, (key: string, payload: Uint8Array) => void>();
+  const subscribers = new Map<string, (key: string, payload: Uint8Array, encoding?: string) => void>();
   const session = {
     declareSubscriber: vi.fn(async (
       key: string,
-      callback: (sampleKey: string, payload: Uint8Array) => void
+      callback: (sampleKey: string, payload: Uint8Array, encoding?: string) => void
     ) => {
       subscribers.set(key, callback);
       return { undeclare: vi.fn(async () => {}) };
@@ -34,7 +35,7 @@ describe('Zenoh browser transport subscriptions', () => {
     vi.clearAllMocks();
   });
 
-  it('streams cub1 when its catalog announcement arrives before its first payload', async () => {
+  it('does not subscribe to the legacy compact mocap pose by default', async () => {
     const messages: unknown[] = [];
     const transport = new ZenohWasmTransport(
       'ws/127.0.0.1:7447',
@@ -56,12 +57,11 @@ describe('Zenoh browser transport subscriptions', () => {
       })
     );
 
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({ kind: 'telemetry', topic: key });
+    expect(messages).toHaveLength(0);
     await transport.disconnect();
   });
 
-  it('streams CUB1 external odometry after catalog discovery', async () => {
+  it('streams the Qualisys bridge raw frame and does not require its EKF output', async () => {
     const messages: unknown[] = [];
     const transport = new ZenohWasmTransport(
       'ws/127.0.0.1:7447',
@@ -70,18 +70,18 @@ describe('Zenoh browser transport subscriptions', () => {
     );
     await transport.connect();
 
-    const key = 'synapse/v1/topic/external_odometry/1';
-    zenohMock.subscribers.get('electrode/catalog/synapse')?.(
-      'electrode/catalog/synapse',
-      new TextEncoder().encode(JSON.stringify({ key, lastBytes: 64 }))
+    const key = 'qualisys/cub1/pose_raw';
+    const bytes = encodeRawPose(
+      { position: { x: 1, y: 2, z: 3 }, attitude: { x: 0, y: 0, z: 0, w: 1 } }
     );
-    zenohMock.subscribers.get('synapse/v1/**')?.(key, new Uint8Array(64));
+    const encoding = expectedTopicEncoding(parseKey(key)!.topic);
+    zenohMock.subscribers.get(key)?.(key, bytes, encoding);
 
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({
       kind: 'telemetry',
       topic: key,
-      payload: { data: { id: 0 } }
+      payload: { data: { position: { x: 1, y: 2, z: 3 } } }
     });
     await transport.disconnect();
   });

@@ -2,8 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { Vec2f } from '../../synapse/types/vec2f.js';
-import { Vec3f } from '../../synapse/types/vec3f.js';
+import { Vec2f, Vec2fT } from '../../synapse/types/vec2f';
+import { Vec3f, Vec3fT } from '../../synapse/types/vec3f';
 
 
 export class OpticalFlowVelocityData {
@@ -66,4 +66,54 @@ static createOpticalFlowVelocityData(builder:flatbuffers.Builder, timestamp_us: 
   return builder.offset();
 }
 
+
+unpack(): OpticalFlowVelocityDataT {
+  return new OpticalFlowVelocityDataT(
+    this.timestampUs(),
+    (this.velocityFluMS() !== null ? this.velocityFluMS()!.unpack() : null),
+    (this.velocityEnuMS() !== null ? this.velocityEnuMS()!.unpack() : null),
+    (this.flowRateUncompensatedRadS() !== null ? this.flowRateUncompensatedRadS()!.unpack() : null),
+    (this.flowRateCompensatedRadS() !== null ? this.flowRateCompensatedRadS()!.unpack() : null),
+    (this.gyroFluRadS() !== null ? this.gyroFluRadS()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: OpticalFlowVelocityDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.velocityFluMS = (this.velocityFluMS() !== null ? this.velocityFluMS()!.unpack() : null);
+  _o.velocityEnuMS = (this.velocityEnuMS() !== null ? this.velocityEnuMS()!.unpack() : null);
+  _o.flowRateUncompensatedRadS = (this.flowRateUncompensatedRadS() !== null ? this.flowRateUncompensatedRadS()!.unpack() : null);
+  _o.flowRateCompensatedRadS = (this.flowRateCompensatedRadS() !== null ? this.flowRateCompensatedRadS()!.unpack() : null);
+  _o.gyroFluRadS = (this.gyroFluRadS() !== null ? this.gyroFluRadS()!.unpack() : null);
+}
+}
+
+export class OpticalFlowVelocityDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public velocityFluMS: Vec2fT|null = null,
+  public velocityEnuMS: Vec2fT|null = null,
+  public flowRateUncompensatedRadS: Vec2fT|null = null,
+  public flowRateCompensatedRadS: Vec2fT|null = null,
+  public gyroFluRadS: Vec3fT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return OpticalFlowVelocityData.createOpticalFlowVelocityData(builder,
+    this.timestampUs,
+    (this.velocityFluMS?.x ?? 0),
+    (this.velocityFluMS?.y ?? 0),
+    (this.velocityEnuMS?.x ?? 0),
+    (this.velocityEnuMS?.y ?? 0),
+    (this.flowRateUncompensatedRadS?.x ?? 0),
+    (this.flowRateUncompensatedRadS?.y ?? 0),
+    (this.flowRateCompensatedRadS?.x ?? 0),
+    (this.flowRateCompensatedRadS?.y ?? 0),
+    (this.gyroFluRadS?.x ?? 0),
+    (this.gyroFluRadS?.y ?? 0),
+    (this.gyroFluRadS?.z ?? 0)
+  );
+}
 }

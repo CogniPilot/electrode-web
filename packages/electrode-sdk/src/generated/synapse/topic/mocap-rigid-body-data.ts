@@ -2,9 +2,9 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { MocapRawComponent } from '../../synapse/topic/mocap-raw-component.js';
-import { RotationMatrix3f } from '../../synapse/types/rotation-matrix3f.js';
-import { Vec3f } from '../../synapse/types/vec3f.js';
+import { MocapRawComponent } from '../../synapse/topic/mocap-raw-component';
+import { RotationMatrix3f, RotationMatrix3fT } from '../../synapse/types/rotation-matrix3f';
+import { Vec3f, Vec3fT } from '../../synapse/types/vec3f';
 
 
 export class MocapRigidBodyData {
@@ -68,4 +68,58 @@ static createMocapRigidBodyData(builder:flatbuffers.Builder, position_enu_m_x: n
   return builder.offset();
 }
 
+
+unpack(): MocapRigidBodyDataT {
+  return new MocapRigidBodyDataT(
+    (this.positionEnuM() !== null ? this.positionEnuM()!.unpack() : null),
+    (this.rotation() !== null ? this.rotation()!.unpack() : null),
+    this.residualMm(),
+    this.id(),
+    this.flags(),
+    this.component()
+  );
+}
+
+
+unpackTo(_o: MocapRigidBodyDataT): void {
+  _o.positionEnuM = (this.positionEnuM() !== null ? this.positionEnuM()!.unpack() : null);
+  _o.rotation = (this.rotation() !== null ? this.rotation()!.unpack() : null);
+  _o.residualMm = this.residualMm();
+  _o.id = this.id();
+  _o.flags = this.flags();
+  _o.component = this.component();
+}
+}
+
+export class MocapRigidBodyDataT {
+constructor(
+  public positionEnuM: Vec3fT|null = null,
+  public rotation: RotationMatrix3fT|null = null,
+  public residualMm: number = 0.0,
+  public id: number = 0,
+  public flags: number = 0,
+  public component: MocapRawComponent = MocapRawComponent.Unknown
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return MocapRigidBodyData.createMocapRigidBodyData(builder,
+    (this.positionEnuM?.x ?? 0),
+    (this.positionEnuM?.y ?? 0),
+    (this.positionEnuM?.z ?? 0),
+    (this.rotation?.r11 ?? 0),
+    (this.rotation?.r12 ?? 0),
+    (this.rotation?.r13 ?? 0),
+    (this.rotation?.r21 ?? 0),
+    (this.rotation?.r22 ?? 0),
+    (this.rotation?.r23 ?? 0),
+    (this.rotation?.r31 ?? 0),
+    (this.rotation?.r32 ?? 0),
+    (this.rotation?.r33 ?? 0),
+    this.residualMm,
+    this.id,
+    this.flags,
+    this.component
+  );
+}
 }

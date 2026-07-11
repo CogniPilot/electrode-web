@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { VehicleHealthData } from '../../synapse/topic/vehicle-health-data.js';
+import { VehicleHealthData, VehicleHealthDataT } from '../../synapse/topic/vehicle-health-data';
 
 
 export class VehicleHealth {
@@ -45,5 +45,29 @@ static createVehicleHealth(builder:flatbuffers.Builder, dataOffset:flatbuffers.O
   VehicleHealth.startVehicleHealth(builder);
   VehicleHealth.addData(builder, dataOffset);
   return VehicleHealth.endVehicleHealth(builder);
+}
+
+unpack(): VehicleHealthT {
+  return new VehicleHealthT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: VehicleHealthT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class VehicleHealthT {
+constructor(
+  public data: VehicleHealthDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return VehicleHealth.createVehicleHealth(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

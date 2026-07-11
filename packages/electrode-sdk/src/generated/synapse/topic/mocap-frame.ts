@@ -2,8 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { MocapMarkerData } from '../../synapse/topic/mocap-marker-data.js';
-import { MocapRigidBodyData } from '../../synapse/topic/mocap-rigid-body-data.js';
+import { MocapMarkerData, MocapMarkerDataT } from '../../synapse/topic/mocap-marker-data';
+import { MocapRigidBodyData, MocapRigidBodyDataT } from '../../synapse/topic/mocap-rigid-body-data';
 
 
 export class MocapFrame {
@@ -153,5 +153,65 @@ static createMocapFrame(builder:flatbuffers.Builder, timestampUs:bigint, frameNu
   MocapFrame.addUnlabeledMarkers(builder, unlabeledMarkersOffset);
   MocapFrame.addRigidBodies(builder, rigidBodiesOffset);
   return MocapFrame.endMocapFrame(builder);
+}
+
+unpack(): MocapFrameT {
+  return new MocapFrameT(
+    this.timestampUs(),
+    this.frameNumber(),
+    this.dropRate2dDpermille(),
+    this.outOfSyncRate2dDpermille(),
+    this.sourceId(),
+    this.flags(),
+    this.bb!.createObjList(this.markers.bind(this), this.markersLength()),
+    this.bb!.createObjList(this.unlabeledMarkers.bind(this), this.unlabeledMarkersLength()),
+    this.bb!.createObjList(this.rigidBodies.bind(this), this.rigidBodiesLength())
+  );
+}
+
+
+unpackTo(_o: MocapFrameT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.frameNumber = this.frameNumber();
+  _o.dropRate2dDpermille = this.dropRate2dDpermille();
+  _o.outOfSyncRate2dDpermille = this.outOfSyncRate2dDpermille();
+  _o.sourceId = this.sourceId();
+  _o.flags = this.flags();
+  _o.markers = this.bb!.createObjList(this.markers.bind(this), this.markersLength());
+  _o.unlabeledMarkers = this.bb!.createObjList(this.unlabeledMarkers.bind(this), this.unlabeledMarkersLength());
+  _o.rigidBodies = this.bb!.createObjList(this.rigidBodies.bind(this), this.rigidBodiesLength());
+}
+}
+
+export class MocapFrameT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public frameNumber: number = 0,
+  public dropRate2dDpermille: number = 0,
+  public outOfSyncRate2dDpermille: number = 0,
+  public sourceId: number = 0,
+  public flags: number = 0,
+  public markers: (MocapMarkerDataT)[] = [],
+  public unlabeledMarkers: (MocapMarkerDataT)[] = [],
+  public rigidBodies: (MocapRigidBodyDataT)[] = []
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  const markers = builder.createStructOffsetList(this.markers, MocapFrame.startMarkersVector);
+  const unlabeledMarkers = builder.createStructOffsetList(this.unlabeledMarkers, MocapFrame.startUnlabeledMarkersVector);
+  const rigidBodies = builder.createStructOffsetList(this.rigidBodies, MocapFrame.startRigidBodiesVector);
+
+  return MocapFrame.createMocapFrame(builder,
+    this.timestampUs,
+    this.frameNumber,
+    this.dropRate2dDpermille,
+    this.outOfSyncRate2dDpermille,
+    this.sourceId,
+    this.flags,
+    markers,
+    unlabeledMarkers,
+    rigidBodies
+  );
 }
 }

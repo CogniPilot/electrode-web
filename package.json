@@ -19,8 +19,8 @@
     "test": "vitest run",
     "verify:pages": "node scripts/verify-pages-build.mjs",
     "ci": "npm run lint && npm run test && npm run check && npm run build && npm run verify:pages",
-    "station": "npm run build && ELECTRODE_GCS_ZENOH_CONNECT=udp/192.168.10.2:7447 cargo run -p electrode-ground-station --",
-    "ground-station": "ELECTRODE_GCS_ZENOH_CONNECT=udp/192.168.10.2:7447 cargo run -p electrode-ground-station --",
+    "station": "npm run build && cargo build -p electrode-manual-control-bridge -p electrode-ppm-bridge && ELECTRODE_GCS_TELEMETRY_ZENOH_CONNECT=tcp/192.168.10.2:7447 cargo run -p electrode-ground-station --",
+    "ground-station": "cargo build -p electrode-manual-control-bridge -p electrode-ppm-bridge && ELECTRODE_GCS_TELEMETRY_ZENOH_CONNECT=tcp/192.168.10.2:7447 cargo run -p electrode-ground-station --",
     "bridge": "cargo run -p electrode-ground-bridge",
     "sim:fake": "cargo run -p electrode-fake-sim --",
     "manual:bridge": "cargo run -p electrode-manual-control-bridge --bin electrode-manual-control-bridge --",
@@ -29,7 +29,7 @@
     "build:gcs": "cargo build && npm run build"
   },
   "dependencies": {
-    "@cognipilot/synapse-fbs": "^0.5.1"
+    "@cognipilot/synapse-fbs": "^0.7.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

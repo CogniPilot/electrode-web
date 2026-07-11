@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class PwmSignalOutputsData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -117,4 +119,100 @@ static createPwmSignalOutputsData(builder:flatbuffers.Builder, timestamp_us: big
   return builder.offset();
 }
 
+
+unpack(): PwmSignalOutputsDataT {
+  return new PwmSignalOutputsDataT(
+    this.timestampUs(),
+    this.activeMask(),
+    this.port(),
+    this.output0Us(),
+    this.output1Us(),
+    this.output2Us(),
+    this.output3Us(),
+    this.output4Us(),
+    this.output5Us(),
+    this.output6Us(),
+    this.output7Us(),
+    this.output8Us(),
+    this.output9Us(),
+    this.output10Us(),
+    this.output11Us(),
+    this.output12Us(),
+    this.output13Us(),
+    this.output14Us(),
+    this.output15Us()
+  );
+}
+
+
+unpackTo(_o: PwmSignalOutputsDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.activeMask = this.activeMask();
+  _o.port = this.port();
+  _o.output0Us = this.output0Us();
+  _o.output1Us = this.output1Us();
+  _o.output2Us = this.output2Us();
+  _o.output3Us = this.output3Us();
+  _o.output4Us = this.output4Us();
+  _o.output5Us = this.output5Us();
+  _o.output6Us = this.output6Us();
+  _o.output7Us = this.output7Us();
+  _o.output8Us = this.output8Us();
+  _o.output9Us = this.output9Us();
+  _o.output10Us = this.output10Us();
+  _o.output11Us = this.output11Us();
+  _o.output12Us = this.output12Us();
+  _o.output13Us = this.output13Us();
+  _o.output14Us = this.output14Us();
+  _o.output15Us = this.output15Us();
+}
+}
+
+export class PwmSignalOutputsDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public activeMask: number = 0,
+  public port: number = 0,
+  public output0Us: number = 0,
+  public output1Us: number = 0,
+  public output2Us: number = 0,
+  public output3Us: number = 0,
+  public output4Us: number = 0,
+  public output5Us: number = 0,
+  public output6Us: number = 0,
+  public output7Us: number = 0,
+  public output8Us: number = 0,
+  public output9Us: number = 0,
+  public output10Us: number = 0,
+  public output11Us: number = 0,
+  public output12Us: number = 0,
+  public output13Us: number = 0,
+  public output14Us: number = 0,
+  public output15Us: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return PwmSignalOutputsData.createPwmSignalOutputsData(builder,
+    this.timestampUs,
+    this.activeMask,
+    this.port,
+    this.output0Us,
+    this.output1Us,
+    this.output2Us,
+    this.output3Us,
+    this.output4Us,
+    this.output5Us,
+    this.output6Us,
+    this.output7Us,
+    this.output8Us,
+    this.output9Us,
+    this.output10Us,
+    this.output11Us,
+    this.output12Us,
+    this.output13Us,
+    this.output14Us,
+    this.output15Us
+  );
+}
 }

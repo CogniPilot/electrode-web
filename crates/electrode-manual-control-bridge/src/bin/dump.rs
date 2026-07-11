@@ -27,7 +27,7 @@ struct Cli {
         alias = "zenoh-topic",
         env = "ZENOH_TOPIC",
         value_name = "KEYEXPR",
-        default_value = "synapse/v1/topic/manual_control_command",
+        default_value = "manual",
         help = "Zenoh key expression for synapse.topic.ManualControlData bare structs"
     )]
     topic: String,

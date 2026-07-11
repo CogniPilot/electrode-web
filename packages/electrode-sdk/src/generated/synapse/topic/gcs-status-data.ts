@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { GnssFixType } from '../../synapse/types/gnss-fix-type.js';
+import { GnssFixType } from '../../synapse/types/gnss-fix-type';
 
 
 export class GcsStatusData {
@@ -119,4 +119,100 @@ static createGcsStatusData(builder:flatbuffers.Builder, time_boot_ms: number, la
   return builder.offset();
 }
 
+
+unpack(): GcsStatusDataT {
+  return new GcsStatusDataT(
+    this.timeBootMs(),
+    this.latitudeDegE7(),
+    this.longitudeDegE7(),
+    this.altitudeMslM(),
+    this.relativeAltitudeM(),
+    this.yawCdeg(),
+    this.groundSpeedCmS(),
+    this.climbCmS(),
+    this.distanceHomeDam(),
+    this.voltageBatteryCv(),
+    this.currentBatteryDa(),
+    this.missionSeq(),
+    this.batteryRemainingPct(),
+    this.flightMode(),
+    this.systemState(),
+    this.linkQualityPct(),
+    this.satellitesUsed(),
+    this.fixType(),
+    this.flags()
+  );
+}
+
+
+unpackTo(_o: GcsStatusDataT): void {
+  _o.timeBootMs = this.timeBootMs();
+  _o.latitudeDegE7 = this.latitudeDegE7();
+  _o.longitudeDegE7 = this.longitudeDegE7();
+  _o.altitudeMslM = this.altitudeMslM();
+  _o.relativeAltitudeM = this.relativeAltitudeM();
+  _o.yawCdeg = this.yawCdeg();
+  _o.groundSpeedCmS = this.groundSpeedCmS();
+  _o.climbCmS = this.climbCmS();
+  _o.distanceHomeDam = this.distanceHomeDam();
+  _o.voltageBatteryCv = this.voltageBatteryCv();
+  _o.currentBatteryDa = this.currentBatteryDa();
+  _o.missionSeq = this.missionSeq();
+  _o.batteryRemainingPct = this.batteryRemainingPct();
+  _o.flightMode = this.flightMode();
+  _o.systemState = this.systemState();
+  _o.linkQualityPct = this.linkQualityPct();
+  _o.satellitesUsed = this.satellitesUsed();
+  _o.fixType = this.fixType();
+  _o.flags = this.flags();
+}
+}
+
+export class GcsStatusDataT {
+constructor(
+  public timeBootMs: number = 0,
+  public latitudeDegE7: number = 0,
+  public longitudeDegE7: number = 0,
+  public altitudeMslM: number = 0,
+  public relativeAltitudeM: number = 0,
+  public yawCdeg: number = 0,
+  public groundSpeedCmS: number = 0,
+  public climbCmS: number = 0,
+  public distanceHomeDam: number = 0,
+  public voltageBatteryCv: number = 0,
+  public currentBatteryDa: number = 0,
+  public missionSeq: number = 0,
+  public batteryRemainingPct: number = 0,
+  public flightMode: number = 0,
+  public systemState: number = 0,
+  public linkQualityPct: number = 0,
+  public satellitesUsed: number = 0,
+  public fixType: GnssFixType = GnssFixType.NoFix,
+  public flags: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return GcsStatusData.createGcsStatusData(builder,
+    this.timeBootMs,
+    this.latitudeDegE7,
+    this.longitudeDegE7,
+    this.altitudeMslM,
+    this.relativeAltitudeM,
+    this.yawCdeg,
+    this.groundSpeedCmS,
+    this.climbCmS,
+    this.distanceHomeDam,
+    this.voltageBatteryCv,
+    this.currentBatteryDa,
+    this.missionSeq,
+    this.batteryRemainingPct,
+    this.flightMode,
+    this.systemState,
+    this.linkQualityPct,
+    this.satellitesUsed,
+    this.fixType,
+    this.flags
+  );
+}
 }

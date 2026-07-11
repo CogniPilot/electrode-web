@@ -165,6 +165,11 @@ export interface AutopilotRunStatus {
   framesOut: number;
   /** Frames forwarded Zenoh → autopilot since start. */
   framesIn: number;
+  lastExitAtMs: number | null;
+  lastExitCode: number | null;
+  lastExitSignal: number | null;
+  lastPid: number | null;
+  stopRequested: boolean;
 }
 
 export type FirmwareSource = 'localBuild' | 'releaseArtifact' | 'ciArtifact' | 'customFile';
@@ -227,6 +232,24 @@ export async function setAutopilotRunning(action: 'start' | 'stop'): Promise<Aut
     throw new Error(detail || `autopilot ${action} failed (${response.status})`);
   }
   return (await response.json()) as AutopilotRunStatus;
+}
+
+export interface RuntimeParameterValue {
+  name: string;
+  value: number;
+}
+
+export async function requestRuntimeParameter(name: string, value?: number): Promise<RuntimeParameterValue> {
+  const response = await fetch(gcsUrl('runtime/parameter'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(value === undefined ? { name } : { name, value })
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(detail || `runtime parameter request failed (${response.status})`);
+  }
+  return (await response.json()) as RuntimeParameterValue;
 }
 
 export async function fetchSimulationProfile(signal?: AbortSignal): Promise<SimulationProfile> {

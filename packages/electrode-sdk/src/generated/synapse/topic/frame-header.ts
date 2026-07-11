@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { TopicId } from '../../synapse/topic/topic-id.js';
+import { TopicId } from '../../synapse/topic/topic-id';
 
 
 export class FrameHeader {
@@ -59,4 +59,52 @@ static createFrameHeader(builder:flatbuffers.Builder, timestamp_us: bigint, sequ
   return builder.offset();
 }
 
+
+unpack(): FrameHeaderT {
+  return new FrameHeaderT(
+    this.timestampUs(),
+    this.sequence(),
+    this.flags(),
+    this.topicId(),
+    this.systemId(),
+    this.componentId(),
+    this.protocolVersion()
+  );
+}
+
+
+unpackTo(_o: FrameHeaderT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.sequence = this.sequence();
+  _o.flags = this.flags();
+  _o.topicId = this.topicId();
+  _o.systemId = this.systemId();
+  _o.componentId = this.componentId();
+  _o.protocolVersion = this.protocolVersion();
+}
+}
+
+export class FrameHeaderT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public sequence: number = 0,
+  public flags: number = 0,
+  public topicId: TopicId = TopicId.Unknown,
+  public systemId: number = 0,
+  public componentId: number = 0,
+  public protocolVersion: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return FrameHeader.createFrameHeader(builder,
+    this.timestampUs,
+    this.sequence,
+    this.flags,
+    this.topicId,
+    this.systemId,
+    this.componentId,
+    this.protocolVersion
+  );
+}
 }

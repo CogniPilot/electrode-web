@@ -2,8 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { MissionItemKind } from '../../synapse/cmd/mission-item-kind.js';
-import { GeoAltitudeFrame } from '../../synapse/types/geo-altitude-frame.js';
+import { MissionItemKind } from '../../synapse/cmd/mission-item-kind';
+import { GeoAltitudeFrame } from '../../synapse/types/geo-altitude-frame';
 
 
 export class MissionItemData {
@@ -74,4 +74,64 @@ static createMissionItemData(builder:flatbuffers.Builder, seq: number, latitude_
   return builder.offset();
 }
 
+
+unpack(): MissionItemDataT {
+  return new MissionItemDataT(
+    this.seq(),
+    this.latitudeDegE7(),
+    this.longitudeDegE7(),
+    this.altitudeM(),
+    this.acceptanceRadiusM(),
+    this.loiterTimeS(),
+    this.yawRad(),
+    this.frame(),
+    this.kind(),
+    this.flags()
+  );
+}
+
+
+unpackTo(_o: MissionItemDataT): void {
+  _o.seq = this.seq();
+  _o.latitudeDegE7 = this.latitudeDegE7();
+  _o.longitudeDegE7 = this.longitudeDegE7();
+  _o.altitudeM = this.altitudeM();
+  _o.acceptanceRadiusM = this.acceptanceRadiusM();
+  _o.loiterTimeS = this.loiterTimeS();
+  _o.yawRad = this.yawRad();
+  _o.frame = this.frame();
+  _o.kind = this.kind();
+  _o.flags = this.flags();
+}
+}
+
+export class MissionItemDataT {
+constructor(
+  public seq: number = 0,
+  public latitudeDegE7: number = 0,
+  public longitudeDegE7: number = 0,
+  public altitudeM: number = 0.0,
+  public acceptanceRadiusM: number = 0.0,
+  public loiterTimeS: number = 0.0,
+  public yawRad: number = 0.0,
+  public frame: GeoAltitudeFrame = GeoAltitudeFrame.Msl,
+  public kind: MissionItemKind = MissionItemKind.Waypoint,
+  public flags: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return MissionItemData.createMissionItemData(builder,
+    this.seq,
+    this.latitudeDegE7,
+    this.longitudeDegE7,
+    this.altitudeM,
+    this.acceptanceRadiusM,
+    this.loiterTimeS,
+    this.yawRad,
+    this.frame,
+    this.kind,
+    this.flags
+  );
+}
 }

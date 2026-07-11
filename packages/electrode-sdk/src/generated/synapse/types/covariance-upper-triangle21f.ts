@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class CovarianceUpperTriangle21f {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -125,4 +127,108 @@ static createCovarianceUpperTriangle21f(builder:flatbuffers.Builder, c0: number,
   return builder.offset();
 }
 
+
+unpack(): CovarianceUpperTriangle21fT {
+  return new CovarianceUpperTriangle21fT(
+    this.c0(),
+    this.c1(),
+    this.c2(),
+    this.c3(),
+    this.c4(),
+    this.c5(),
+    this.c6(),
+    this.c7(),
+    this.c8(),
+    this.c9(),
+    this.c10(),
+    this.c11(),
+    this.c12(),
+    this.c13(),
+    this.c14(),
+    this.c15(),
+    this.c16(),
+    this.c17(),
+    this.c18(),
+    this.c19(),
+    this.c20()
+  );
+}
+
+
+unpackTo(_o: CovarianceUpperTriangle21fT): void {
+  _o.c0 = this.c0();
+  _o.c1 = this.c1();
+  _o.c2 = this.c2();
+  _o.c3 = this.c3();
+  _o.c4 = this.c4();
+  _o.c5 = this.c5();
+  _o.c6 = this.c6();
+  _o.c7 = this.c7();
+  _o.c8 = this.c8();
+  _o.c9 = this.c9();
+  _o.c10 = this.c10();
+  _o.c11 = this.c11();
+  _o.c12 = this.c12();
+  _o.c13 = this.c13();
+  _o.c14 = this.c14();
+  _o.c15 = this.c15();
+  _o.c16 = this.c16();
+  _o.c17 = this.c17();
+  _o.c18 = this.c18();
+  _o.c19 = this.c19();
+  _o.c20 = this.c20();
+}
+}
+
+export class CovarianceUpperTriangle21fT {
+constructor(
+  public c0: number = 0.0,
+  public c1: number = 0.0,
+  public c2: number = 0.0,
+  public c3: number = 0.0,
+  public c4: number = 0.0,
+  public c5: number = 0.0,
+  public c6: number = 0.0,
+  public c7: number = 0.0,
+  public c8: number = 0.0,
+  public c9: number = 0.0,
+  public c10: number = 0.0,
+  public c11: number = 0.0,
+  public c12: number = 0.0,
+  public c13: number = 0.0,
+  public c14: number = 0.0,
+  public c15: number = 0.0,
+  public c16: number = 0.0,
+  public c17: number = 0.0,
+  public c18: number = 0.0,
+  public c19: number = 0.0,
+  public c20: number = 0.0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return CovarianceUpperTriangle21f.createCovarianceUpperTriangle21f(builder,
+    this.c0,
+    this.c1,
+    this.c2,
+    this.c3,
+    this.c4,
+    this.c5,
+    this.c6,
+    this.c7,
+    this.c8,
+    this.c9,
+    this.c10,
+    this.c11,
+    this.c12,
+    this.c13,
+    this.c14,
+    this.c15,
+    this.c16,
+    this.c17,
+    this.c18,
+    this.c19,
+    this.c20
+  );
+}
 }

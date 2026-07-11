@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class GlobalPositionEstimateData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -76,4 +78,68 @@ static createGlobalPositionEstimateData(builder:flatbuffers.Builder, timestamp_u
   return builder.offset();
 }
 
+
+unpack(): GlobalPositionEstimateDataT {
+  return new GlobalPositionEstimateDataT(
+    this.timestampUs(),
+    this.latitudeDegE7(),
+    this.longitudeDegE7(),
+    this.altitudeMslMm(),
+    this.relativeAltitudeMm(),
+    this.velocityEastCmS(),
+    this.velocityNorthCmS(),
+    this.velocityUpCmS(),
+    this.yawCdeg(),
+    this.source(),
+    this.flags()
+  );
+}
+
+
+unpackTo(_o: GlobalPositionEstimateDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.latitudeDegE7 = this.latitudeDegE7();
+  _o.longitudeDegE7 = this.longitudeDegE7();
+  _o.altitudeMslMm = this.altitudeMslMm();
+  _o.relativeAltitudeMm = this.relativeAltitudeMm();
+  _o.velocityEastCmS = this.velocityEastCmS();
+  _o.velocityNorthCmS = this.velocityNorthCmS();
+  _o.velocityUpCmS = this.velocityUpCmS();
+  _o.yawCdeg = this.yawCdeg();
+  _o.source = this.source();
+  _o.flags = this.flags();
+}
+}
+
+export class GlobalPositionEstimateDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public latitudeDegE7: number = 0,
+  public longitudeDegE7: number = 0,
+  public altitudeMslMm: number = 0,
+  public relativeAltitudeMm: number = 0,
+  public velocityEastCmS: number = 0,
+  public velocityNorthCmS: number = 0,
+  public velocityUpCmS: number = 0,
+  public yawCdeg: number = 0,
+  public source: number = 0,
+  public flags: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return GlobalPositionEstimateData.createGlobalPositionEstimateData(builder,
+    this.timestampUs,
+    this.latitudeDegE7,
+    this.longitudeDegE7,
+    this.altitudeMslMm,
+    this.relativeAltitudeMm,
+    this.velocityEastCmS,
+    this.velocityNorthCmS,
+    this.velocityUpCmS,
+    this.yawCdeg,
+    this.source,
+    this.flags
+  );
+}
 }

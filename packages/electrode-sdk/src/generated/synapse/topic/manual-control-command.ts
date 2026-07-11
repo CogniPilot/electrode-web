@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { ManualControlData } from '../../synapse/topic/manual-control-data.js';
+import { ManualControlData, ManualControlDataT } from '../../synapse/topic/manual-control-data';
 
 
 export class ManualControlCommand {
@@ -45,5 +45,29 @@ static createManualControlCommand(builder:flatbuffers.Builder, dataOffset:flatbu
   ManualControlCommand.startManualControlCommand(builder);
   ManualControlCommand.addData(builder, dataOffset);
   return ManualControlCommand.endManualControlCommand(builder);
+}
+
+unpack(): ManualControlCommandT {
+  return new ManualControlCommandT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: ManualControlCommandT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class ManualControlCommandT {
+constructor(
+  public data: ManualControlDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return ManualControlCommand.createManualControlCommand(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

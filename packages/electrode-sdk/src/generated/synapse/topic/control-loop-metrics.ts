@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { ControlLoopMetricsData } from '../../synapse/topic/control-loop-metrics-data.js';
+import { ControlLoopMetricsData, ControlLoopMetricsDataT } from '../../synapse/topic/control-loop-metrics-data';
 
 
 export class ControlLoopMetrics {
@@ -45,5 +45,29 @@ static createControlLoopMetrics(builder:flatbuffers.Builder, dataOffset:flatbuff
   ControlLoopMetrics.startControlLoopMetrics(builder);
   ControlLoopMetrics.addData(builder, dataOffset);
   return ControlLoopMetrics.endControlLoopMetrics(builder);
+}
+
+unpack(): ControlLoopMetricsT {
+  return new ControlLoopMetricsT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: ControlLoopMetricsT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class ControlLoopMetricsT {
+constructor(
+  public data: ControlLoopMetricsDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return ControlLoopMetrics.createControlLoopMetrics(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

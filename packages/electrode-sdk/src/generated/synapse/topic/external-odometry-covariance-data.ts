@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { CovarianceUpperTriangle78f } from '../../synapse/types/covariance-upper-triangle78f.js';
+import { CovarianceUpperTriangle78f, CovarianceUpperTriangle78fT } from '../../synapse/types/covariance-upper-triangle78f';
 
 
 export class ExternalOdometryCovarianceData {
@@ -122,4 +122,117 @@ static createExternalOdometryCovarianceData(builder:flatbuffers.Builder, timesta
   return builder.offset();
 }
 
+
+unpack(): ExternalOdometryCovarianceDataT {
+  return new ExternalOdometryCovarianceDataT(
+    this.timestampUs(),
+    (this.covariance() !== null ? this.covariance()!.unpack() : null),
+    this.sourceId(),
+    this.id()
+  );
+}
+
+
+unpackTo(_o: ExternalOdometryCovarianceDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.covariance = (this.covariance() !== null ? this.covariance()!.unpack() : null);
+  _o.sourceId = this.sourceId();
+  _o.id = this.id();
+}
+}
+
+export class ExternalOdometryCovarianceDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public covariance: CovarianceUpperTriangle78fT|null = null,
+  public sourceId: number = 0,
+  public id: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return ExternalOdometryCovarianceData.createExternalOdometryCovarianceData(builder,
+    this.timestampUs,
+    (this.covariance?.c0 ?? 0),
+    (this.covariance?.c1 ?? 0),
+    (this.covariance?.c2 ?? 0),
+    (this.covariance?.c3 ?? 0),
+    (this.covariance?.c4 ?? 0),
+    (this.covariance?.c5 ?? 0),
+    (this.covariance?.c6 ?? 0),
+    (this.covariance?.c7 ?? 0),
+    (this.covariance?.c8 ?? 0),
+    (this.covariance?.c9 ?? 0),
+    (this.covariance?.c10 ?? 0),
+    (this.covariance?.c11 ?? 0),
+    (this.covariance?.c12 ?? 0),
+    (this.covariance?.c13 ?? 0),
+    (this.covariance?.c14 ?? 0),
+    (this.covariance?.c15 ?? 0),
+    (this.covariance?.c16 ?? 0),
+    (this.covariance?.c17 ?? 0),
+    (this.covariance?.c18 ?? 0),
+    (this.covariance?.c19 ?? 0),
+    (this.covariance?.c20 ?? 0),
+    (this.covariance?.c21 ?? 0),
+    (this.covariance?.c22 ?? 0),
+    (this.covariance?.c23 ?? 0),
+    (this.covariance?.c24 ?? 0),
+    (this.covariance?.c25 ?? 0),
+    (this.covariance?.c26 ?? 0),
+    (this.covariance?.c27 ?? 0),
+    (this.covariance?.c28 ?? 0),
+    (this.covariance?.c29 ?? 0),
+    (this.covariance?.c30 ?? 0),
+    (this.covariance?.c31 ?? 0),
+    (this.covariance?.c32 ?? 0),
+    (this.covariance?.c33 ?? 0),
+    (this.covariance?.c34 ?? 0),
+    (this.covariance?.c35 ?? 0),
+    (this.covariance?.c36 ?? 0),
+    (this.covariance?.c37 ?? 0),
+    (this.covariance?.c38 ?? 0),
+    (this.covariance?.c39 ?? 0),
+    (this.covariance?.c40 ?? 0),
+    (this.covariance?.c41 ?? 0),
+    (this.covariance?.c42 ?? 0),
+    (this.covariance?.c43 ?? 0),
+    (this.covariance?.c44 ?? 0),
+    (this.covariance?.c45 ?? 0),
+    (this.covariance?.c46 ?? 0),
+    (this.covariance?.c47 ?? 0),
+    (this.covariance?.c48 ?? 0),
+    (this.covariance?.c49 ?? 0),
+    (this.covariance?.c50 ?? 0),
+    (this.covariance?.c51 ?? 0),
+    (this.covariance?.c52 ?? 0),
+    (this.covariance?.c53 ?? 0),
+    (this.covariance?.c54 ?? 0),
+    (this.covariance?.c55 ?? 0),
+    (this.covariance?.c56 ?? 0),
+    (this.covariance?.c57 ?? 0),
+    (this.covariance?.c58 ?? 0),
+    (this.covariance?.c59 ?? 0),
+    (this.covariance?.c60 ?? 0),
+    (this.covariance?.c61 ?? 0),
+    (this.covariance?.c62 ?? 0),
+    (this.covariance?.c63 ?? 0),
+    (this.covariance?.c64 ?? 0),
+    (this.covariance?.c65 ?? 0),
+    (this.covariance?.c66 ?? 0),
+    (this.covariance?.c67 ?? 0),
+    (this.covariance?.c68 ?? 0),
+    (this.covariance?.c69 ?? 0),
+    (this.covariance?.c70 ?? 0),
+    (this.covariance?.c71 ?? 0),
+    (this.covariance?.c72 ?? 0),
+    (this.covariance?.c73 ?? 0),
+    (this.covariance?.c74 ?? 0),
+    (this.covariance?.c75 ?? 0),
+    (this.covariance?.c76 ?? 0),
+    (this.covariance?.c77 ?? 0),
+    this.sourceId,
+    this.id
+  );
+}
 }

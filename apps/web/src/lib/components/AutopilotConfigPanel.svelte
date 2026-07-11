@@ -96,8 +96,8 @@
       </label>
 
       <label>
-        <span>Zenoh endpoint</span>
-        <input value={profile.runtimeEndpoint} spellcheck="false" oninput={(e) => setField('runtimeEndpoint', e.currentTarget.value)} />
+        <span>Trusted vehicle endpoint · loopback only</span>
+        <input value={profile.runtimeEndpoint} spellcheck="false" disabled />
       </label>
 
       <label>

@@ -9,6 +9,10 @@ import {
   refreshStaleTopics,
   replayDurationMs,
   createPlotPacketCatalog,
+  encodeRuntimeParameter,
+  encodeRuntimeParameterGet,
+  encodeRuntimeTrajectory,
+  decodeRuntimeParameterReply,
   decodeSynapseLogFrames,
   extractPlotSeriesUpdates,
   plotSeriesKey,
@@ -31,6 +35,9 @@ type WorkerIn =
   | { type: 'setSubscriptions'; keys: string[] }
   | { type: 'setMocapDisplaySource'; source: 'auto' | 'raw' | 'external' }
   | { type: 'virtualManual'; enabled: boolean; input?: VirtualManualInput }
+  | { type: 'runtimeParameter'; name: string; value: number }
+  | { type: 'runtimeParameterRefresh'; names: string[] }
+  | { type: 'runtimeTrajectory'; waypoints: Array<{ east: number; north: number; up: number }> }
   | { type: 'startRecording' }
   | { type: 'stopRecording' }
   | { type: 'exportRecording' }
@@ -79,6 +86,8 @@ let plotSeries = new Map<string, PlotSeries>();
 let lastPlotPostMs = 0;
 let virtualManualEnabled = false;
 let virtualManualTimer: ReturnType<typeof setInterval> | null = null;
+let runtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingRuntimeParameters = new Set<string>();
 let virtualManualInput: VirtualManualInput = {
   roll: 0,
   pitch: 0,
@@ -109,6 +118,12 @@ ctx.addEventListener('message', (event: MessageEvent<WorkerIn>) => {
     postState();
   } else if (message.type === 'virtualManual') {
     setVirtualManual(message.enabled, message.input);
+  } else if (message.type === 'runtimeParameter') {
+    publishRuntimeCommand('gcs/v1/cmd/gain', encodeRuntimeParameter(message.name, message.value));
+  } else if (message.type === 'runtimeParameterRefresh') {
+    refreshRuntimeParameters(message.names);
+  } else if (message.type === 'runtimeTrajectory') {
+    publishRuntimeCommand('gcs/v1/cmd/trajectory', encodeRuntimeTrajectory(message.waypoints));
   } else if (message.type === 'startRecording') {
     recording = true;
     recorder = new SynapseLogRecorder({
@@ -157,7 +172,8 @@ function connect(nextMode: RuntimeMode, url: string): void {
   if (nextMode === 'zenoh') {
     zenoh = new ZenohWasmTransport(url, handleTransportMessage, postConnection, postCatalog, {
       vehicleId,
-      wasmUrl: zenohWasmUrl
+      wasmUrl: zenohWasmUrl,
+      onRawSample: handleRawSample
     });
     zenoh.connect().catch((error) => {
       state = appendEvent(state, {
@@ -182,6 +198,9 @@ function connect(nextMode: RuntimeMode, url: string): void {
 
 function disconnect(post = true): void {
   stopVirtualManualTimer();
+  if (runtimeRefreshTimer !== null) clearTimeout(runtimeRefreshTimer);
+  runtimeRefreshTimer = null;
+  pendingRuntimeParameters.clear();
   zenoh?.disconnect().catch(() => {});
   zenoh = null;
   clearTimer(staleTimer);
@@ -225,6 +244,70 @@ function publishVirtualManual(): void {
   if (!virtualManualEnabled || !zenoh) return;
   const payload = encodeManualControl(virtualManualInput);
   zenoh.publishBytes(VIRTUAL_MANUAL_TOPIC, payload).catch(() => {});
+}
+
+function publishRuntimeCommand(topic: string, payload: Uint8Array): void {
+  if (!zenoh) {
+    ctx.postMessage({ type: 'runtimeCommandStatus', status: 'error', message: 'Zenoh is not connected' });
+    return;
+  }
+  zenoh
+    .publishBytes(topic, payload)
+    .then(() => ctx.postMessage({ type: 'runtimeCommandStatus', status: 'sent', message: `sent to ${topic}` }))
+    .catch((error) =>
+      ctx.postMessage({
+        type: 'runtimeCommandStatus',
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      })
+    );
+}
+
+function refreshRuntimeParameters(names: string[]): void {
+  if (!zenoh) {
+    ctx.postMessage({ type: 'runtimeCommandStatus', status: 'error', message: 'Zenoh is not connected' });
+    return;
+  }
+  if (runtimeRefreshTimer !== null) clearTimeout(runtimeRefreshTimer);
+  pendingRuntimeParameters = new Set(names);
+  ctx.postMessage({ type: 'runtimeCommandStatus', status: 'sent', message: 'refreshing parameters…' });
+  for (const name of names) {
+    void zenoh.publishBytes('gcs/v1/cmd/parameters', encodeRuntimeParameterGet(name)).catch((error) => {
+      ctx.postMessage({
+        type: 'runtimeCommandStatus',
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      });
+    });
+  }
+  runtimeRefreshTimer = setTimeout(() => {
+    if (pendingRuntimeParameters.size > 0) {
+      ctx.postMessage({
+        type: 'runtimeCommandStatus',
+        status: 'error',
+        message: `parameter refresh timed out (${pendingRuntimeParameters.size} missing)`
+      });
+    }
+    runtimeRefreshTimer = null;
+  }, 8000);
+}
+
+function handleRawSample(key: string, payload: Uint8Array): void {
+  if (key !== 'gcs/v1/status/reply/parameters') return;
+  try {
+    const parameter = decodeRuntimeParameterReply(payload);
+    if (parameter) {
+      pendingRuntimeParameters.delete(parameter.name);
+      ctx.postMessage({ type: 'runtimeParameterValue', ...parameter });
+      if (pendingRuntimeParameters.size === 0 && runtimeRefreshTimer !== null) {
+        clearTimeout(runtimeRefreshTimer);
+        runtimeRefreshTimer = null;
+        ctx.postMessage({ type: 'runtimeCommandStatus', status: 'sent', message: 'parameters refreshed' });
+      }
+    }
+  } catch {
+    ctx.postMessage({ type: 'runtimeCommandStatus', status: 'error', message: 'invalid parameter reply' });
+  }
 }
 
 function encodeManualControl(input: VirtualManualInput): Uint8Array {

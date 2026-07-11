@@ -4,10 +4,10 @@
 //!
 //! * `mocap` - pose only, like CogniPilot/synapse_qualisys_bridge:
 //!   a MocapFrame (position + attitude quaternion) on
-//!   `synapse/v1/topic/mocap_frame`.
+//!   `mocap`.
 //! * `autopilot` - standard vehicle telemetry the flight controller emits:
-//!   AttitudeEstimate on `synapse/v1/topic/attitude_estimate` and
-//!   PwmSignalOutputs on `synapse/v1/topic/pwm_signal_outputs`.
+//!   AttitudeEstimate on `att` and
+//!   PwmSignalOutputs on `pwm`.
 //!
 //! Run them together (default) or as two separate processes to mirror the two
 //! machines on a real setup:
@@ -75,8 +75,8 @@ struct Cli {
 
     #[arg(
         long,
-        default_value = "synapse",
-        help = "Zenoh key prefix for published topics"
+        default_value = "",
+        help = "Optional deployment namespace prepended to the compact catalog keys (empty = bare keys, matching csyn firmware)"
     )]
     prefix: String,
 
@@ -160,27 +160,27 @@ fn declare_publishers<'a>(
     Ok(SimPublishers {
         mocap: streams
             .mocap
-            .then(|| declare(session, format!("{}/v1/topic/mocap_frame", cli.prefix)))
+            .then(|| declare(session, topic_key(cli, "mocap"), "MocapFrame"))
             .transpose()?,
         attitude: streams
             .autopilot
-            .then(|| {
-                declare(
-                    session,
-                    format!("{}/v1/topic/attitude_estimate", cli.prefix),
-                )
-            })
+            .then(|| declare(session, topic_key(cli, "att"), "AttitudeEstimate"))
             .transpose()?,
         motor: streams
             .autopilot
-            .then(|| {
-                declare(
-                    session,
-                    format!("{}/v1/topic/pwm_signal_outputs", cli.prefix),
-                )
-            })
+            .then(|| declare(session, topic_key(cli, "pwm"), "PwmSignalOutputs"))
             .transpose()?,
     })
+}
+
+/// `[<namespace>/]<catalog key>` — bare when no namespace is configured.
+fn topic_key(cli: &Cli, key: &str) -> String {
+    let namespace = cli.prefix.trim_matches('/');
+    if namespace.is_empty() {
+        key.to_string()
+    } else {
+        format!("{namespace}/{key}")
+    }
 }
 
 fn print_startup(cli: &Cli, streams: ActiveStreams) {
@@ -190,14 +190,17 @@ fn print_startup(cli: &Cli, streams: ActiveStreams) {
     );
     if streams.mocap {
         println!(
-            "  mocap     → {}/v1/topic/mocap_frame (MocapFrame: pose) @ {:.0} Hz",
-            cli.prefix, cli.mocap_hz
+            "  mocap     → {} (MocapFrame: pose) @ {:.0} Hz",
+            topic_key(cli, "mocap"),
+            cli.mocap_hz
         );
     }
     if streams.autopilot {
         println!(
-            "  autopilot → {}/v1/topic/attitude_estimate (AttitudeEstimate), {}/v1/topic/pwm_signal_outputs (PwmSignalOutputs) @ {:.0} Hz",
-            cli.prefix, cli.prefix, cli.autopilot_hz
+            "  autopilot → {} (AttitudeEstimate), {} (PwmSignalOutputs) @ {:.0} Hz",
+            topic_key(cli, "att"),
+            topic_key(cli, "pwm"),
+            cli.autopilot_hz
         );
     }
 }
@@ -413,9 +416,19 @@ fn quaternion_to_rotation_matrix(qw: f32, qx: f32, qy: f32, qz: f32) -> Rotation
     )
 }
 
-fn declare(session: &Session, key: String) -> anyhow::Result<Publisher<'_>> {
+fn declare<'a>(
+    session: &'a Session,
+    key: String,
+    topic_name: &str,
+) -> anyhow::Result<Publisher<'a>> {
+    // Mandatory 0.6.0 value contract, stamped once at declare time.
+    let encoding = synapse_fbs::topic_catalog::topic_by_name(topic_name)
+        .map(synapse_fbs::value_contract::encoding_for_topic)
+        .map(|encoding| zenoh::bytes::Encoding::from(encoding.as_str()))
+        .unwrap_or_default();
     session
         .declare_publisher(key)
+        .encoding(encoding)
         .wait()
         .map_err(|e| anyhow::anyhow!(e.to_string()))
 }

@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { CommandResultCode } from '../../synapse/types/command-result-code.js';
+import { CommandResultCode } from '../../synapse/types/command-result-code';
 
 
 export class MissionSetReply {
@@ -95,5 +95,49 @@ static createMissionSetReply(builder:flatbuffers.Builder, result:CommandResultCo
   MissionSetReply.addFailedSeq(builder, failedSeq);
   MissionSetReply.addFlags(builder, flags);
   return MissionSetReply.endMissionSetReply(builder);
+}
+
+unpack(): MissionSetReplyT {
+  return new MissionSetReplyT(
+    this.result(),
+    this.missionId(),
+    this.planVersion(),
+    this.resultDetail(),
+    this.failedSeq(),
+    this.flags()
+  );
+}
+
+
+unpackTo(_o: MissionSetReplyT): void {
+  _o.result = this.result();
+  _o.missionId = this.missionId();
+  _o.planVersion = this.planVersion();
+  _o.resultDetail = this.resultDetail();
+  _o.failedSeq = this.failedSeq();
+  _o.flags = this.flags();
+}
+}
+
+export class MissionSetReplyT {
+constructor(
+  public result: CommandResultCode = CommandResultCode.Accepted,
+  public missionId: number = 0,
+  public planVersion: number = 0,
+  public resultDetail: number = 0,
+  public failedSeq: number = 0,
+  public flags: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return MissionSetReply.createMissionSetReply(builder,
+    this.result,
+    this.missionId,
+    this.planVersion,
+    this.resultDetail,
+    this.failedSeq,
+    this.flags
+  );
 }
 }

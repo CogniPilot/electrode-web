@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { LockstepStatusData } from '../../synapse/topic/lockstep-status-data.js';
+import { LockstepStatusData, LockstepStatusDataT } from '../../synapse/topic/lockstep-status-data';
 
 
 export class LockstepStatus {
@@ -45,5 +45,29 @@ static createLockstepStatus(builder:flatbuffers.Builder, dataOffset:flatbuffers.
   LockstepStatus.startLockstepStatus(builder);
   LockstepStatus.addData(builder, dataOffset);
   return LockstepStatus.endLockstepStatus(builder);
+}
+
+unpack(): LockstepStatusT {
+  return new LockstepStatusT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: LockstepStatusT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class LockstepStatusT {
+constructor(
+  public data: LockstepStatusDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return LockstepStatus.createLockstepStatus(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

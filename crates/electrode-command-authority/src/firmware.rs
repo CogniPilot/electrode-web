@@ -6,7 +6,7 @@
 //! window — is rejected, so the upload surface can only re-tune gains, not
 //! replace firmware.
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
@@ -264,10 +264,14 @@ pub fn query_payload(
     payload: Vec<u8>,
     timeout: Duration,
 ) -> Result<Vec<u8>> {
-    let replies = session
-        .get(key)
-        .payload(payload)
-        .timeout(timeout)
+    let mut request = session.get(key).payload(payload).timeout(timeout);
+    // Stamp the synapse request contract when the key names a catalog
+    // command (`<ns>/cmd/firmware_<op>`).
+    let command_name = key.rsplit('/').next().unwrap_or(key);
+    if let Some(encoding) = crate::policy::command_request_encoding(command_name) {
+        request = request.encoding(zenoh::bytes::Encoding::from(encoding));
+    }
+    let replies = request
         .wait()
         .map_err(|err| anyhow!("send firmware query {key}: {err}"))?;
     let reply = replies
@@ -697,8 +701,8 @@ mod tests {
     #[test]
     fn firmware_service_keys_use_canonical_schema_names() {
         assert_eq!(
-            firmware_key("synapse/v1/cmd/firmware", "prepare"),
-            "synapse/v1/cmd/firmware_prepare"
+            firmware_key("cmd/firmware", "prepare"),
+            "cmd/firmware_prepare"
         );
     }
 

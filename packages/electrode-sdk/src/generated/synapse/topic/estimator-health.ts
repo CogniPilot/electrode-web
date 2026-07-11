@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { EstimatorHealthData } from '../../synapse/topic/estimator-health-data.js';
+import { EstimatorHealthData, EstimatorHealthDataT } from '../../synapse/topic/estimator-health-data';
 
 
 export class EstimatorHealth {
@@ -45,5 +45,29 @@ static createEstimatorHealth(builder:flatbuffers.Builder, dataOffset:flatbuffers
   EstimatorHealth.startEstimatorHealth(builder);
   EstimatorHealth.addData(builder, dataOffset);
   return EstimatorHealth.endEstimatorHealth(builder);
+}
+
+unpack(): EstimatorHealthT {
+  return new EstimatorHealthT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: EstimatorHealthT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class EstimatorHealthT {
+constructor(
+  public data: EstimatorHealthDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return EstimatorHealth.createEstimatorHealth(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

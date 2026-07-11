@@ -34,5 +34,14 @@ export enum TopicId {
   ExternalOdometryCovariance = 30,
   MocapFrame = 31,
   LockstepTick = 32,
-  LockstepStatus = 33
+  LockstepStatus = 33,
+  FirmwareProgress = 34,
+  RawPose = 35,
+  Pose = 36,
+  PoseWithCovariance = 37,
+  Twist = 38,
+  TwistWithCovariance = 39,
+  Odometry = 40,
+  OdometryWithCovariance = 41,
+  MocapPoseFrame = 42
 }

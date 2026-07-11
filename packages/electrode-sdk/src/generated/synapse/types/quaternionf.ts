@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class Quaternionf {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -40,4 +42,40 @@ static createQuaternionf(builder:flatbuffers.Builder, w: number, x: number, y: n
   return builder.offset();
 }
 
+
+unpack(): QuaternionfT {
+  return new QuaternionfT(
+    this.w(),
+    this.x(),
+    this.y(),
+    this.z()
+  );
+}
+
+
+unpackTo(_o: QuaternionfT): void {
+  _o.w = this.w();
+  _o.x = this.x();
+  _o.y = this.y();
+  _o.z = this.z();
+}
+}
+
+export class QuaternionfT {
+constructor(
+  public w: number = 0.0,
+  public x: number = 0.0,
+  public y: number = 0.0,
+  public z: number = 0.0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return Quaternionf.createQuaternionf(builder,
+    this.w,
+    this.x,
+    this.y,
+    this.z
+  );
+}
 }

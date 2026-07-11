@@ -214,7 +214,7 @@ values, and the manual-control topic it is waiting for.
 
 In Ground Station mode, the **Hardware** tab shows locally computed joystick
 state before it leaves the machine. The **Zenoh** tab shows the actual
-`synapse/v1/topic/manual_control_command` stream after publication. Compare
+`manual` stream after publication. Compare
 them when debugging mapping, transport, or stale-command behavior.
 
 When no RC controller is plugged in and the native manual publisher is stopped,
@@ -280,19 +280,19 @@ simulation, PPM hardware can stay stopped.
 
 If an RC controller is attached, press **Start** in **Manual Link** when the
 manual publisher is stopped. The panel should show **Hardware** as live and the
-`manual_control_command` topic.
+`manual` (ManualControlCommand) topic.
 
 If no RC controller is attached, leave the native manual publisher stopped and
 use the keyboard fallback. The panel should say `keyboard remote active`.
 
 Then check **State I/O -> Manual control state**. It should show fresh data at
-roughly controller rate. If it says `waiting for manual_control_command`, fix
+roughly controller rate. If it says `waiting for manual control`, fix
 manual publishing before starting the sim.
 
 ### 4. Put The Mode Switch In The Intended Mode
 
 The sim does not choose manual or autopilot mode. It behaves like the aircraft:
-the transmitter mode switch sends `manual_control_command.flight_mode`, and the
+the transmitter mode switch sends `manual.flight_mode`, and the
 autopilot decides whether to accept that mode.
 
 Use these checks:

@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class Vec2f {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -30,4 +32,32 @@ static createVec2f(builder:flatbuffers.Builder, x: number, y: number):flatbuffer
   return builder.offset();
 }
 
+
+unpack(): Vec2fT {
+  return new Vec2fT(
+    this.x(),
+    this.y()
+  );
+}
+
+
+unpackTo(_o: Vec2fT): void {
+  _o.x = this.x();
+  _o.y = this.y();
+}
+}
+
+export class Vec2fT {
+constructor(
+  public x: number = 0.0,
+  public y: number = 0.0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return Vec2f.createVec2f(builder,
+    this.x,
+    this.y
+  );
+}
 }

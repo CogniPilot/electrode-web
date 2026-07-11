@@ -1,22 +1,29 @@
 //! Best-effort decoding of Synapse FlatBuffer payloads observed on Zenoh.
 //!
 //! Real Cerebri/Synapse vehicles (and the SIL) publish Synapse messages on
-//! `synapse/v1/topic/**` key expressions. We cannot infer the message type
-//! from the raw bytes reliably, so we classify by the Zenoh key and decode the
+//! compact catalog keys, `[<namespace>/]<key>[/<instance>]` (synapse_fbs
+//! 0.7.0), e.g. `cub1/att`. We classify by the Zenoh key and decode the
 //! topics we understand. Anything we do not recognize is still surfaced to the
 //! operator as a raw payload so it remains discoverable.
 //!
-//! Wire encoding (synapse_fbs 0.5.1): every fixed-layout topic is transmitted
-//! as the *bare* `*Data` struct (raw fixed-size bytes), not a FlatBuffers root
-//! table. We decode those exactly like `synapse_fbs::topic_decode::decode_struct`
-//! (size-check then `Follow::follow`). Only `mocap_frame` is a root table.
+//! Catalog topics carry a mandatory value contract in the Zenoh encoding
+//! (`application/x-synapse-struct;type=…;schema=sha256-128:…` for fixed-layout
+//! topics, `application/x-flatbuffers;…` for root tables). Samples whose
+//! encoding is missing or does not match the catalog contract are surfaced
+//! raw, never decoded.
+//!
+//! Wire encoding: every fixed-layout topic is transmitted as the *bare*
+//! `*Data` struct (raw fixed-size bytes), not a FlatBuffers root table. We
+//! decode those exactly like `synapse_fbs::topic_decode::decode_struct`
+//! (size-check then `Follow::follow`). Only `mocap` is a root table.
 
 use flatbuffers::root;
 use serde_json::{json, Value};
 use synapse_fbs::topic::{
     AttitudeCommandData, AttitudeEstimateData, AttitudeEstimateFlags, ControlLoopMetricsData,
-    ManualControlData, ManualControlFlags, MocapFrame, MocapRawFlags, NavigationTargetData,
-    PowerStatusData, PwmSignalOutputsData, RadioControlData, VehicleHealthData, VehicleHealthFlags,
+    ManualControlData, ManualControlFlags, MocapFrame, MocapPoseFrame, MocapRawFlags,
+    NavigationTargetData, PowerStatusData, PwmSignalOutputsData, RadioControlData, RawPoseData,
+    VehicleHealthData, VehicleHealthFlags,
 };
 use synapse_fbs::types::RotationMatrix3f;
 
@@ -30,18 +37,14 @@ pub(crate) struct Decoded {
 
 /// Classify a Zenoh key into the Synapse schema we expect on it.
 pub(crate) fn classify(key: &str) -> &'static str {
-    // Resolve the canonical topic through the catalog when the key is on the
-    // `synapse/v1/topic/<suffix>` scheme (handles namespaces and instances).
-    if let Some(topic) = synapse_fbs::topic_catalog::topic_by_key(key) {
-        if let Some(schema) = schema_for_suffix(topic.key_suffix) {
+    // Resolve the canonical topic through the catalog's compact-key grammar,
+    // `[<namespace>/]<key>[/<instance>]` (handles namespaces and instances).
+    if let Some(parsed) = synapse_fbs::topic_catalog::parse_key(key) {
+        if let Some(schema) = schema_for_topic(parsed.topic.name) {
             return schema;
         }
     }
-    // Fall back to the trailing path segment for legacy bare keys.
-    let leaf = key.rsplit('/').next().unwrap_or(key);
-    if let Some(schema) = schema_for_suffix(leaf) {
-        return schema;
-    }
+    // The qualisys bridge's custom (non-catalog) mocap keys.
     if key.contains("mocap") {
         "MocapFrame"
     } else {
@@ -49,28 +52,68 @@ pub(crate) fn classify(key: &str) -> &'static str {
     }
 }
 
-/// Map a topic key suffix to the schema name we decode it as. Optical flow and
-/// everything else fall through to the raw passthrough.
-fn schema_for_suffix(suffix: &str) -> Option<&'static str> {
-    Some(match suffix {
-        "mocap_frame" => "MocapFrame",
-        "manual_control_command" => "ManualControl",
-        "radio_control" => "RadioControl",
-        "pwm_signal_outputs" => "PwmSignalOutputs",
-        "attitude_estimate" => "AttitudeEstimate",
-        "attitude_command" => "AttitudeCommand",
-        "navigation_target" => "NavigationTarget",
-        "control_loop_metrics" => "ControlLoopMetrics",
-        "vehicle_health" => "VehicleHealth",
-        "power_status" => "PowerStatus",
+/// Map a catalog topic name to the schema name we decode it as. Optical flow
+/// and everything else fall through to the raw passthrough.
+fn schema_for_topic(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "MocapFrame" => "MocapFrame",
+        "MocapPoseFrame" => "MocapPoseFrame",
+        "ManualControlCommand" => "ManualControl",
+        "RadioControl" => "RadioControl",
+        "PwmSignalOutputs" => "PwmSignalOutputs",
+        "AttitudeEstimate" => "AttitudeEstimate",
+        "AttitudeCommand" => "AttitudeCommand",
+        "NavigationTarget" => "NavigationTarget",
+        "ControlLoopMetrics" => "ControlLoopMetrics",
+        "VehicleHealth" => "VehicleHealth",
+        "PowerStatus" => "PowerStatus",
+        "RawPose" => "RawPose",
         _ => return None,
     })
 }
 
-/// Decode a Zenoh sample by key, falling back to a raw preview.
-pub(crate) fn decode(key: &str, bytes: &[u8]) -> Decoded {
+/// Enforce the mandatory value contract for catalog topics: the sample's
+/// Zenoh encoding must match the catalog contract exactly, and its wire type
+/// must belong to the topic the key names. Non-catalog keys carry no contract.
+fn contract_error(key: &str, encoding: Option<&str>) -> Option<String> {
+    let parsed = synapse_fbs::topic_catalog::parse_key(key)?;
+    let Some(encoding) = encoding else {
+        return Some(format!(
+            "missing value encoding for catalog topic {}",
+            parsed.topic.name
+        ));
+    };
+    // zenoh-pico stores an unregistered/custom media type as the schema on
+    // its default byte encoding, which round-trips as
+    // `zenoh/bytes;<original encoding>`.  Validate the complete inner
+    // Synapse contract while retaining strict rejection of every other
+    // prefix or suffix.
+    let normalized = encoding.strip_prefix("zenoh/bytes;").unwrap_or(encoding);
+    match synapse_fbs::value_contract::topic_for_encoding(normalized) {
+        Ok(topic) if topic.name == parsed.topic.name => None,
+        Ok(topic) => Some(format!(
+            "key names {} but value contract is for {}",
+            parsed.topic.name, topic.name
+        )),
+        Err(err) => Some(err.to_string()),
+    }
+}
+
+/// Decode a Zenoh sample by key, falling back to a raw preview. Catalog
+/// samples failing the value contract are surfaced raw with the reason, never
+/// decoded.
+pub(crate) fn decode(key: &str, encoding: Option<&str>, bytes: &[u8]) -> Decoded {
+    if let Some(reason) = contract_error(key, encoding) {
+        let mut payload = raw_payload(bytes);
+        payload["contractError"] = Value::String(reason);
+        return Decoded {
+            schema: "Raw",
+            payload,
+        };
+    }
     match classify(key) {
         "MocapFrame" => decode_or_raw("MocapFrame", bytes, decode_mocap_frame),
+        "MocapPoseFrame" => decode_or_raw("MocapPoseFrame", bytes, decode_mocap_pose_frame),
         "ManualControl" => decode_or_raw("ManualControl", bytes, decode_manual_control),
         "RadioControl" => decode_or_raw("RadioControl", bytes, decode_radio_control),
         "PwmSignalOutputs" => decode_or_raw("PwmSignalOutputs", bytes, decode_pwm_signal_outputs),
@@ -82,6 +125,7 @@ pub(crate) fn decode(key: &str, bytes: &[u8]) -> Decoded {
         }
         "VehicleHealth" => decode_or_raw("VehicleHealth", bytes, decode_vehicle_health),
         "PowerStatus" => decode_or_raw("PowerStatus", bytes, decode_power_status),
+        "RawPose" => decode_or_raw("RawPose", bytes, decode_raw_pose),
         schema => Decoded {
             schema,
             payload: raw_payload(bytes),
@@ -263,6 +307,20 @@ fn decode_power_status(bytes: &[u8]) -> Option<Value> {
     }))
 }
 
+fn decode_raw_pose(bytes: &[u8]) -> Option<Value> {
+    let data = decode_struct::<RawPoseData>(bytes, 40)?;
+    let pose = data.pose();
+    let position = pose.position_enu_m();
+    let attitude = pose.attitude();
+    Some(json!({
+        "data": {
+            "timestamp_us": data.timestamp_us(),
+            "position": { "x": position.x(), "y": position.y(), "z": position.z() },
+            "attitude": { "x": attitude.x(), "y": attitude.y(), "z": attitude.z(), "w": attitude.w() }
+        }
+    }))
+}
+
 fn decode_manual_control(bytes: &[u8]) -> Option<Value> {
     let data = decode_struct::<ManualControlData>(bytes, 40)?;
     let flags = ManualControlFlags::from_bits_retain(data.flags());
@@ -423,6 +481,43 @@ fn decode_mocap_frame(bytes: &[u8]) -> Option<Value> {
     }))
 }
 
+fn decode_mocap_pose_frame(bytes: &[u8]) -> Option<Value> {
+    let frame = root::<MocapPoseFrame>(bytes).ok()?;
+    let mut rigid_bodies = Vec::new();
+    if let Some(bodies) = frame.rigid_bodies() {
+        for body in bodies.iter() {
+            let pose = body.pose();
+            let p = pose.position_enu_m();
+            let q = pose.attitude();
+            let flags = MocapRawFlags::from_bits_retain(body.flags());
+            rigid_bodies.push(json!({
+                "id": body.id(),
+                "position": { "x": p.x(), "y": p.y(), "z": p.z() },
+                "attitude": { "x": q.x(), "y": q.y(), "z": q.z(), "w": q.w() },
+                "residual": body.residual_mm(),
+                "tracking_valid": flags.contains(MocapRawFlags::Valid)
+            }));
+        }
+    }
+    let mut labeled_markers = Vec::new();
+    if let Some(markers) = frame.markers() {
+        for marker in markers.iter() {
+            let p = marker.position_enu_m();
+            labeled_markers.push(json!({
+                "id": marker.id(),
+                "position": { "x": p.x(), "y": p.y(), "z": p.z() },
+                "residual": marker.residual_mm()
+            }));
+        }
+    }
+    Some(json!({
+        "timestamp_us": frame.timestamp_us(),
+        "frame_number": frame.frame_number(),
+        "rigid_bodies": rigid_bodies,
+        "labeled_markers": labeled_markers
+    }))
+}
+
 fn rotation_matrix_to_quaternion(rotation: &RotationMatrix3f) -> (f32, f32, f32, f32) {
     let trace = rotation.r11() + rotation.r22() + rotation.r33();
     let quaternion = if trace > 0.0 {
@@ -481,4 +576,18 @@ fn normalize_quaternion(quaternion: (f32, f32, f32, f32)) -> (f32, f32, f32, f32
         quaternion.2 / norm,
         quaternion.3 / norm,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contract_error;
+
+    #[test]
+    fn accepts_zenoh_pico_byte_wrapper_around_exact_contract() {
+        let parsed = synapse_fbs::topic_catalog::parse_key("pwm").expect("pwm catalog topic");
+        let expected = synapse_fbs::value_contract::encoding_for_topic(parsed.topic);
+        let wrapped = format!("zenoh/bytes;{expected}");
+
+        assert_eq!(contract_error("pwm", Some(&wrapped)), None);
+    }
 }

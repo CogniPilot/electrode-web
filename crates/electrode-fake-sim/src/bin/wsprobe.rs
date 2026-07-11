@@ -62,8 +62,9 @@ fn main() -> anyhow::Result<()> {
             Ok(sample) => {
                 let bytes = sample.payload().to_bytes();
                 println!(
-                    "wsprobe: SAMPLE key={} bytes={} {}",
+                    "wsprobe: SAMPLE key={} encoding={} bytes={} {}",
                     sample.key_expr(),
+                    sample.encoding(),
                     bytes.len(),
                     decode_sample(sample.key_expr().as_ref(), &bytes)
                 );

@@ -31,7 +31,7 @@ function telemetryFrame(topic: string, payload: unknown, nowMs: number): Telemet
 
 describe('state store telemetry pipeline', () => {
   it('derives vehicle state from raw Synapse telemetry frames', () => {
-    let state = createInitialVehicleState('cubs2');
+    let state = setMocapDisplaySource(createInitialVehicleState('cubs2'), 'raw');
     const first = makeSimulatedTelemetryBundle({
       vehicleId: 'cubs2',
       elapsedMs: 0,
@@ -66,11 +66,11 @@ describe('state store telemetry pipeline', () => {
     expect(state.link?.packetLossPct).toBeLessThan(20);
     expect(state.mode).toMatchObject({ name: 'manual', armed: true, failsafe: false });
     expect(state.localization).toMatchObject({ source: 'mocap', fresh: true });
-    expect(Object.keys(state.topics)).toContain('synapse/v1/topic/manual_control_command');
+    expect(Object.keys(state.topics)).toContain('manual');
   });
 
   it('keeps mocap attitude authoritative when estimator attitude also arrives', () => {
-    let state = createInitialVehicleState('cubs2');
+    let state = setMocapDisplaySource(createInitialVehicleState('cubs2'), 'raw');
     const mocap = telemetryFrame(
       'synapse/mocap/rigid_body/cub1/pose',
       {
@@ -86,7 +86,7 @@ describe('state store telemetry pipeline', () => {
       10_000
     );
     const estimate = telemetryFrame(
-      'synapse/v1/topic/attitude_estimate',
+      'att',
       {
         data: {
           attitude: { w: Math.SQRT1_2, x: 0, y: 0, z: Math.SQRT1_2 },
@@ -128,28 +128,16 @@ describe('state store telemetry pipeline', () => {
   });
 });
 
-describe('external odometry state handling', () => {
-  it('uses CUB1 external odometry for pose, attitude, and velocity', () => {
+describe('Qualisys raw pose state handling', () => {
+  it('uses qualisys/cub1/pose_raw for pose and attitude', () => {
     let state = createInitialVehicleState('cubs2');
     const frame = telemetryFrame(
-      'synapse/v1/topic/external_odometry/1',
+      'qualisys/cub1/pose_raw',
       {
         data: {
           timestamp_us: 1_000_000,
           position: { x: 10, y: 20, z: 3 },
           attitude: { w: 1, x: 0, y: 0, z: 0 },
-          linear_velocity: { x: 4, y: 5, z: 2 },
-          angular_velocity: { roll: 0.1, pitch: 0.2, yaw: 0.3 },
-          position_valid: true,
-          attitude_valid: true,
-          linear_velocity_valid: true,
-          angular_velocity_valid: true,
-          extrapolated: false,
-          degraded: false,
-          outlier_rejected: false,
-          lost: false,
-          source_id: 1,
-          id: 1
         }
       },
       10_000
@@ -159,25 +147,19 @@ describe('external odometry state handling', () => {
 
     expect(state.pose).toMatchObject({ xM: 10, yM: 20, altM: 3 });
     expect(state.attitude).toMatchObject({ rollDeg: 0, pitchDeg: -0, yawDeg: 0 });
-    expect(state.velocity).toMatchObject({
-      eastMps: 4,
-      northMps: 5,
-      downMps: -2,
-      groundSpeedMps: Math.hypot(4, 5)
-    });
     expect(state.localization).toMatchObject({
-      source: 'external odometry',
+      source: 'mocap',
       fresh: true,
       quality: 1
     });
   });
 
-  it('keeps fresh external odometry selected over incoming raw mocap frames', () => {
+  it('ignores the bridge estimate and keeps incoming raw mocap', () => {
     let state = createInitialVehicleState('cubs2');
     state = applyGcsFrame(
       state,
       telemetryFrame(
-        'synapse/v1/topic/external_odometry/1',
+        'qualisys/cub1/pose',
         {
           data: {
             position: { x: 10, y: 20, z: 3 },
@@ -213,14 +195,14 @@ describe('external odometry state handling', () => {
       10_005
     );
 
-    expect(state.localization).toMatchObject({ source: 'external odometry', fresh: true });
-    expect(state.pose).toMatchObject({ xM: 10, yM: 20, altM: 3 });
+    expect(state.localization).toMatchObject({ source: 'mocap', fresh: true });
+    expect(state.pose).toMatchObject({ xM: 99, yM: 88, altM: 7 });
   });
 
 });
 
 describe('mocap display source selection', () => {
-  it('keeps raw mocap selected when Auto receives a lost EKF sample', () => {
+  it('ignores lost external odometry and retains raw mocap', () => {
     let state = createInitialVehicleState('cubs2');
     state = applyGcsFrame(
       state,
@@ -234,7 +216,7 @@ describe('mocap display source selection', () => {
     state = applyGcsFrame(
       state,
       telemetryFrame(
-        'synapse/v1/topic/external_odometry/1',
+        'qualisys/cub1/pose',
         { data: { position_valid: false, lost: true, id: 1 } },
         10_005
       ),
@@ -245,12 +227,12 @@ describe('mocap display source selection', () => {
     expect(state.pose).toMatchObject({ xM: 2, yM: 3, altM: 4 });
   });
 
-  it('lets the operator select raw mocap over external odometry', () => {
+  it('keeps raw mocap authoritative over external odometry', () => {
     let state = setMocapDisplaySource(createInitialVehicleState('cubs2'), 'raw');
     state = applyGcsFrame(
       state,
       telemetryFrame(
-        'synapse/v1/topic/external_odometry/1',
+        'qualisys/cub1/pose',
         { data: { position: { x: 10, y: 20, z: 3 }, position_valid: true, id: 1 } },
         10_000
       ),
@@ -281,7 +263,7 @@ describe('mocap display source selection', () => {
 
 describe('mocap state handling', () => {
   it('preserves the last mocap pose when rigid body 0 becomes invalid', () => {
-    let state = createInitialVehicleState('cubs2');
+    let state = setMocapDisplaySource(createInitialVehicleState('cubs2'), 'raw');
     const valid = telemetryFrame(
       'synapse/mocap/frame',
       {

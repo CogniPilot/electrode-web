@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { AttitudeCommandData } from '../../synapse/topic/attitude-command-data.js';
+import { AttitudeCommandData, AttitudeCommandDataT } from '../../synapse/topic/attitude-command-data';
 
 
 export class AttitudeCommand {
@@ -45,5 +45,29 @@ static createAttitudeCommand(builder:flatbuffers.Builder, dataOffset:flatbuffers
   AttitudeCommand.startAttitudeCommand(builder);
   AttitudeCommand.addData(builder, dataOffset);
   return AttitudeCommand.endAttitudeCommand(builder);
+}
+
+unpack(): AttitudeCommandT {
+  return new AttitudeCommandT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: AttitudeCommandT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class AttitudeCommandT {
+constructor(
+  public data: AttitudeCommandDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return AttitudeCommand.createAttitudeCommand(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }
