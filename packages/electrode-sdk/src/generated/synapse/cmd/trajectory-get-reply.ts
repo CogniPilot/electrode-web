@@ -2,8 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { TrajectorySegmentData } from '../../synapse/topic/trajectory-segment-data.js';
-import { CommandResultCode } from '../../synapse/types/command-result-code.js';
+import { TrajectorySegmentData, TrajectorySegmentDataT } from '../../synapse/topic/trajectory-segment-data';
+import { CommandResultCode } from '../../synapse/types/command-result-code';
 
 
 export class TrajectoryGetReply {
@@ -135,5 +135,63 @@ static createTrajectoryGetReply(builder:flatbuffers.Builder, result:CommandResul
   TrajectoryGetReply.addFlags(builder, flags);
   TrajectoryGetReply.addSegments(builder, segmentsOffset);
   return TrajectoryGetReply.endTrajectoryGetReply(builder);
+}
+
+unpack(): TrajectoryGetReplyT {
+  return new TrajectoryGetReplyT(
+    this.result(),
+    this.trajectoryId(),
+    this.planVersion(),
+    this.offset(),
+    this.total(),
+    this.resultDetail(),
+    this.failedSeq(),
+    this.flags(),
+    this.bb!.createObjList(this.segments.bind(this), this.segmentsLength())
+  );
+}
+
+
+unpackTo(_o: TrajectoryGetReplyT): void {
+  _o.result = this.result();
+  _o.trajectoryId = this.trajectoryId();
+  _o.planVersion = this.planVersion();
+  _o.offset = this.offset();
+  _o.total = this.total();
+  _o.resultDetail = this.resultDetail();
+  _o.failedSeq = this.failedSeq();
+  _o.flags = this.flags();
+  _o.segments = this.bb!.createObjList(this.segments.bind(this), this.segmentsLength());
+}
+}
+
+export class TrajectoryGetReplyT {
+constructor(
+  public result: CommandResultCode = CommandResultCode.Accepted,
+  public trajectoryId: number = 0,
+  public planVersion: number = 0,
+  public offset: number = 0,
+  public total: number = 0,
+  public resultDetail: number = 0,
+  public failedSeq: number = 0,
+  public flags: number = 0,
+  public segments: (TrajectorySegmentDataT)[] = []
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  const segments = builder.createStructOffsetList(this.segments, TrajectoryGetReply.startSegmentsVector);
+
+  return TrajectoryGetReply.createTrajectoryGetReply(builder,
+    this.result,
+    this.trajectoryId,
+    this.planVersion,
+    this.offset,
+    this.total,
+    this.resultDetail,
+    this.failedSeq,
+    this.flags,
+    segments
+  );
 }
 }

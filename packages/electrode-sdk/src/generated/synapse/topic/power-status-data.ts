@@ -2,10 +2,10 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { BatteryCellVoltages16 } from '../../synapse/topic/battery-cell-voltages16.js';
-import { BatteryChargeState } from '../../synapse/types/battery-charge-state.js';
-import { BatteryFunction } from '../../synapse/types/battery-function.js';
-import { BatteryType } from '../../synapse/types/battery-type.js';
+import { BatteryCellVoltages16, BatteryCellVoltages16T } from '../../synapse/topic/battery-cell-voltages16';
+import { BatteryChargeState } from '../../synapse/types/battery-charge-state';
+import { BatteryFunction } from '../../synapse/types/battery-function';
+import { BatteryType } from '../../synapse/types/battery-type';
 
 
 export class PowerStatusData {
@@ -112,4 +112,95 @@ static createPowerStatusData(builder:flatbuffers.Builder, timestamp_us: bigint, 
   return builder.offset();
 }
 
+
+unpack(): PowerStatusDataT {
+  return new PowerStatusDataT(
+    this.timestampUs(),
+    (this.voltages() !== null ? this.voltages()!.unpack() : null),
+    this.currentConsumedMah(),
+    this.energyConsumedHj(),
+    this.timeRemainingS(),
+    this.faultFlags(),
+    this.currentBatteryDa(),
+    this.temperatureCdeg(),
+    this.remainingPct(),
+    this.id(),
+    this.batteryFunction(),
+    this.batteryType(),
+    this.chargeState(),
+    this.connected()
+  );
+}
+
+
+unpackTo(_o: PowerStatusDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.voltages = (this.voltages() !== null ? this.voltages()!.unpack() : null);
+  _o.currentConsumedMah = this.currentConsumedMah();
+  _o.energyConsumedHj = this.energyConsumedHj();
+  _o.timeRemainingS = this.timeRemainingS();
+  _o.faultFlags = this.faultFlags();
+  _o.currentBatteryDa = this.currentBatteryDa();
+  _o.temperatureCdeg = this.temperatureCdeg();
+  _o.remainingPct = this.remainingPct();
+  _o.id = this.id();
+  _o.batteryFunction = this.batteryFunction();
+  _o.batteryType = this.batteryType();
+  _o.chargeState = this.chargeState();
+  _o.connected = this.connected();
+}
+}
+
+export class PowerStatusDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public voltages: BatteryCellVoltages16T|null = null,
+  public currentConsumedMah: number = 0,
+  public energyConsumedHj: number = 0,
+  public timeRemainingS: number = 0,
+  public faultFlags: number = 0,
+  public currentBatteryDa: number = 0,
+  public temperatureCdeg: number = 0,
+  public remainingPct: number = 0,
+  public id: number = 0,
+  public batteryFunction: BatteryFunction = BatteryFunction.Unknown,
+  public batteryType: BatteryType = BatteryType.Unknown,
+  public chargeState: BatteryChargeState = BatteryChargeState.Unknown,
+  public connected: boolean = false
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return PowerStatusData.createPowerStatusData(builder,
+    this.timestampUs,
+    (this.voltages?.cell0Mv ?? 0),
+    (this.voltages?.cell1Mv ?? 0),
+    (this.voltages?.cell2Mv ?? 0),
+    (this.voltages?.cell3Mv ?? 0),
+    (this.voltages?.cell4Mv ?? 0),
+    (this.voltages?.cell5Mv ?? 0),
+    (this.voltages?.cell6Mv ?? 0),
+    (this.voltages?.cell7Mv ?? 0),
+    (this.voltages?.cell8Mv ?? 0),
+    (this.voltages?.cell9Mv ?? 0),
+    (this.voltages?.cell10Mv ?? 0),
+    (this.voltages?.cell11Mv ?? 0),
+    (this.voltages?.cell12Mv ?? 0),
+    (this.voltages?.cell13Mv ?? 0),
+    (this.voltages?.cell14Mv ?? 0),
+    (this.voltages?.cell15Mv ?? 0),
+    this.currentConsumedMah,
+    this.energyConsumedHj,
+    this.timeRemainingS,
+    this.faultFlags,
+    this.currentBatteryDa,
+    this.temperatureCdeg,
+    this.remainingPct,
+    this.id,
+    this.batteryFunction,
+    this.batteryType,
+    this.chargeState,
+    this.connected
+  );
+}
 }

@@ -149,7 +149,30 @@ const ELECTRODE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
 
 const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
   {
-    topic: 'synapse/v1/topic/manual_control_command',
+    topic: 'external_pose/1',
+    schema: 'synapse.topic.ExternalOdometry',
+    label: 'ExternalOdometry CUB1',
+    source: 'synapse_fbs',
+    fields: [
+      numberField('data.timestamp_us', 'Timestamp', 'us'),
+      ...vec3Fields('data.position', 'Position ENU', 'm'),
+      ...quatFields('data.attitude', 'Attitude'),
+      ...vec3Fields('data.linear_velocity', 'Linear velocity ENU', 'm/s'),
+      ...rateFields('data.angular_velocity', 'Angular velocity FLU'),
+      numberField('data.flags', 'Flags', ''),
+      numberField('data.source_id', 'Source ID', ''),
+      numberField('data.id', 'Rigid body ID', ''),
+      booleanField('data.position_valid', 'Position valid'),
+      booleanField('data.attitude_valid', 'Attitude valid'),
+      booleanField('data.linear_velocity_valid', 'Linear velocity valid'),
+      booleanField('data.angular_velocity_valid', 'Angular velocity valid'),
+      booleanField('data.extrapolated', 'Extrapolated'),
+      booleanField('data.degraded', 'Degraded'),
+      booleanField('data.lost', 'Lost')
+    ]
+  },
+  {
+    topic: 'manual',
     schema: 'synapse.topic.ManualControlCommand',
     label: 'ManualControl',
     source: 'synapse_fbs',
@@ -166,7 +189,7 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     ]
   },
   {
-    topic: 'synapse/v1/topic/attitude_estimate',
+    topic: 'att',
     schema: 'synapse.topic.AttitudeEstimate',
     label: 'AttitudeEstimate',
     source: 'synapse_fbs',
@@ -179,7 +202,7 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     ]
   },
   {
-    topic: 'synapse/v1/topic/vehicle_health',
+    topic: 'health',
     schema: 'synapse.topic.VehicleHealth',
     label: 'VehicleHealth',
     source: 'synapse_fbs',
@@ -197,7 +220,7 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     ]
   },
   {
-    topic: 'synapse/v1/topic/power_status',
+    topic: 'power',
     schema: 'synapse.topic.PowerStatus',
     label: 'PowerStatus',
     source: 'synapse_fbs',
@@ -211,7 +234,7 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     ]
   },
   {
-    topic: 'synapse/v1/topic/pwm_signal_outputs',
+    topic: 'pwm',
     schema: 'synapse.topic.PwmSignalOutputs',
     label: 'PwmSignalOutputs',
     source: 'synapse_fbs',
@@ -223,7 +246,7 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     ]
   },
   {
-    topic: 'synapse/v1/topic/radio_control',
+    topic: 'rc',
     schema: 'synapse.topic.RadioControl',
     label: 'RadioControl',
     source: 'synapse_fbs',
@@ -259,7 +282,7 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     ]
   },
   {
-    topic: 'synapse/v1/topic/optical_flow',
+    topic: 'flow',
     schema: 'synapse.topic.OpticalFlow',
     label: 'OpticalFlow',
     source: 'synapse_fbs',
@@ -276,7 +299,7 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     ]
   },
   {
-    topic: 'synapse/v1/topic/optical_flow_velocity',
+    topic: 'flow_vel',
     schema: 'synapse.topic.OpticalFlowVelocity',
     label: 'OpticalFlowVelocity',
     source: 'synapse_fbs',
@@ -290,7 +313,7 @@ const SYNAPSE_PACKET_TEMPLATES: KnownPacketTemplate[] = [
     ]
   },
   {
-    topic: 'synapse/v1/topic/lockstep_tick',
+    topic: 'tick',
     schema: 'synapse.topic.LockstepTick',
     label: 'LockstepTick',
     source: 'synapse_fbs',

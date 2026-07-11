@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { LockstepTickData } from '../../synapse/topic/lockstep-tick-data.js';
+import { LockstepTickData, LockstepTickDataT } from '../../synapse/topic/lockstep-tick-data';
 
 
 export class LockstepTick {
@@ -45,5 +45,29 @@ static createLockstepTick(builder:flatbuffers.Builder, dataOffset:flatbuffers.Of
   LockstepTick.startLockstepTick(builder);
   LockstepTick.addData(builder, dataOffset);
   return LockstepTick.endLockstepTick(builder);
+}
+
+unpack(): LockstepTickT {
+  return new LockstepTickT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: LockstepTickT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class LockstepTickT {
+constructor(
+  public data: LockstepTickDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return LockstepTick.createLockstepTick(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

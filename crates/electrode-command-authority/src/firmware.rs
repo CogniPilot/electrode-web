@@ -7,9 +7,17 @@
 //! replace firmware.
 
 use anyhow::{anyhow, bail, Context, Result};
-use flatbuffers::{FlatBufferBuilder, VOffsetT, WIPOffset};
+use flatbuffers::{FlatBufferBuilder, WIPOffset};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
+use synapse_fbs::cmd::{
+    FirmwareChunkReply, FirmwareChunkRequest, FirmwareChunkRequestArgs, FirmwareCommitReply,
+    FirmwareCommitRequest, FirmwareCommitRequestArgs, FirmwareInfoReply, FirmwareInfoRequest,
+    FirmwareInfoRequestArgs, FirmwarePrepareReply, FirmwarePrepareRequest,
+    FirmwarePrepareRequestArgs, FirmwareStatusReply, FirmwareStatusRequest,
+    FirmwareStatusRequestArgs,
+};
+use synapse_fbs::types::CommandResultCode;
 use zenoh::{Session, Wait};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,17 +100,7 @@ pub struct FirmwareCommitUpload {
     pub image_sha256: String,
 }
 
-const RESULT_ACCEPTED: u8 = 0;
-const RESULT_IN_PROGRESS: u8 = 5;
-
-fn slot(index: usize) -> VOffsetT {
-    (4 + index * 2) as VOffsetT
-}
-
-fn finish_table(
-    builder: &mut FlatBufferBuilder<'_>,
-    table: WIPOffset<flatbuffers::TableFinishedWIPOffset>,
-) -> Vec<u8> {
+fn finish_table<T>(builder: &mut FlatBufferBuilder<'_>, table: WIPOffset<T>) -> Vec<u8> {
     builder.finish(table, None);
     builder.finished_data().to_vec()
 }
@@ -110,9 +108,12 @@ fn finish_table(
 fn build_info_request(target: &str) -> Vec<u8> {
     let mut builder = FlatBufferBuilder::new();
     let target = builder.create_string(target);
-    let start = builder.start_table();
-    builder.push_slot_always(slot(0), target);
-    let table = builder.end_table(start);
+    let table = FirmwareInfoRequest::create(
+        &mut builder,
+        &FirmwareInfoRequestArgs {
+            target: Some(target),
+        },
+    );
     finish_table(&mut builder, table)
 }
 
@@ -136,18 +137,22 @@ fn build_prepare_request(
     let image_sha256 = builder.create_string(image_sha256);
     let selective_sha256 = builder.create_string(selective_sha256);
     let manifest = builder.create_string("{}");
-    let start = builder.start_table();
-    builder.push_slot_always(slot(0), update_id);
-    builder.push_slot_always(slot(1), target);
-    builder.push_slot_always(slot(2), board_id);
-    builder.push_slot_always(slot(3), version);
-    builder.push_slot(slot(4), image_size as u64, 0);
-    builder.push_slot_always(slot(5), image_sha256);
-    builder.push_slot_always(slot(6), selective_sha256);
-    builder.push_slot(slot(7), chunk_size as u32, 0);
-    builder.push_slot(slot(8), chunk_count as u32, 0);
-    builder.push_slot_always(slot(10), manifest);
-    let table = builder.end_table(start);
+    let table = FirmwarePrepareRequest::create(
+        &mut builder,
+        &FirmwarePrepareRequestArgs {
+            update_id: Some(update_id),
+            target: Some(target),
+            board_id: Some(board_id),
+            version: Some(version),
+            image_size: image_size as u64,
+            image_sha256: Some(image_sha256),
+            selective_sha256: Some(selective_sha256),
+            requested_chunk_size: chunk_size as u32,
+            chunk_count: chunk_count as u32,
+            signature: None,
+            manifest: Some(manifest),
+        },
+    );
     finish_table(&mut builder, table)
 }
 
@@ -155,198 +160,102 @@ fn build_commit_request(update_id: &str, image_sha256: &str) -> Vec<u8> {
     let mut builder = FlatBufferBuilder::new();
     let update_id = builder.create_string(update_id);
     let image_sha256 = builder.create_string(image_sha256);
-    let start = builder.start_table();
-    builder.push_slot_always(slot(0), update_id);
-    builder.push_slot_always(slot(1), image_sha256);
-    let table = builder.end_table(start);
+    let table = FirmwareCommitRequest::create(
+        &mut builder,
+        &FirmwareCommitRequestArgs {
+            update_id: Some(update_id),
+            image_sha256: Some(image_sha256),
+        },
+    );
     finish_table(&mut builder, table)
 }
 
 fn build_status_request(update_id: &str) -> Vec<u8> {
     let mut builder = FlatBufferBuilder::new();
     let update_id = builder.create_string(update_id);
-    let start = builder.start_table();
-    builder.push_slot_always(slot(0), update_id);
-    let table = builder.end_table(start);
+    let table = FirmwareStatusRequest::create(
+        &mut builder,
+        &FirmwareStatusRequestArgs {
+            update_id: Some(update_id),
+        },
+    );
     finish_table(&mut builder, table)
 }
 
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
-    let raw: [u8; 2] = bytes
-        .get(offset..offset + 2)
-        .ok_or_else(|| anyhow!("FlatBuffer u16 is out of range"))?
-        .try_into()?;
-    Ok(u16::from_le_bytes(raw))
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
-    let raw: [u8; 4] = bytes
-        .get(offset..offset + 4)
-        .ok_or_else(|| anyhow!("FlatBuffer u32 is out of range"))?
-        .try_into()?;
-    Ok(u32::from_le_bytes(raw))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
-    let raw: [u8; 8] = bytes
-        .get(offset..offset + 8)
-        .ok_or_else(|| anyhow!("FlatBuffer u64 is out of range"))?
-        .try_into()?;
-    Ok(u64::from_le_bytes(raw))
-}
-
-fn field_position(bytes: &[u8], field: usize) -> Result<Option<usize>> {
-    let table = read_u32(bytes, 0)? as usize;
-    if table < 4 || table + 4 > bytes.len() {
-        bail!("FlatBuffer root table offset is invalid");
-    }
-    let vtable_distance = read_u32(bytes, table)? as usize;
-    let vtable = table
-        .checked_sub(vtable_distance)
-        .ok_or_else(|| anyhow!("FlatBuffer vtable offset is invalid"))?;
-    let vtable_size = read_u16(bytes, vtable)? as usize;
-    let object_size = read_u16(bytes, vtable + 2)? as usize;
-    if vtable_size < 4
-        || vtable + vtable_size > bytes.len()
-        || object_size < 4
-        || table + object_size > bytes.len()
-    {
-        bail!("FlatBuffer table bounds are invalid");
-    }
-    let entry = 4 + field * 2;
-    if entry + 2 > vtable_size {
-        return Ok(None);
-    }
-    let field_offset = read_u16(bytes, vtable + entry)? as usize;
-    if field_offset == 0 {
-        return Ok(None);
-    }
-    if field_offset >= object_size {
-        bail!("FlatBuffer field lies outside its table object");
-    }
-    let position = table + field_offset;
-    if position >= bytes.len() {
-        bail!("FlatBuffer field offset is out of range");
-    }
-    Ok(Some(position))
-}
-
-fn table_string(bytes: &[u8], field: usize) -> Result<String> {
-    let Some(position) = field_position(bytes, field)? else {
-        return Ok(String::new());
-    };
-    let target = position
-        .checked_add(read_u32(bytes, position)? as usize)
-        .ok_or_else(|| anyhow!("FlatBuffer string offset overflow"))?;
-    let length = read_u32(bytes, target)? as usize;
-    let start = target
-        .checked_add(4)
-        .ok_or_else(|| anyhow!("FlatBuffer string offset overflow"))?;
-    let end = start
-        .checked_add(length)
-        .ok_or_else(|| anyhow!("FlatBuffer string length overflow"))?;
-    let value = bytes
-        .get(start..end)
-        .ok_or_else(|| anyhow!("FlatBuffer string is out of range"))?;
-    String::from_utf8(value.to_vec())
-        .map_err(|err| anyhow!("FlatBuffer string is not UTF-8: {err}"))
-}
-
-fn table_bytes(bytes: &[u8], field: usize) -> Result<Vec<u8>> {
-    let Some(position) = field_position(bytes, field)? else {
-        return Ok(Vec::new());
-    };
-    let target = position
-        .checked_add(read_u32(bytes, position)? as usize)
-        .ok_or_else(|| anyhow!("FlatBuffer vector offset overflow"))?;
-    let length = read_u32(bytes, target)? as usize;
-    let start = target
-        .checked_add(4)
-        .ok_or_else(|| anyhow!("FlatBuffer vector offset overflow"))?;
-    let end = start
-        .checked_add(length)
-        .ok_or_else(|| anyhow!("FlatBuffer vector length overflow"))?;
-    Ok(bytes
-        .get(start..end)
-        .ok_or_else(|| anyhow!("FlatBuffer vector is out of range"))?
-        .to_vec())
-}
-
-fn table_u32(bytes: &[u8], field: usize) -> Result<u32> {
-    match field_position(bytes, field)? {
-        Some(position) => read_u32(bytes, position),
-        None => Ok(0),
-    }
-}
-
-fn table_u64(bytes: &[u8], field: usize) -> Result<u64> {
-    match field_position(bytes, field)? {
-        Some(position) => read_u64(bytes, position),
-        None => Ok(0),
-    }
-}
-
-fn table_bool(bytes: &[u8], field: usize) -> Result<bool> {
-    match field_position(bytes, field)? {
-        Some(position) => Ok(*bytes
-            .get(position)
-            .ok_or_else(|| anyhow!("FlatBuffer bool is out of range"))?
-            != 0),
-        None => Ok(false),
-    }
-}
-
 pub fn decode_firmware_prepare_upload(bytes: &[u8]) -> Result<FirmwarePrepareUpload> {
+    let request = flatbuffers::root::<FirmwarePrepareRequest<'_>>(bytes)
+        .context("decode FirmwarePrepareRequest")?;
     Ok(FirmwarePrepareUpload {
-        update_id: table_string(bytes, 0)?,
-        version: table_string(bytes, 3)?,
-        image_size: table_u64(bytes, 4)?,
-        image_sha256: table_string(bytes, 5)?,
-        requested_chunk_size: table_u32(bytes, 7)?,
-        chunk_count: table_u32(bytes, 8)?,
+        update_id: request.update_id().unwrap_or_default().to_string(),
+        version: request.version().unwrap_or_default().to_string(),
+        image_size: request.image_size(),
+        image_sha256: request.image_sha256().unwrap_or_default().to_string(),
+        requested_chunk_size: request.requested_chunk_size(),
+        chunk_count: request.chunk_count(),
     })
 }
 
 pub fn decode_firmware_chunk_upload(bytes: &[u8]) -> Result<FirmwareChunkUpload> {
+    let request = flatbuffers::root::<FirmwareChunkRequest<'_>>(bytes)
+        .context("decode FirmwareChunkRequest")?;
     Ok(FirmwareChunkUpload {
-        update_id: table_string(bytes, 0)?,
-        chunk_index: table_u32(bytes, 1)?,
-        offset: table_u64(bytes, 2)?,
-        data: table_bytes(bytes, 3)?,
-        chunk_sha256: table_string(bytes, 4)?,
-        final_chunk: table_bool(bytes, 5)?,
+        update_id: request.update_id().unwrap_or_default().to_string(),
+        chunk_index: request.chunk_index(),
+        offset: request.offset(),
+        data: request
+            .data()
+            .map(|data| data.iter().collect())
+            .unwrap_or_default(),
+        chunk_sha256: request.chunk_sha256().unwrap_or_default().to_string(),
+        final_chunk: request.final_chunk(),
     })
 }
 
 pub fn decode_firmware_commit_upload(bytes: &[u8]) -> Result<FirmwareCommitUpload> {
+    let request = flatbuffers::root::<FirmwareCommitRequest<'_>>(bytes)
+        .context("decode FirmwareCommitRequest")?;
     Ok(FirmwareCommitUpload {
-        update_id: table_string(bytes, 0)?,
-        image_sha256: table_string(bytes, 1)?,
+        update_id: request.update_id().unwrap_or_default().to_string(),
+        image_sha256: request.image_sha256().unwrap_or_default().to_string(),
     })
 }
 
-fn reply_u8(bytes: &[u8], field: usize, default: u8) -> Result<u8> {
-    Ok(match field_position(bytes, field)? {
-        Some(position) => *bytes
-            .get(position)
-            .ok_or_else(|| anyhow!("FlatBuffer u8 is out of range"))?,
-        None => default,
-    })
-}
-
-fn reply_u32(bytes: &[u8], field: usize, default: u32) -> Result<u32> {
-    match field_position(bytes, field)? {
-        Some(position) => read_u32(bytes, position),
-        None => Ok(default),
-    }
-}
-
-fn require_accepted(bytes: &[u8], operation: &str) -> Result<()> {
-    let result = reply_u8(bytes, 0, RESULT_ACCEPTED)?;
-    if result == RESULT_ACCEPTED || result == RESULT_IN_PROGRESS {
+fn require_accepted(result: CommandResultCode, operation: &str) -> Result<()> {
+    if result == CommandResultCode::Accepted || result == CommandResultCode::InProgress {
         return Ok(());
     }
-    bail!("{operation} rejected with firmware result code {result}")
+    bail!("{operation} rejected with firmware result code {result:?}")
+}
+
+fn accept_info_reply(bytes: &[u8]) -> Result<u32> {
+    let reply =
+        flatbuffers::root::<FirmwareInfoReply<'_>>(bytes).context("decode FirmwareInfoReply")?;
+    require_accepted(reply.result(), "info")?;
+    Ok(reply.max_chunk_size())
+}
+
+fn accept_prepare_reply(bytes: &[u8]) -> Result<()> {
+    let reply = flatbuffers::root::<FirmwarePrepareReply<'_>>(bytes)
+        .context("decode FirmwarePrepareReply")?;
+    require_accepted(reply.result(), "prepare")
+}
+
+fn accept_chunk_reply(bytes: &[u8], operation: &str) -> Result<()> {
+    let reply =
+        flatbuffers::root::<FirmwareChunkReply<'_>>(bytes).context("decode FirmwareChunkReply")?;
+    require_accepted(reply.result(), operation)
+}
+
+fn accept_commit_reply(bytes: &[u8]) -> Result<()> {
+    let reply = flatbuffers::root::<FirmwareCommitReply<'_>>(bytes)
+        .context("decode FirmwareCommitReply")?;
+    require_accepted(reply.result(), "commit")
+}
+
+fn accept_status_reply(bytes: &[u8]) -> Result<()> {
+    let reply = flatbuffers::root::<FirmwareStatusReply<'_>>(bytes)
+        .context("decode FirmwareStatusReply")?;
+    require_accepted(reply.result(), "status")
 }
 
 pub fn query_payload(
@@ -355,10 +264,14 @@ pub fn query_payload(
     payload: Vec<u8>,
     timeout: Duration,
 ) -> Result<Vec<u8>> {
-    let replies = session
-        .get(key)
-        .payload(payload)
-        .timeout(timeout)
+    let mut request = session.get(key).payload(payload).timeout(timeout);
+    // Stamp the synapse request contract when the key names a catalog
+    // command (`<ns>/cmd/firmware_<op>`).
+    let command_name = key.rsplit('/').next().unwrap_or(key);
+    if let Some(encoding) = crate::policy::command_request_encoding(command_name) {
+        request = request.encoding(zenoh::bytes::Encoding::from(encoding));
+    }
+    let replies = request
         .wait()
         .map_err(|err| anyhow!("send firmware query {key}: {err}"))?;
     let reply = replies
@@ -400,8 +313,7 @@ where
         build_info_request(&config.target),
         config.timeout,
     )?;
-    require_accepted(&info, "info")?;
-    let receiver_max = reply_u32(&info, 8, config.chunk_size as u32)? as usize;
+    let receiver_max = accept_info_reply(&info)? as usize;
     let chunk_size = if receiver_max > 0 {
         config.chunk_size.min(receiver_max)
     } else {
@@ -428,7 +340,7 @@ where
         ),
         config.timeout,
     )?;
-    require_accepted(&prepare, "prepare")?;
+    accept_prepare_reply(&prepare)?;
     progress("prepare", 5, "Firmware update prepared.");
 
     for (chunk_index, data) in image.chunks(chunk_size).enumerate() {
@@ -444,10 +356,8 @@ where
                 payload.clone(),
                 config.timeout,
             )
-            .and_then(|reply| {
-                require_accepted(&reply, &format!("chunk {chunk_index}"))?;
-                Ok(reply)
-            }) {
+            .and_then(|reply| accept_chunk_reply(&reply, &format!("chunk {chunk_index}")))
+            {
                 Ok(_) => {
                     last_error = None;
                     break;
@@ -478,7 +388,7 @@ where
         build_commit_request(update_id, &image_sha256),
         config.timeout,
     )?;
-    require_accepted(&commit, "commit")?;
+    accept_commit_reply(&commit)?;
     progress("commit", 96, "Firmware image committed.");
 
     let status = query_payload(
@@ -487,7 +397,7 @@ where
         build_status_request(update_id),
         config.timeout,
     )?;
-    require_accepted(&status, "status")?;
+    accept_status_reply(&status)?;
     progress("complete", 100, "Firmware update transfer complete.");
 
     Ok(TransferResult {
@@ -508,14 +418,17 @@ fn build_chunk_request_with_hash(
     let update_id = builder.create_string(update_id);
     let data = builder.create_vector(data);
     let chunk_sha256 = builder.create_string(&chunk_hash);
-    let start = builder.start_table();
-    builder.push_slot_always(slot(0), update_id);
-    builder.push_slot(slot(1), chunk_index as u32, 0);
-    builder.push_slot(slot(2), offset as u64, 0);
-    builder.push_slot_always(slot(3), data);
-    builder.push_slot_always(slot(4), chunk_sha256);
-    builder.push_slot(slot(5), final_chunk, false);
-    let table = builder.end_table(start);
+    let table = FirmwareChunkRequest::create(
+        &mut builder,
+        &FirmwareChunkRequestArgs {
+            update_id: Some(update_id),
+            chunk_index: chunk_index as u32,
+            offset: offset as u64,
+            data: Some(data),
+            chunk_sha256: Some(chunk_sha256),
+            final_chunk,
+        },
+    );
     finish_table(&mut builder, table)
 }
 
@@ -788,8 +701,8 @@ mod tests {
     #[test]
     fn firmware_service_keys_use_canonical_schema_names() {
         assert_eq!(
-            firmware_key("synapse/v1/cmd/firmware", "prepare"),
-            "synapse/v1/cmd/firmware_prepare"
+            firmware_key("cmd/firmware", "prepare"),
+            "cmd/firmware_prepare"
         );
     }
 

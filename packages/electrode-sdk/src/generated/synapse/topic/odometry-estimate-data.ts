@@ -2,10 +2,10 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { CovarianceUpperTriangle21f } from '../../synapse/types/covariance-upper-triangle21f.js';
-import { Quaternionf } from '../../synapse/types/quaternionf.js';
-import { RateTriplet } from '../../synapse/types/rate-triplet.js';
-import { Vec3f } from '../../synapse/types/vec3f.js';
+import { CovarianceUpperTriangle21f, CovarianceUpperTriangle21fT } from '../../synapse/types/covariance-upper-triangle21f';
+import { Quaternionf, QuaternionfT } from '../../synapse/types/quaternionf';
+import { RateTriplet, RateTripletT } from '../../synapse/types/rate-triplet';
+import { Vec3f, Vec3fT } from '../../synapse/types/vec3f';
 
 
 export class OdometryEstimateData {
@@ -132,4 +132,113 @@ static createOdometryEstimateData(builder:flatbuffers.Builder, timestamp_us: big
   return builder.offset();
 }
 
+
+unpack(): OdometryEstimateDataT {
+  return new OdometryEstimateDataT(
+    this.timestampUs(),
+    (this.positionEnuM() !== null ? this.positionEnuM()!.unpack() : null),
+    (this.attitude() !== null ? this.attitude()!.unpack() : null),
+    (this.velocityEnuMS() !== null ? this.velocityEnuMS()!.unpack() : null),
+    (this.angularVelocityFluRadS() !== null ? this.angularVelocityFluRadS()!.unpack() : null),
+    (this.poseCovariance() !== null ? this.poseCovariance()!.unpack() : null),
+    (this.velocityCovariance() !== null ? this.velocityCovariance()!.unpack() : null),
+    this.resetCounter(),
+    this.estimatorType(),
+    this.qualityPct()
+  );
+}
+
+
+unpackTo(_o: OdometryEstimateDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.positionEnuM = (this.positionEnuM() !== null ? this.positionEnuM()!.unpack() : null);
+  _o.attitude = (this.attitude() !== null ? this.attitude()!.unpack() : null);
+  _o.velocityEnuMS = (this.velocityEnuMS() !== null ? this.velocityEnuMS()!.unpack() : null);
+  _o.angularVelocityFluRadS = (this.angularVelocityFluRadS() !== null ? this.angularVelocityFluRadS()!.unpack() : null);
+  _o.poseCovariance = (this.poseCovariance() !== null ? this.poseCovariance()!.unpack() : null);
+  _o.velocityCovariance = (this.velocityCovariance() !== null ? this.velocityCovariance()!.unpack() : null);
+  _o.resetCounter = this.resetCounter();
+  _o.estimatorType = this.estimatorType();
+  _o.qualityPct = this.qualityPct();
+}
+}
+
+export class OdometryEstimateDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public positionEnuM: Vec3fT|null = null,
+  public attitude: QuaternionfT|null = null,
+  public velocityEnuMS: Vec3fT|null = null,
+  public angularVelocityFluRadS: RateTripletT|null = null,
+  public poseCovariance: CovarianceUpperTriangle21fT|null = null,
+  public velocityCovariance: CovarianceUpperTriangle21fT|null = null,
+  public resetCounter: number = 0,
+  public estimatorType: number = 0,
+  public qualityPct: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return OdometryEstimateData.createOdometryEstimateData(builder,
+    this.timestampUs,
+    (this.positionEnuM?.x ?? 0),
+    (this.positionEnuM?.y ?? 0),
+    (this.positionEnuM?.z ?? 0),
+    (this.attitude?.w ?? 0),
+    (this.attitude?.x ?? 0),
+    (this.attitude?.y ?? 0),
+    (this.attitude?.z ?? 0),
+    (this.velocityEnuMS?.x ?? 0),
+    (this.velocityEnuMS?.y ?? 0),
+    (this.velocityEnuMS?.z ?? 0),
+    (this.angularVelocityFluRadS?.roll ?? 0),
+    (this.angularVelocityFluRadS?.pitch ?? 0),
+    (this.angularVelocityFluRadS?.yaw ?? 0),
+    (this.poseCovariance?.c0 ?? 0),
+    (this.poseCovariance?.c1 ?? 0),
+    (this.poseCovariance?.c2 ?? 0),
+    (this.poseCovariance?.c3 ?? 0),
+    (this.poseCovariance?.c4 ?? 0),
+    (this.poseCovariance?.c5 ?? 0),
+    (this.poseCovariance?.c6 ?? 0),
+    (this.poseCovariance?.c7 ?? 0),
+    (this.poseCovariance?.c8 ?? 0),
+    (this.poseCovariance?.c9 ?? 0),
+    (this.poseCovariance?.c10 ?? 0),
+    (this.poseCovariance?.c11 ?? 0),
+    (this.poseCovariance?.c12 ?? 0),
+    (this.poseCovariance?.c13 ?? 0),
+    (this.poseCovariance?.c14 ?? 0),
+    (this.poseCovariance?.c15 ?? 0),
+    (this.poseCovariance?.c16 ?? 0),
+    (this.poseCovariance?.c17 ?? 0),
+    (this.poseCovariance?.c18 ?? 0),
+    (this.poseCovariance?.c19 ?? 0),
+    (this.poseCovariance?.c20 ?? 0),
+    (this.velocityCovariance?.c0 ?? 0),
+    (this.velocityCovariance?.c1 ?? 0),
+    (this.velocityCovariance?.c2 ?? 0),
+    (this.velocityCovariance?.c3 ?? 0),
+    (this.velocityCovariance?.c4 ?? 0),
+    (this.velocityCovariance?.c5 ?? 0),
+    (this.velocityCovariance?.c6 ?? 0),
+    (this.velocityCovariance?.c7 ?? 0),
+    (this.velocityCovariance?.c8 ?? 0),
+    (this.velocityCovariance?.c9 ?? 0),
+    (this.velocityCovariance?.c10 ?? 0),
+    (this.velocityCovariance?.c11 ?? 0),
+    (this.velocityCovariance?.c12 ?? 0),
+    (this.velocityCovariance?.c13 ?? 0),
+    (this.velocityCovariance?.c14 ?? 0),
+    (this.velocityCovariance?.c15 ?? 0),
+    (this.velocityCovariance?.c16 ?? 0),
+    (this.velocityCovariance?.c17 ?? 0),
+    (this.velocityCovariance?.c18 ?? 0),
+    (this.velocityCovariance?.c19 ?? 0),
+    (this.velocityCovariance?.c20 ?? 0),
+    this.resetCounter,
+    this.estimatorType,
+    this.qualityPct
+  );
+}
 }

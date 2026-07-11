@@ -77,6 +77,20 @@ impl Supervisor {
     }
 }
 
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        if let Some(mut child) = self
+            .child
+            .get_mut()
+            .expect("supervisor lock poisoned")
+            .take()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 /// Resolve a sibling bridge binary: honor env override, else look next to this
 /// executable (they build into the same target dir).
 fn resolve_sibling_bin(env_var: &str, binary_name: &str) -> PathBuf {

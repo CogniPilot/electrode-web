@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { MissionItemData } from '../../synapse/cmd/mission-item-data.js';
+import { MissionItemData, MissionItemDataT } from '../../synapse/cmd/mission-item-data';
 
 
 export class MissionSetRequest {
@@ -124,5 +124,59 @@ static createMissionSetRequest(builder:flatbuffers.Builder, missionId:number, ex
   MissionSetRequest.addFlags(builder, flags);
   MissionSetRequest.addItems(builder, itemsOffset);
   return MissionSetRequest.endMissionSetRequest(builder);
+}
+
+unpack(): MissionSetRequestT {
+  return new MissionSetRequestT(
+    this.missionId(),
+    this.expectedPlanVersion(),
+    this.planVersion(),
+    this.offset(),
+    this.total(),
+    this.planCrc32(),
+    this.flags(),
+    this.bb!.createObjList(this.items.bind(this), this.itemsLength())
+  );
+}
+
+
+unpackTo(_o: MissionSetRequestT): void {
+  _o.missionId = this.missionId();
+  _o.expectedPlanVersion = this.expectedPlanVersion();
+  _o.planVersion = this.planVersion();
+  _o.offset = this.offset();
+  _o.total = this.total();
+  _o.planCrc32 = this.planCrc32();
+  _o.flags = this.flags();
+  _o.items = this.bb!.createObjList(this.items.bind(this), this.itemsLength());
+}
+}
+
+export class MissionSetRequestT {
+constructor(
+  public missionId: number = 0,
+  public expectedPlanVersion: number = 0,
+  public planVersion: number = 0,
+  public offset: number = 0,
+  public total: number = 0,
+  public planCrc32: number = 0,
+  public flags: number = 0,
+  public items: (MissionItemDataT)[] = []
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  const items = builder.createStructOffsetList(this.items, MissionSetRequest.startItemsVector);
+
+  return MissionSetRequest.createMissionSetRequest(builder,
+    this.missionId,
+    this.expectedPlanVersion,
+    this.planVersion,
+    this.offset,
+    this.total,
+    this.planCrc32,
+    this.flags,
+    items
+  );
 }
 }

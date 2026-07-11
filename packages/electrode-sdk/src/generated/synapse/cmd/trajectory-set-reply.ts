@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { CommandResultCode } from '../../synapse/types/command-result-code.js';
+import { CommandResultCode } from '../../synapse/types/command-result-code';
 
 
 export class TrajectorySetReply {
@@ -95,5 +95,49 @@ static createTrajectorySetReply(builder:flatbuffers.Builder, result:CommandResul
   TrajectorySetReply.addFailedSeq(builder, failedSeq);
   TrajectorySetReply.addFlags(builder, flags);
   return TrajectorySetReply.endTrajectorySetReply(builder);
+}
+
+unpack(): TrajectorySetReplyT {
+  return new TrajectorySetReplyT(
+    this.result(),
+    this.trajectoryId(),
+    this.planVersion(),
+    this.resultDetail(),
+    this.failedSeq(),
+    this.flags()
+  );
+}
+
+
+unpackTo(_o: TrajectorySetReplyT): void {
+  _o.result = this.result();
+  _o.trajectoryId = this.trajectoryId();
+  _o.planVersion = this.planVersion();
+  _o.resultDetail = this.resultDetail();
+  _o.failedSeq = this.failedSeq();
+  _o.flags = this.flags();
+}
+}
+
+export class TrajectorySetReplyT {
+constructor(
+  public result: CommandResultCode = CommandResultCode.Accepted,
+  public trajectoryId: number = 0,
+  public planVersion: number = 0,
+  public resultDetail: number = 0,
+  public failedSeq: number = 0,
+  public flags: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return TrajectorySetReply.createTrajectorySetReply(builder,
+    this.result,
+    this.trajectoryId,
+    this.planVersion,
+    this.resultDetail,
+    this.failedSeq,
+    this.flags
+  );
 }
 }

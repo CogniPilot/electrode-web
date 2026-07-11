@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { GnssFixType } from '../../synapse/types/gnss-fix-type.js';
+import { GnssFixType } from '../../synapse/types/gnss-fix-type';
 
 
 export class GnssFixData {
@@ -129,4 +129,108 @@ static createGnssFixData(builder:flatbuffers.Builder, timestamp_us: bigint, time
   return builder.offset();
 }
 
+
+unpack(): GnssFixDataT {
+  return new GnssFixDataT(
+    this.timestampUs(),
+    this.timeUnixUs(),
+    this.latitudeDegE7(),
+    this.longitudeDegE7(),
+    this.altitudeMslMm(),
+    this.altitudeEllipsoidMm(),
+    this.horizontalAccuracyMm(),
+    this.verticalAccuracyMm(),
+    this.velocityAccuracyMmS(),
+    this.yawAccuracyCdeg(),
+    this.hdopCenti(),
+    this.vdopCenti(),
+    this.groundSpeedCmS(),
+    this.courseOverGroundCdeg(),
+    this.yawCdeg(),
+    this.velocityUpCmS(),
+    this.flags(),
+    this.fixType(),
+    this.satellitesUsed(),
+    this.satellitesVisible(),
+    this.id()
+  );
+}
+
+
+unpackTo(_o: GnssFixDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.timeUnixUs = this.timeUnixUs();
+  _o.latitudeDegE7 = this.latitudeDegE7();
+  _o.longitudeDegE7 = this.longitudeDegE7();
+  _o.altitudeMslMm = this.altitudeMslMm();
+  _o.altitudeEllipsoidMm = this.altitudeEllipsoidMm();
+  _o.horizontalAccuracyMm = this.horizontalAccuracyMm();
+  _o.verticalAccuracyMm = this.verticalAccuracyMm();
+  _o.velocityAccuracyMmS = this.velocityAccuracyMmS();
+  _o.yawAccuracyCdeg = this.yawAccuracyCdeg();
+  _o.hdopCenti = this.hdopCenti();
+  _o.vdopCenti = this.vdopCenti();
+  _o.groundSpeedCmS = this.groundSpeedCmS();
+  _o.courseOverGroundCdeg = this.courseOverGroundCdeg();
+  _o.yawCdeg = this.yawCdeg();
+  _o.velocityUpCmS = this.velocityUpCmS();
+  _o.flags = this.flags();
+  _o.fixType = this.fixType();
+  _o.satellitesUsed = this.satellitesUsed();
+  _o.satellitesVisible = this.satellitesVisible();
+  _o.id = this.id();
+}
+}
+
+export class GnssFixDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public timeUnixUs: bigint = BigInt('0'),
+  public latitudeDegE7: number = 0,
+  public longitudeDegE7: number = 0,
+  public altitudeMslMm: number = 0,
+  public altitudeEllipsoidMm: number = 0,
+  public horizontalAccuracyMm: number = 0,
+  public verticalAccuracyMm: number = 0,
+  public velocityAccuracyMmS: number = 0,
+  public yawAccuracyCdeg: number = 0,
+  public hdopCenti: number = 0,
+  public vdopCenti: number = 0,
+  public groundSpeedCmS: number = 0,
+  public courseOverGroundCdeg: number = 0,
+  public yawCdeg: number = 0,
+  public velocityUpCmS: number = 0,
+  public flags: number = 0,
+  public fixType: GnssFixType = GnssFixType.NoFix,
+  public satellitesUsed: number = 0,
+  public satellitesVisible: number = 0,
+  public id: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return GnssFixData.createGnssFixData(builder,
+    this.timestampUs,
+    this.timeUnixUs,
+    this.latitudeDegE7,
+    this.longitudeDegE7,
+    this.altitudeMslMm,
+    this.altitudeEllipsoidMm,
+    this.horizontalAccuracyMm,
+    this.verticalAccuracyMm,
+    this.velocityAccuracyMmS,
+    this.yawAccuracyCdeg,
+    this.hdopCenti,
+    this.vdopCenti,
+    this.groundSpeedCmS,
+    this.courseOverGroundCdeg,
+    this.yawCdeg,
+    this.velocityUpCmS,
+    this.flags,
+    this.fixType,
+    this.satellitesUsed,
+    this.satellitesVisible,
+    this.id
+  );
+}
 }

@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { ExternalOdometryData } from '../../synapse/topic/external-odometry-data.js';
+import { ExternalOdometryData, ExternalOdometryDataT } from '../../synapse/topic/external-odometry-data';
 
 
 export class ExternalOdometry {
@@ -45,5 +45,29 @@ static createExternalOdometry(builder:flatbuffers.Builder, dataOffset:flatbuffer
   ExternalOdometry.startExternalOdometry(builder);
   ExternalOdometry.addData(builder, dataOffset);
   return ExternalOdometry.endExternalOdometry(builder);
+}
+
+unpack(): ExternalOdometryT {
+  return new ExternalOdometryT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: ExternalOdometryT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class ExternalOdometryT {
+constructor(
+  public data: ExternalOdometryDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return ExternalOdometry.createExternalOdometry(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

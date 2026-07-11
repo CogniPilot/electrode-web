@@ -1,3 +1,5 @@
+import { parseKey } from '@cognipilot/synapse-fbs/topic_catalog';
+
 import { ELECTRODE_SCHEMA_VERSION } from '@electrode/flatbuffers';
 import { DEFAULT_VEHICLE_ID, resolveTopicDefinition, topicKeyFromTopic, vehicleIdFromTopic } from './topics';
 import type {
@@ -15,6 +17,7 @@ import type {
   Pose,
   TelemetryFrame,
   TopicSnapshot,
+  MocapDisplaySource,
   VehicleState,
   Velocity
 } from './types';
@@ -50,11 +53,16 @@ export function createInitialVehicleState(vehicleId = DEFAULT_VEHICLE_ID): Vehic
       quality: 0,
       updatedAtMs: 0
     },
+    mocapDisplaySource: 'raw',
     mission: null,
     events: [],
     topics: {},
     lastMocap: null
   };
+}
+
+export function setMocapDisplaySource(state: VehicleState, source: MocapDisplaySource): VehicleState {
+  return { ...state, mocapDisplaySource: source };
 }
 
 export function applyGcsFrame(state: VehicleState, frame: GcsFrame, nowMs = Date.now()): VehicleState {
@@ -102,9 +110,10 @@ export function applyTelemetryFrame(state: VehicleState, frame: TelemetryFrame, 
   } else if (key === 'localization') {
     state.localization = frame.payload as LocalizationState;
   } else {
-    // Raw Synapse wire topics (`synapse/**`) — the same stream real hardware
-    // emits. The adapter derives the canonical vehicle state from them so the
-    // simulator and hardware share one path.
+    // Raw Synapse wire topics (bare catalog keys plus custom `synapse/...`
+    // keys) — the same stream real hardware emits. The adapter derives the
+    // canonical vehicle state from them so the simulator and hardware share
+    // one path.
     applySynapseFrame(state, frame, nowMs);
   }
 
@@ -126,7 +135,7 @@ function toFiniteNumber(value: unknown): number | null {
 }
 
 /**
- * Extract normalized control inputs from a `synapse/v1/topic/manual_control_command`
+ * Extract normalized control inputs from a `manual` (ManualControlCommand)
  * payload. Accepts the wrapped `{ data: { axes: { roll, pitch, yaw, throttle } } }`
  * shape published by the simulator/bridge, as well as a flat `{ axes: {...} }`.
  */
@@ -147,7 +156,7 @@ function parseControlInputs(payload: unknown): ControlInputs | null {
 
 /**
  * Extract the full manual-control frame (stick axes + arm/kill/mode switches)
- * from a `synapse/v1/topic/manual_control_command` payload. Accepts the wrapped
+ * from a `manual` (ManualControlCommand) payload. Accepts the wrapped
  * `{ data: { axes: {...}, arm_switch, ... } }` shape published by the
  * simulator/bridge as well as a flat `{ axes: {...}, ... }`.
  */
@@ -173,9 +182,9 @@ function parseManualControl(payload: unknown, nowMs: number): ManualControlState
 }
 
 /**
- * Extract per-motor commands from a `synapse/v1/topic/pwm_signal_outputs`
- * payload. The `motors` object is keyed by motor id (`m0`, `m1`, ...); we
- * sort by key so the array order is stable across sources.
+ * Extract per-motor commands from a `pwm` (PwmSignalOutputs) payload. The
+ * `motors` object is keyed by motor id (`m0`, `m1`, ...); we sort by key so
+ * the array order is stable across sources.
  */
 function parseMotorOutputs(payload: unknown): number[] | null {
   const record = payload as Record<string, unknown> | null | undefined;
@@ -247,33 +256,55 @@ function frameSampleTimeMs(frame: TelemetryFrame, fallbackMs: number): number {
  */
 const CUBS2_FLIGHT_MODES: Record<number, string> = { 0: 'manual', 1: 'auto' };
 const SELECTED_MOCAP_TOPIC_FRAGMENT = 'synapse/mocap/selected/rigid_body/';
+const mocapRigidBodyNames = new Map<number, string>();
 
 /**
- * Adapter: map raw Synapse wire topics onto the canonical vehicle state. Most
- * topics live under `synapse/v1/**`; `synapse/motor_output` is the selected
- * post-arbitration PWM command stream that mirrors what the PPM radio receives.
+ * Resolve a Zenoh key to its catalog topic name (`AttitudeEstimate`,
+ * `ManualControlCommand`, ...). Catalog topics use bare compact keys (`att`,
+ * `manual`, possibly namespaced/instanced); custom keys return undefined.
+ * Compact keys are too short for substring matching — always resolve via
+ * `parseKey`.
+ */
+function catalogTopicName(topic: string): string | undefined {
+  return parseKey(topic)?.topic.name;
+}
+
+/**
+ * Adapter: map raw Synapse wire topics onto the canonical vehicle state.
+ * Catalog topics live on bare compact keys (`att`, `manual`, `pwm`, ...);
+ * `synapse/motor_output` is the selected post-arbitration PWM command stream
+ * that mirrors what the PPM radio receives, and the `synapse/mocap/...` trio
+ * is the bridge-parity motion-capture stream.
  */
 function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: number): void {
   const topic = frame.topic;
-  if (
-    topic.endsWith('mocap_frame') ||
+  const parsed = parseKey(topic);
+  const topicName = parsed?.topic.name;
+  if (topic.endsWith('rigid_body_names')) {
+    updateMocapRigidBodyNames(frame.payload);
+  } else if (topicName === 'RawPose') {
+    applyRawPose(state, frame.payload, nowMs, frameSampleTimeMs(frame, nowMs));
+  } else if (
+    topicName === 'MocapPoseFrame' ||
+    topicName === 'MocapFrame' ||
     topic.endsWith('mocap/frame') ||
+    topic.endsWith('mocap_frame') ||
     topic.includes('synapse/mocap/rigid_body/') ||
     topic.includes(SELECTED_MOCAP_TOPIC_FRAGMENT)
   ) {
     if (!shouldIgnoreUnselectedMocap(state, topic)) {
       applyMocapFrame(state, frame.payload, nowMs, frameSampleTimeMs(frame, nowMs), topic);
     }
-  } else if (topic.endsWith('optical_flow_velocity')) {
+  } else if (topicName === 'OpticalFlowVelocity') {
     const velocity = parseOpticalFlowVelocity(frame.payload);
     if (velocity) {
       state.velocity = velocity;
     }
-  } else if (topic.endsWith('attitude_estimate')) {
+  } else if (topicName === 'AttitudeEstimate') {
     applyAttitudeEstimate(state, frame.payload);
-  } else if (topic.endsWith('vehicle_health')) {
+  } else if (topicName === 'VehicleHealth') {
     applyVehicleHealth(state, frame.payload);
-  } else if (topic.endsWith('manual_control_command')) {
+  } else if (topicName === 'ManualControlCommand') {
     const controls = parseControlInputs(frame.payload);
     if (controls) {
       state.controls = controls;
@@ -282,7 +313,7 @@ function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: nu
     if (manualControl) {
       state.manualControl = manualControl;
     }
-  } else if (topic.endsWith('radio_control')) {
+  } else if (topicName === 'RadioControl') {
     const radioControl = parseRadioControl(frame.payload);
     if (radioControl) {
       state.radioControl = radioControl;
@@ -292,7 +323,7 @@ function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: nu
     if (motors) {
       state.motors = motors;
     }
-  } else if (topic.endsWith('pwm_signal_outputs')) {
+  } else if (topicName === 'PwmSignalOutputs') {
     const hasSelectedOutput = Object.values(state.topics).some(
       (snapshot) => snapshot.topic.endsWith('motor_output') && !snapshot.stale
     );
@@ -302,23 +333,64 @@ function applySynapseFrame(state: VehicleState, frame: TelemetryFrame, nowMs: nu
         state.motors = motors;
       }
     }
-  } else if (topic.endsWith('power_status')) {
+  } else if (topicName === 'PowerStatus') {
     applyPowerStatus(state, frame.payload);
-  } else if (topic.endsWith('mission_progress')) {
+  } else if (topicName === 'MissionProgress') {
     applyMissionProgress(state, frame.payload, nowMs);
-  } else if (topic.endsWith('local_position_command')) {
+  } else if (topicName === 'LocalPositionCommand') {
     applyLocalPositionCommand(state, frame.payload, nowMs);
-  } else if (topic.endsWith('trajectory_segment')) {
+  } else if (topicName === 'TrajectorySegment') {
     applyTrajectorySegment(state, frame.payload, nowMs);
   }
 }
 
 function shouldIgnoreUnselectedMocap(state: VehicleState, topic: string): boolean {
+  // Raw bridge measurements own localization; filtered pose/odometry streams
+  // are intentionally never routed through this path.
+  if (state.mocapDisplaySource === 'raw') {
+    return false;
+  }
   if (topic.includes(SELECTED_MOCAP_TOPIC_FRAGMENT)) {
     return false;
   }
+  // Raw frames remain in the topic registry for inspection and plotting, but must not
+  // overwrite a fresh EKF pose on every 240 Hz sample.  They become the display
+  // fallback as soon as the EKF reports Lost (or disappears).
   return Object.values(state.topics).some(
-    (snapshot) => snapshot.topic.includes(SELECTED_MOCAP_TOPIC_FRAGMENT) && !snapshot.stale
+    (snapshot) =>
+      snapshot.topic.includes(SELECTED_MOCAP_TOPIC_FRAGMENT) &&
+      !snapshot.stale
+  );
+}
+
+function updateMocapRigidBodyNames(payload: unknown): void {
+  const bodies = (payload as { rigidBodies?: unknown[] } | null)?.rigidBodies;
+  if (!Array.isArray(bodies)) return;
+  for (const body of bodies) {
+    const item = body as { id?: unknown; name?: unknown };
+    const id = toFiniteNumber(item.id);
+    if (id !== null && typeof item.name === 'string' && item.name.trim()) {
+      mocapRigidBodyNames.set(id, item.name.trim().toLowerCase());
+    }
+  }
+}
+
+function applyRawPose(state: VehicleState, payload: unknown, nowMs: number, sampleMs: number): void {
+  const record = payload as Record<string, unknown> | null | undefined;
+  const data = (record?.data ?? record) as Record<string, unknown> | undefined;
+  applyMocapFrame(
+    state,
+    {
+      rigid_bodies: [{
+        id: 1,
+        position: data?.position,
+        attitude: data?.attitude,
+        tracking_valid: true
+      }]
+    },
+    nowMs,
+    sampleMs,
+    'qualisys/cub1/pose_raw'
   );
 }
 const MISSION_STATES = new Set(['unknown', 'idle', 'active', 'paused', 'complete']);
@@ -347,7 +419,7 @@ function resyncMissionPlan(mission: MissionPlanState, missionId: number, total: 
   }
 }
 
-/** Track active item and plan identity from `synapse/v1/topic/mission_progress`. */
+/** Track active item and plan identity from `mission` (MissionProgress). */
 function applyMissionProgress(state: VehicleState, payload: unknown, nowMs: number): void {
   const record = payload as Record<string, unknown> | null | undefined;
   const data = (record?.data ?? record) as Record<string, unknown> | undefined;
@@ -365,7 +437,7 @@ function applyMissionProgress(state: VehicleState, payload: unknown, nowMs: numb
   mission.updatedAtMs = nowMs;
 }
 
-/** Track the active navigation target from `synapse/v1/topic/local_position_command`. */
+/** Track the active navigation target from `pos_sp` (LocalPositionCommand). */
 function applyLocalPositionCommand(state: VehicleState, payload: unknown, nowMs: number): void {
   const record = payload as Record<string, unknown> | null | undefined;
   const data = (record?.data ?? record) as Record<string, unknown> | undefined;
@@ -384,7 +456,7 @@ function applyLocalPositionCommand(state: VehicleState, payload: unknown, nowMs:
   mission.updatedAtMs = nowMs;
 }
 
-/** Rebuild the waypoint table from `synapse/v1/topic/trajectory_segment`. */
+/** Rebuild the waypoint table from `traj` (TrajectorySegment). */
 function applyTrajectorySegment(state: VehicleState, payload: unknown, nowMs: number): void {
   const record = payload as Record<string, unknown> | null | undefined;
   const data = (record?.data ?? record) as Record<string, unknown> | undefined;
@@ -425,7 +497,12 @@ function applyMocapFrame(
 ): void {
   const record = payload as Record<string, unknown> | null | undefined;
   const bodies = record?.rigid_bodies;
-  const body = Array.isArray(bodies) ? (bodies[0] as Record<string, unknown> | undefined) : undefined;
+  const body = Array.isArray(bodies)
+    ? bodies.map((item) => item as Record<string, unknown>).find((item) => {
+        const id = toFiniteNumber(item.id);
+        return id !== null && (mocapRigidBodyNames.get(id) === 'cub1' || (mocapRigidBodyNames.size === 0 && id === 1));
+      }) ?? (bodies[0] as Record<string, unknown> | undefined)
+    : undefined;
   const position = body?.position as Record<string, unknown> | undefined;
   if (!body || !position || !isValidMocapBody(body)) {
     markMocapStale(state, nowMs);
@@ -438,10 +515,12 @@ function applyMocapFrame(
   // Ground-truth velocity by finite-differencing successive mocap positions.
   const prev = state.lastMocap;
   const hasDirectVelocity = Object.values(state.topics).some(
-    (snapshot) => snapshot.topic.endsWith('optical_flow_velocity') && !snapshot.stale
+    (snapshot) => catalogTopicName(snapshot.topic) === 'OpticalFlowVelocity' && !snapshot.stale
   );
   const hasFullMocapFrame = Object.values(state.topics).some(
-    (snapshot) => snapshot.topic.endsWith('mocap/frame') && !snapshot.stale
+    (snapshot) =>
+      (snapshot.topic.endsWith('mocap/frame') || catalogTopicName(snapshot.topic) === 'MocapFrame') &&
+      !snapshot.stale
   );
   const compactPoseMirrorsFullFrame =
     (topic.includes('synapse/mocap/rigid_body/') ||
@@ -487,7 +566,7 @@ function applyMocapFrame(
   const trackingValid = body.tracking_valid !== false;
   const residual = toFiniteNumber(body.residual) ?? 0;
   state.localization = {
-    source: 'mocap',
+    source: trackingValid ? 'mocap' : 'mocap (degraded)',
     fresh: trackingValid,
     quality: trackingValid ? Math.max(0, 1 - Math.min(residual / 0.05, 1)) : 0,
     updatedAtMs: nowMs
@@ -496,7 +575,7 @@ function applyMocapFrame(
 
 function isValidMocapBody(body: unknown): body is Record<string, unknown> {
   const record = body as Record<string, unknown> | null | undefined;
-  if (!record || record.tracking_valid === false) {
+  if (!record) {
     return false;
   }
   const position = record.position as Record<string, unknown> | undefined;
@@ -522,8 +601,8 @@ function markMocapStale(state: VehicleState, nowMs: number): void {
 }
 
 /**
- * Set estimator attitude from a decoded `synapse/v1/topic/attitude_estimate`.
- * The canonical `state.attitude` remains owned by mocap while tracking is live.
+ * Set estimator attitude from a decoded `att` (AttitudeEstimate). The
+ * canonical `state.attitude` remains owned by mocap while tracking is live.
  */
 function applyAttitudeEstimate(state: VehicleState, payload: unknown): void {
   const record = payload as Record<string, unknown> | null | undefined;
@@ -536,8 +615,8 @@ function applyAttitudeEstimate(state: VehicleState, payload: unknown): void {
 
 /**
  * Set flight mode, link quality, and a battery fallback from a decoded
- * `synapse/v1/topic/vehicle_health`. Power_status is the primary battery source;
- * vehicle_health fills in when it is absent (and skips unknown fields).
+ * `health` (VehicleHealth). `power` is the primary battery source;
+ * vehicle health fills in when it is absent (and skips unknown fields).
  */
 function applyVehicleHealth(state: VehicleState, payload: unknown): void {
   const record = payload as Record<string, unknown> | null | undefined;
@@ -567,7 +646,7 @@ function applyVehicleHealth(state: VehicleState, payload: unknown): void {
   };
 }
 
-/** Set battery from a decoded `synapse/v1/topic/power_status` payload. */
+/** Set battery from a decoded `power` (PowerStatus) payload. */
 function applyPowerStatus(state: VehicleState, payload: unknown): void {
   const record = payload as Record<string, unknown> | null | undefined;
   const data = (record?.data ?? record) as Record<string, unknown> | undefined;

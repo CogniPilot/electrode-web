@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { PowerStatusData } from '../../synapse/topic/power-status-data.js';
+import { PowerStatusData, PowerStatusDataT } from '../../synapse/topic/power-status-data';
 
 
 export class PowerStatus {
@@ -45,5 +45,29 @@ static createPowerStatus(builder:flatbuffers.Builder, dataOffset:flatbuffers.Off
   PowerStatus.startPowerStatus(builder);
   PowerStatus.addData(builder, dataOffset);
   return PowerStatus.endPowerStatus(builder);
+}
+
+unpack(): PowerStatusT {
+  return new PowerStatusT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: PowerStatusT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class PowerStatusT {
+constructor(
+  public data: PowerStatusDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return PowerStatus.createPowerStatus(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

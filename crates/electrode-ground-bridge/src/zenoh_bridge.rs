@@ -40,7 +40,9 @@ pub(crate) struct ZenohConfig {
     /// separate from `listen` because ws and a same-port tcp listener would
     /// collide, so the hub hosts `udp/…:7447` (hardware) + `ws/…:7447` (browser).
     pub ws_listen: Option<String>,
-    /// Wildcard key expression to discover, e.g. `synapse/**`.
+    /// Wildcard key expression to discover, e.g. `**`. Compact 0.6.0 catalog
+    /// keys live under arbitrary vehicle namespaces (`cub1/att`), so discovery
+    /// defaults to everything and classification filters.
     pub keyexpr: String,
     /// Auto-subscribe (forward) topics we can decode as soon as they appear.
     pub auto_select_known: bool,
@@ -78,8 +80,7 @@ impl ZenohConfig {
         if ws_listen.as_deref() == Some("") {
             ws_listen = None;
         }
-        let keyexpr =
-            std::env::var("ELECTRODE_ZENOH_KEYEXPR").unwrap_or_else(|_| "synapse/**".to_string());
+        let keyexpr = std::env::var("ELECTRODE_ZENOH_KEYEXPR").unwrap_or_else(|_| "**".to_string());
         let auto_select_known = std::env::var("ELECTRODE_ZENOH_AUTOSELECT")
             .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
             .unwrap_or(true);
@@ -225,8 +226,10 @@ impl ZenohShared {
             .contains(key)
     }
 
-    fn build_frame(&self, key: &str, bytes: &[u8]) -> String {
-        let decoded = synapse_decode::decode(key, bytes);
+    fn build_frame(&self, key: &str, encoding: &str, bytes: &[u8]) -> String {
+        // Zenoh's default encoding means the publisher stamped nothing.
+        let encoding = Some(encoding).filter(|e| !e.is_empty() && *e != "zenoh/bytes");
+        let decoded = synapse_decode::decode(key, encoding, bytes);
         let now = now_ms();
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
         let frame = json!({
@@ -352,9 +355,10 @@ fn run_subscriber(shared: Arc<ZenohShared>, config: ZenohConfig) {
     while let Ok(sample) = subscriber.recv() {
         let key = sample.key_expr().as_str().to_string();
         let bytes = sample.payload().to_bytes();
+        let encoding = sample.encoding().to_string();
         shared.record_sample(&key, &bytes);
         if shared.is_selected(&key) {
-            let _ = shared.tx.send(shared.build_frame(&key, &bytes));
+            let _ = shared.tx.send(shared.build_frame(&key, &encoding, &bytes));
         }
     }
 

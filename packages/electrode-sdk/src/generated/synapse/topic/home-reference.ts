@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { HomeReferenceData } from '../../synapse/topic/home-reference-data.js';
+import { HomeReferenceData, HomeReferenceDataT } from '../../synapse/topic/home-reference-data';
 
 
 export class HomeReference {
@@ -45,5 +45,29 @@ static createHomeReference(builder:flatbuffers.Builder, dataOffset:flatbuffers.O
   HomeReference.startHomeReference(builder);
   HomeReference.addData(builder, dataOffset);
   return HomeReference.endHomeReference(builder);
+}
+
+unpack(): HomeReferenceT {
+  return new HomeReferenceT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: HomeReferenceT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class HomeReferenceT {
+constructor(
+  public data: HomeReferenceDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return HomeReference.createHomeReference(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

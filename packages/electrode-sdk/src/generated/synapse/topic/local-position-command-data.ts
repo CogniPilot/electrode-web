@@ -2,8 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { LocalFrame } from '../../synapse/types/local-frame.js';
-import { Vec3f } from '../../synapse/types/vec3f.js';
+import { LocalFrame } from '../../synapse/types/local-frame';
+import { Vec3f, Vec3fT } from '../../synapse/types/vec3f';
 
 
 export class LocalPositionCommandData {
@@ -74,4 +74,62 @@ static createLocalPositionCommandData(builder:flatbuffers.Builder, timestamp_us:
   return builder.offset();
 }
 
+
+unpack(): LocalPositionCommandDataT {
+  return new LocalPositionCommandDataT(
+    this.timestampUs(),
+    (this.positionEnuM() !== null ? this.positionEnuM()!.unpack() : null),
+    (this.velocityEnuMS() !== null ? this.velocityEnuMS()!.unpack() : null),
+    (this.accelerationOrForceEnu() !== null ? this.accelerationOrForceEnu()!.unpack() : null),
+    this.yawRad(),
+    this.yawRateRadS(),
+    this.typeMask(),
+    this.coordinateFrame()
+  );
+}
+
+
+unpackTo(_o: LocalPositionCommandDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.positionEnuM = (this.positionEnuM() !== null ? this.positionEnuM()!.unpack() : null);
+  _o.velocityEnuMS = (this.velocityEnuMS() !== null ? this.velocityEnuMS()!.unpack() : null);
+  _o.accelerationOrForceEnu = (this.accelerationOrForceEnu() !== null ? this.accelerationOrForceEnu()!.unpack() : null);
+  _o.yawRad = this.yawRad();
+  _o.yawRateRadS = this.yawRateRadS();
+  _o.typeMask = this.typeMask();
+  _o.coordinateFrame = this.coordinateFrame();
+}
+}
+
+export class LocalPositionCommandDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public positionEnuM: Vec3fT|null = null,
+  public velocityEnuMS: Vec3fT|null = null,
+  public accelerationOrForceEnu: Vec3fT|null = null,
+  public yawRad: number = 0.0,
+  public yawRateRadS: number = 0.0,
+  public typeMask: number = 0,
+  public coordinateFrame: LocalFrame = LocalFrame.LocalEnu
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return LocalPositionCommandData.createLocalPositionCommandData(builder,
+    this.timestampUs,
+    (this.positionEnuM?.x ?? 0),
+    (this.positionEnuM?.y ?? 0),
+    (this.positionEnuM?.z ?? 0),
+    (this.velocityEnuMS?.x ?? 0),
+    (this.velocityEnuMS?.y ?? 0),
+    (this.velocityEnuMS?.z ?? 0),
+    (this.accelerationOrForceEnu?.x ?? 0),
+    (this.accelerationOrForceEnu?.y ?? 0),
+    (this.accelerationOrForceEnu?.z ?? 0),
+    this.yawRad,
+    this.yawRateRadS,
+    this.typeMask,
+    this.coordinateFrame
+  );
+}
 }

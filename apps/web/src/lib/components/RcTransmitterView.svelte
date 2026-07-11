@@ -133,7 +133,7 @@
   </div>
 
   {#if !hasSignal}
-    <div class="empty">Waiting for <code>synapse/v1/topic/manual_control_command</code></div>
+    <div class="empty">Waiting for <code>manual</code></div>
   {/if}
 </div>
 

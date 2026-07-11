@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class ControlLoopMetricsData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -46,4 +48,44 @@ static createControlLoopMetricsData(builder:flatbuffers.Builder, timestamp_us: b
   return builder.offset();
 }
 
+
+unpack(): ControlLoopMetricsDataT {
+  return new ControlLoopMetricsDataT(
+    this.timestampUs(),
+    this.periodUs(),
+    this.latencyUs(),
+    this.overrunCount(),
+    this.loadDpermille()
+  );
+}
+
+
+unpackTo(_o: ControlLoopMetricsDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.periodUs = this.periodUs();
+  _o.latencyUs = this.latencyUs();
+  _o.overrunCount = this.overrunCount();
+  _o.loadDpermille = this.loadDpermille();
+}
+}
+
+export class ControlLoopMetricsDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public periodUs: number = 0,
+  public latencyUs: number = 0,
+  public overrunCount: number = 0,
+  public loadDpermille: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return ControlLoopMetricsData.createControlLoopMetricsData(builder,
+    this.timestampUs,
+    this.periodUs,
+    this.latencyUs,
+    this.overrunCount,
+    this.loadDpermille
+  );
+}
 }

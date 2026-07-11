@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class BatteryCellVoltages16 {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -100,4 +102,88 @@ static createBatteryCellVoltages16(builder:flatbuffers.Builder, cell0_mv: number
   return builder.offset();
 }
 
+
+unpack(): BatteryCellVoltages16T {
+  return new BatteryCellVoltages16T(
+    this.cell0Mv(),
+    this.cell1Mv(),
+    this.cell2Mv(),
+    this.cell3Mv(),
+    this.cell4Mv(),
+    this.cell5Mv(),
+    this.cell6Mv(),
+    this.cell7Mv(),
+    this.cell8Mv(),
+    this.cell9Mv(),
+    this.cell10Mv(),
+    this.cell11Mv(),
+    this.cell12Mv(),
+    this.cell13Mv(),
+    this.cell14Mv(),
+    this.cell15Mv()
+  );
+}
+
+
+unpackTo(_o: BatteryCellVoltages16T): void {
+  _o.cell0Mv = this.cell0Mv();
+  _o.cell1Mv = this.cell1Mv();
+  _o.cell2Mv = this.cell2Mv();
+  _o.cell3Mv = this.cell3Mv();
+  _o.cell4Mv = this.cell4Mv();
+  _o.cell5Mv = this.cell5Mv();
+  _o.cell6Mv = this.cell6Mv();
+  _o.cell7Mv = this.cell7Mv();
+  _o.cell8Mv = this.cell8Mv();
+  _o.cell9Mv = this.cell9Mv();
+  _o.cell10Mv = this.cell10Mv();
+  _o.cell11Mv = this.cell11Mv();
+  _o.cell12Mv = this.cell12Mv();
+  _o.cell13Mv = this.cell13Mv();
+  _o.cell14Mv = this.cell14Mv();
+  _o.cell15Mv = this.cell15Mv();
+}
+}
+
+export class BatteryCellVoltages16T {
+constructor(
+  public cell0Mv: number = 0,
+  public cell1Mv: number = 0,
+  public cell2Mv: number = 0,
+  public cell3Mv: number = 0,
+  public cell4Mv: number = 0,
+  public cell5Mv: number = 0,
+  public cell6Mv: number = 0,
+  public cell7Mv: number = 0,
+  public cell8Mv: number = 0,
+  public cell9Mv: number = 0,
+  public cell10Mv: number = 0,
+  public cell11Mv: number = 0,
+  public cell12Mv: number = 0,
+  public cell13Mv: number = 0,
+  public cell14Mv: number = 0,
+  public cell15Mv: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return BatteryCellVoltages16.createBatteryCellVoltages16(builder,
+    this.cell0Mv,
+    this.cell1Mv,
+    this.cell2Mv,
+    this.cell3Mv,
+    this.cell4Mv,
+    this.cell5Mv,
+    this.cell6Mv,
+    this.cell7Mv,
+    this.cell8Mv,
+    this.cell9Mv,
+    this.cell10Mv,
+    this.cell11Mv,
+    this.cell12Mv,
+    this.cell13Mv,
+    this.cell14Mv,
+    this.cell15Mv
+  );
+}
 }

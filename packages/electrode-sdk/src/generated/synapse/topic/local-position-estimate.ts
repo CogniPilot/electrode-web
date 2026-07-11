@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { LocalPositionEstimateData } from '../../synapse/topic/local-position-estimate-data.js';
+import { LocalPositionEstimateData, LocalPositionEstimateDataT } from '../../synapse/topic/local-position-estimate-data';
 
 
 export class LocalPositionEstimate {
@@ -45,5 +45,29 @@ static createLocalPositionEstimate(builder:flatbuffers.Builder, dataOffset:flatb
   LocalPositionEstimate.startLocalPositionEstimate(builder);
   LocalPositionEstimate.addData(builder, dataOffset);
   return LocalPositionEstimate.endLocalPositionEstimate(builder);
+}
+
+unpack(): LocalPositionEstimateT {
+  return new LocalPositionEstimateT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: LocalPositionEstimateT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class LocalPositionEstimateT {
+constructor(
+  public data: LocalPositionEstimateDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return LocalPositionEstimate.createLocalPositionEstimate(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

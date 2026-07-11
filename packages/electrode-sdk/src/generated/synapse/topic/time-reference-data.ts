@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class TimeReferenceData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -30,4 +32,32 @@ static createTimeReferenceData(builder:flatbuffers.Builder, time_unix_us: bigint
   return builder.offset();
 }
 
+
+unpack(): TimeReferenceDataT {
+  return new TimeReferenceDataT(
+    this.timeUnixUs(),
+    this.timeBootUs()
+  );
+}
+
+
+unpackTo(_o: TimeReferenceDataT): void {
+  _o.timeUnixUs = this.timeUnixUs();
+  _o.timeBootUs = this.timeBootUs();
+}
+}
+
+export class TimeReferenceDataT {
+constructor(
+  public timeUnixUs: bigint = BigInt('0'),
+  public timeBootUs: bigint = BigInt('0')
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return TimeReferenceData.createTimeReferenceData(builder,
+    this.timeUnixUs,
+    this.timeBootUs
+  );
+}
 }

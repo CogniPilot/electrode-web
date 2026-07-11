@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { TrajectorySegmentData } from '../../synapse/topic/trajectory-segment-data.js';
+import { TrajectorySegmentData, TrajectorySegmentDataT } from '../../synapse/topic/trajectory-segment-data';
 
 
 export class TrajectorySegment {
@@ -45,5 +45,29 @@ static createTrajectorySegment(builder:flatbuffers.Builder, dataOffset:flatbuffe
   TrajectorySegment.startTrajectorySegment(builder);
   TrajectorySegment.addData(builder, dataOffset);
   return TrajectorySegment.endTrajectorySegment(builder);
+}
+
+unpack(): TrajectorySegmentT {
+  return new TrajectorySegmentT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: TrajectorySegmentT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class TrajectorySegmentT {
+constructor(
+  public data: TrajectorySegmentDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return TrajectorySegment.createTrajectorySegment(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

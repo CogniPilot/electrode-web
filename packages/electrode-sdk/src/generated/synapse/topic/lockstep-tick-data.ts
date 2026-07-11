@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class LockstepTickData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -41,4 +43,40 @@ static createLockstepTickData(builder:flatbuffers.Builder, target_boot_time_us: 
   return builder.offset();
 }
 
+
+unpack(): LockstepTickDataT {
+  return new LockstepTickDataT(
+    this.targetBootTimeUs(),
+    this.runId(),
+    this.sequence(),
+    this.flags()
+  );
+}
+
+
+unpackTo(_o: LockstepTickDataT): void {
+  _o.targetBootTimeUs = this.targetBootTimeUs();
+  _o.runId = this.runId();
+  _o.sequence = this.sequence();
+  _o.flags = this.flags();
+}
+}
+
+export class LockstepTickDataT {
+constructor(
+  public targetBootTimeUs: bigint = BigInt('0'),
+  public runId: number = 0,
+  public sequence: number = 0,
+  public flags: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return LockstepTickData.createLockstepTickData(builder,
+    this.targetBootTimeUs,
+    this.runId,
+    this.sequence,
+    this.flags
+  );
+}
 }

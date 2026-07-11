@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { RateTriplet } from '../../synapse/types/rate-triplet.js';
+import { RateTriplet, RateTripletT } from '../../synapse/types/rate-triplet';
 
 
 export class RateCommandData {
@@ -47,4 +47,42 @@ static createRateCommandData(builder:flatbuffers.Builder, timestamp_us: bigint, 
   return builder.offset();
 }
 
+
+unpack(): RateCommandDataT {
+  return new RateCommandDataT(
+    this.timestampUs(),
+    (this.bodyRateFluRadS() !== null ? this.bodyRateFluRadS()!.unpack() : null),
+    this.thrust(),
+    this.typeMask()
+  );
+}
+
+
+unpackTo(_o: RateCommandDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.bodyRateFluRadS = (this.bodyRateFluRadS() !== null ? this.bodyRateFluRadS()!.unpack() : null);
+  _o.thrust = this.thrust();
+  _o.typeMask = this.typeMask();
+}
+}
+
+export class RateCommandDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public bodyRateFluRadS: RateTripletT|null = null,
+  public thrust: number = 0.0,
+  public typeMask: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return RateCommandData.createRateCommandData(builder,
+    this.timestampUs,
+    (this.bodyRateFluRadS?.roll ?? 0),
+    (this.bodyRateFluRadS?.pitch ?? 0),
+    (this.bodyRateFluRadS?.yaw ?? 0),
+    this.thrust,
+    this.typeMask
+  );
+}
 }

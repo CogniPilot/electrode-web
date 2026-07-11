@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class NavigationTargetData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -66,4 +68,60 @@ static createNavigationTargetData(builder:flatbuffers.Builder, timestamp_us: big
   return builder.offset();
 }
 
+
+unpack(): NavigationTargetDataT {
+  return new NavigationTargetDataT(
+    this.timestampUs(),
+    this.altitudeErrorM(),
+    this.airspeedErrorMS(),
+    this.xtrackErrorM(),
+    this.desiredRollCdeg(),
+    this.desiredPitchCdeg(),
+    this.desiredYawCdeg(),
+    this.targetYawCdeg(),
+    this.distanceToWaypointM()
+  );
+}
+
+
+unpackTo(_o: NavigationTargetDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.altitudeErrorM = this.altitudeErrorM();
+  _o.airspeedErrorMS = this.airspeedErrorMS();
+  _o.xtrackErrorM = this.xtrackErrorM();
+  _o.desiredRollCdeg = this.desiredRollCdeg();
+  _o.desiredPitchCdeg = this.desiredPitchCdeg();
+  _o.desiredYawCdeg = this.desiredYawCdeg();
+  _o.targetYawCdeg = this.targetYawCdeg();
+  _o.distanceToWaypointM = this.distanceToWaypointM();
+}
+}
+
+export class NavigationTargetDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public altitudeErrorM: number = 0.0,
+  public airspeedErrorMS: number = 0.0,
+  public xtrackErrorM: number = 0.0,
+  public desiredRollCdeg: number = 0,
+  public desiredPitchCdeg: number = 0,
+  public desiredYawCdeg: number = 0,
+  public targetYawCdeg: number = 0,
+  public distanceToWaypointM: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return NavigationTargetData.createNavigationTargetData(builder,
+    this.timestampUs,
+    this.altitudeErrorM,
+    this.airspeedErrorMS,
+    this.xtrackErrorM,
+    this.desiredRollCdeg,
+    this.desiredPitchCdeg,
+    this.desiredYawCdeg,
+    this.targetYawCdeg,
+    this.distanceToWaypointM
+  );
+}
 }

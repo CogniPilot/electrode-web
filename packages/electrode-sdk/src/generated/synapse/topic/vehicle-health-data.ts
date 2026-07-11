@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class VehicleHealthData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -110,4 +112,96 @@ static createVehicleHealthData(builder:flatbuffers.Builder, timestamp_us: bigint
   return builder.offset();
 }
 
+
+unpack(): VehicleHealthDataT {
+  return new VehicleHealthDataT(
+    this.timestampUs(),
+    this.sensorsPresent(),
+    this.sensorsEnabled(),
+    this.sensorsHealth(),
+    this.sensorsPresentExt(),
+    this.sensorsEnabledExt(),
+    this.sensorsHealthExt(),
+    this.loadDpermille(),
+    this.voltageBatteryCv(),
+    this.currentBatteryDa(),
+    this.dropRateCommCpercent(),
+    this.errorsComm(),
+    this.batteryRemainingPct(),
+    this.vehicleType(),
+    this.flightMode(),
+    this.systemState(),
+    this.linkQualityPct(),
+    this.flags()
+  );
+}
+
+
+unpackTo(_o: VehicleHealthDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.sensorsPresent = this.sensorsPresent();
+  _o.sensorsEnabled = this.sensorsEnabled();
+  _o.sensorsHealth = this.sensorsHealth();
+  _o.sensorsPresentExt = this.sensorsPresentExt();
+  _o.sensorsEnabledExt = this.sensorsEnabledExt();
+  _o.sensorsHealthExt = this.sensorsHealthExt();
+  _o.loadDpermille = this.loadDpermille();
+  _o.voltageBatteryCv = this.voltageBatteryCv();
+  _o.currentBatteryDa = this.currentBatteryDa();
+  _o.dropRateCommCpercent = this.dropRateCommCpercent();
+  _o.errorsComm = this.errorsComm();
+  _o.batteryRemainingPct = this.batteryRemainingPct();
+  _o.vehicleType = this.vehicleType();
+  _o.flightMode = this.flightMode();
+  _o.systemState = this.systemState();
+  _o.linkQualityPct = this.linkQualityPct();
+  _o.flags = this.flags();
+}
+}
+
+export class VehicleHealthDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public sensorsPresent: number = 0,
+  public sensorsEnabled: number = 0,
+  public sensorsHealth: number = 0,
+  public sensorsPresentExt: number = 0,
+  public sensorsEnabledExt: number = 0,
+  public sensorsHealthExt: number = 0,
+  public loadDpermille: number = 0,
+  public voltageBatteryCv: number = 0,
+  public currentBatteryDa: number = 0,
+  public dropRateCommCpercent: number = 0,
+  public errorsComm: number = 0,
+  public batteryRemainingPct: number = 0,
+  public vehicleType: number = 0,
+  public flightMode: number = 0,
+  public systemState: number = 0,
+  public linkQualityPct: number = 0,
+  public flags: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return VehicleHealthData.createVehicleHealthData(builder,
+    this.timestampUs,
+    this.sensorsPresent,
+    this.sensorsEnabled,
+    this.sensorsHealth,
+    this.sensorsPresentExt,
+    this.sensorsEnabledExt,
+    this.sensorsHealthExt,
+    this.loadDpermille,
+    this.voltageBatteryCv,
+    this.currentBatteryDa,
+    this.dropRateCommCpercent,
+    this.errorsComm,
+    this.batteryRemainingPct,
+    this.vehicleType,
+    this.flightMode,
+    this.systemState,
+    this.linkQualityPct,
+    this.flags
+  );
+}
 }

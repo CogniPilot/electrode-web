@@ -193,12 +193,16 @@ impl SimulationProfile {
             || self.command_input_topic == "synapse/v1/topic/radio_control"
             || self.command_input_topic == "synapse/v1/topic/manual_control_command"
             || self.command_input_topic == "synapse/v1/topic/pwm_signal_outputs"
+            || self.command_input_topic == "rc"
+            || self.command_input_topic == "manual"
+            || self.command_input_topic == "pwm"
         {
             self.command_input_topic = defaults.command_input_topic;
         }
         if self.actuator_output_topic.trim().is_empty()
             || self.actuator_output_topic == "synapse/control_output"
             || self.actuator_output_topic == "synapse/v1/topic/pwm_signal_outputs"
+            || self.actuator_output_topic == "pwm"
         {
             self.actuator_output_topic = defaults.actuator_output_topic;
         }
@@ -214,6 +218,8 @@ impl SimulationProfile {
             || self.telemetry_output_topic == "synapse/mocap/rigid_body/cub1/pose"
             || self.telemetry_output_topic == "synapse/v1/topic/mocap_frame"
             || self.telemetry_output_topic == "synapse/v1/sil/sim_input"
+            || self.telemetry_output_topic == "qualisys/mocap"
+            || self.telemetry_output_topic == "mocap"
         {
             self.telemetry_output_topic = defaults.telemetry_output_topic;
         }

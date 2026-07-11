@@ -1,16 +1,31 @@
 # Electrode command authority
 
-This crate is the security boundary between browser Zenoh peers and native
-vehicle peers. It opens separate WebSocket and UDP sessions with multicast
-discovery disabled. Nothing crosses from the browser session to the vehicle
-session unless an explicit mapping in `CommandPolicy` accepts it.
+This crate separates four Zenoh trust domains with multicast discovery
+disabled:
+
+- the trusted GCS website on `ws/127.0.0.1:7447`;
+- checked LAN command requests on `ws/0.0.0.0:7448`;
+- a connect-only LAN telemetry client for the Qualisys router; and
+- the autopilot router on `udp/127.0.0.1:7447`.
+
+Local website commands use the typed target mapping but bypass LAN value
+policy. LAN command requests use `CommandPolicy`. LAN telemetry is allowlisted
+and validated before it is copied into the trusted browser or vehicle domains.
+
+The checked LAN protocol accepts team-scoped velocity (`EVC1`) and budget-query
+(`EVB1`) envelopes from the standalone website. Each normalized team name has
+five persistent velocity attempts. CSV is authoritative, JSON is an inspection
+mirror, and status is returned on `gcs/v1/status/velocity`. This quota is not an
+authentication mechanism; team names are self-asserted.
 
 Accepted typed intents:
 
-- `gcs/v1/cmd/velocity` -> `synapse/v1/topic/local_position_command`
-- `gcs/v1/cmd/manual` -> `synapse/v1/topic/manual_control_command`
-- `gcs/v1/cmd/radio` -> `synapse/v1/topic/radio_control`
-- `gcs/v1/cmd/gain` -> `synapse/v1/cmd/param_set` query
+- `gcs/v1/cmd/velocity` -> `pos_sp`
+- `gcs/v1/cmd/manual` -> `manual`
+- `gcs/v1/cmd/radio` -> `rc`
+- `gcs/v1/cmd/gain` -> `cmd/param_set` query
+- `gcs/v1/cmd/parameters` -> `cmd/param_get` query
+- `gcs/v1/cmd/trajectory` -> `cmd/trajectory_set` query
 
 `gcs/v1/cmd/raw/<leaf>` preserves the Packet Traffic prototype feature. The
 leaf must be one safe segment and each payload is bounded to 4 KiB. Explicitly
@@ -18,18 +33,19 @@ selected typed leaves are allowed; the bytes are forwarded exactly and are not
 claimed to be a schema-verified FlatBuffer. Repeat and interval are controlled
 by the website.
 
-Vehicle telemetry is relayed one way to the browser. The only non-command
-browser-to-vehicle relay is the schema-verified private Rumoca `MocapFrame`.
+Vehicle telemetry is relayed one way to the trusted local browser. LAN
+`MocapFrame`, rigid-body names, and external-odometry streams are validated and
+relayed from the dedicated telemetry client. Private Rumoca `MocapFrame` data
+is accepted only from the trusted local browser domain.
 
 ## Firmware updates
 
 The browser's staged namespace is
 `gcs/v1/cmd/firmware/<update-id>/{start,chunk/<index>,commit}`. The vehicle-side
-query keys are `synapse/v1/cmd/firmware_{info,status,prepare,chunk,commit,abort}`.
-Published `synapse_fbs` 0.5.0 does not export these generated request/reply
-types. Until the additive schema release lands, this crate uses bounded
-low-level FlatBuffer readers/builders for those exact table layouts. It
-assembles and hashes the browser upload, compares it with a trusted baseline,
+query keys are `cmd/firmware_{info,status,prepare,chunk,commit,abort}`.
+The request and reply payloads use the generated firmware bindings exported by
+`synapse_fbs` 0.5.1. This crate assembles and hashes the browser upload,
+compares it with a trusted baseline,
 allows differences only inside configured gain windows, and only then performs
 the vehicle query transfer with chunk retries. Progress is published on
 `gcs/v1/status/firmware/<update-id>`.

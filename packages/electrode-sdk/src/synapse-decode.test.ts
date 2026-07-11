@@ -1,16 +1,44 @@
 import { describe, expect, it } from 'vitest';
+import { parseKey } from '@cognipilot/synapse-fbs/topic_catalog';
 
 import {
   encodeCompactRigidBodyPose,
-  encodeMocapFrame
+  encodeMocapFrame,
+  encodeMocapPoseFrame,
+  encodeRawPose
 } from './mocap-encode';
-import { classify, decode } from './synapse-decode';
+import { classify, decode, expectedTopicEncoding } from './synapse-decode';
+
+const EXTERNAL_ODOMETRY_TOPIC = parseKey('cub1/external_pose')!.topic;
 
 describe('Synapse decoder', () => {
+  it('decodes the Synapse 0.7 raw MocapPoseFrame without using an odometry estimate', () => {
+    const bytes = encodeMocapPoseFrame(
+      {
+        position: { x: 1.25, y: -2.5, z: 3.75 },
+        attitude: { x: 0, y: 0, z: 0.7071068, w: 0.7071068 }
+      },
+      { timestampUs: 42, frameNumber: 7, bodyId: 3, residual: 0.5 }
+    );
+    const topic = parseKey('qualisys/cub1/mocap')!.topic;
+    const decoded = decode('qualisys/cub1/mocap', bytes, expectedTopicEncoding(topic));
+
+    expect(decoded.schema).toBe('MocapPoseFrame');
+    expect(decoded.decoded).toBe(true);
+    expect(decoded.payload).toMatchObject({
+      timestamp_us: 42,
+      frame_number: 7,
+      rigid_bodies: [{ id: 3, position: { x: 1.25, y: -2.5, z: 3.75 }, tracking_valid: true }]
+    });
+  });
+
   it('classifies known topic keys', () => {
-    expect(classify('robot/synapse/v1/topic/manual_control_command')).toBe('ManualControl');
+    expect(classify('robot/manual')).toBe('ManualControl');
     expect(classify('synapse/mocap/rigid_body/cub1/pose')).toBe('MocapFrame');
     expect(classify('synapse/mocap/frame')).toBe('MocapFrame');
+    expect(classify('synapse/v1/topic/mocap_frame')).toBe('MocapFrame');
+    expect(classify('qualisys/cub1/pose_raw')).toBe('RawPose');
+    expect(classify('qualisys/cub1/pose')).toBe('Raw');
     expect(classify('synapse/mocap/definition')).toBe('Raw');
     expect(classify('synapse/v1/topic/unknown')).toBe('Raw');
   });
@@ -57,6 +85,111 @@ describe('Synapse decoder', () => {
       payload: { bytes: 4, hexPreview: '000102ff' }
     });
   });
+
+  it('decodes the bridge raw pose fixed-layout payload', () => {
+    const bytes = encodeRawPose(
+      { position: { x: 1, y: 2, z: 3 }, attitude: { w: 1, x: 0, y: 0, z: 0 } },
+      123_456
+    );
+    const topic = parseKey('qualisys/cub1/pose_raw')!.topic;
+    const decoded = decode('qualisys/cub1/pose_raw', bytes, expectedTopicEncoding(topic));
+
+    expect(decoded.decoded).toBe(true);
+    expect(decoded.schema).toBe('RawPose');
+    expect(decoded.payload).toMatchObject({
+      data: {
+        timestamp_us: 123_456,
+        position: { x: 1, y: 2, z: 3 },
+        attitude: { w: 1, x: 0, y: 0, z: 0 }
+      }
+    });
+  });
+});
+
+describe('Value contract enforcement', () => {
+  const MOCAP_TOPIC = parseKey('mocap')!.topic;
+
+  function externalOdometryBytes(): Uint8Array {
+    const bytes = new Uint8Array(64);
+    const view = new DataView(bytes.buffer);
+    view.setBigUint64(0, 42n, true);
+    view.setFloat32(20, 1, true); // attitude.w
+    return bytes;
+  }
+
+  it('accepts a struct topic carrying the exact struct encoding', () => {
+    const decoded = decode(
+      'external_pose/1',
+      externalOdometryBytes(),
+      expectedTopicEncoding(EXTERNAL_ODOMETRY_TOPIC)
+    );
+
+    expect(decoded.decoded).toBe(true);
+    expect(decoded.schema).toBe('ExternalOdometry');
+  });
+
+  it('accepts the zenoh-pico byte wrapper around an exact struct encoding', () => {
+    const decoded = decode(
+      'external_pose/1',
+      externalOdometryBytes(),
+      `zenoh/bytes;${expectedTopicEncoding(EXTERNAL_ODOMETRY_TOPIC)}`
+    );
+
+    expect(decoded.decoded).toBe(true);
+    expect(decoded.schema).toBe('ExternalOdometry');
+  });
+
+  it('accepts a root-table topic carrying the exact flatbuffers encoding', () => {
+    const bytes = encodeMocapPoseFrame(
+      { position: { x: 1, y: 2, z: 3 }, attitude: { x: 0, y: 0, z: 0, w: 1 } },
+      { frameNumber: 3, timestampUs: 77, bodyId: 1 }
+    );
+
+    const decoded = decode('mocap', bytes, expectedTopicEncoding(MOCAP_TOPIC));
+
+    expect(decoded.decoded).toBe(true);
+    expect(decoded.schema).toBe('MocapPoseFrame');
+    expect(decoded.payload).toMatchObject({ frame_number: 3, timestamp_us: 77 });
+  });
+
+  it('rejects a catalog-keyed sample with no encoding', () => {
+    const decoded = decode('external_pose/1', externalOdometryBytes());
+
+    expect(decoded.decoded).toBe(false);
+    expect(decoded.schema).toBe('ExternalOdometry');
+    expect((decoded.payload as { contractError?: string }).contractError).toMatch(/missing encoding/);
+  });
+
+  it('rejects a catalog-keyed sample with a mismatched wire type', () => {
+    const wrongType = expectedTopicEncoding(MOCAP_TOPIC);
+    const decoded = decode('external_pose/1', externalOdometryBytes(), wrongType);
+
+    expect(decoded.decoded).toBe(false);
+    expect((decoded.payload as { contractError?: string }).contractError).toMatch(/encoding mismatch/);
+  });
+
+  it('rejects a catalog-keyed sample with a mismatched schema hash', () => {
+    const staleHash = expectedTopicEncoding(EXTERNAL_ODOMETRY_TOPIC).replace(
+      /schema=sha256-128:.*/,
+      'schema=sha256-128:00000000000000000000000000000000'
+    );
+    const decoded = decode('external_pose/1', externalOdometryBytes(), staleHash);
+
+    expect(decoded.decoded).toBe(false);
+    expect((decoded.payload as { contractError?: string }).contractError).toMatch(/encoding mismatch/);
+  });
+
+  it('exempts custom non-catalog keys from the encoding contract', () => {
+    const bytes = encodeCompactRigidBodyPose({
+      position: { x: 1, y: 2, z: 3 },
+      attitude: { x: 0, y: 0, z: 0, w: 1 }
+    });
+
+    const decoded = decode('synapse/mocap/rigid_body/cub1/pose', bytes);
+
+    expect(decoded.decoded).toBe(true);
+    expect(decoded.schema).toBe('MocapFrame');
+  });
 });
 
 describe('Mocap wire contract', () => {
@@ -99,13 +232,13 @@ describe('Mocap wire contract', () => {
     expect(body.attitude).toMatchObject(pose.attitude);
   });
 
-  it('decodes full MocapFrame FlatBuffers on the synapse/mocap/frame topic', () => {
+  it('decodes raw MocapFrame FlatBuffers on the Qualisys bridge topic', () => {
     const bytes = encodeMocapFrame(
       { position: { x: 1, y: 2, z: 3 }, attitude: { x: 0, y: 0, z: 0, w: 1 } },
       { frameNumber: 7, timestampUs: 99, bodyId: 1 }
     );
 
-    const decoded = decode('synapse/mocap/frame', bytes);
+    const decoded = decode('synapse/v1/topic/mocap_frame', bytes);
 
     expect(decoded.decoded).toBe(true);
     expect(decoded.schema).toBe('MocapFrame');

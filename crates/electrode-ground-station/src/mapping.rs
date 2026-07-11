@@ -165,7 +165,7 @@ impl MappingProfile {
             "--pwm-output-topic".into(),
             "synapse/motor_output".into(),
             "--radio-output-topic".into(),
-            "synapse/v1/topic/radio_control".into(),
+            "rc".into(),
             "--channel-map".into(),
             join_usize(&self.ppm_channel_map),
             "--channel-invert".into(),

@@ -186,7 +186,7 @@ struct ZenohArgs {
         alias = "zenoh-topic",
         env = "ZENOH_TOPIC",
         value_name = "KEYEXPR",
-        default_value = "synapse/v1/topic/manual_control_command",
+        default_value = "manual",
         help = "Zenoh key expression for synapse.topic.ManualControlData bare structs"
     )]
     topic: String,
@@ -259,6 +259,11 @@ fn main() -> Result<()> {
         .declare_publisher(cli.zenoh.topic.clone())
         .wait()
         .map_err(|error| BridgeError::Zenoh(error.to_string()))?;
+    // Mandatory 0.6.0 value contract for the ManualControlCommand payloads.
+    let encoding = synapse_fbs::topic_catalog::topic_by_name("ManualControlCommand")
+        .map(synapse_fbs::value_contract::encoding_for_topic)
+        .map(|encoding| zenoh::bytes::Encoding::from(encoding.as_str()))
+        .unwrap_or_default();
 
     let mut state = ManualState::default();
     loop {
@@ -284,6 +289,7 @@ fn main() -> Result<()> {
         let payload = encode_manual_control(&state, &cli.mapping, valid);
         publisher
             .put(payload)
+            .encoding(encoding.clone())
             .wait()
             .map_err(|error| BridgeError::Zenoh(error.to_string()))?;
     }

@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { ActuatorCommandData } from '../../synapse/topic/actuator-command-data.js';
+import { ActuatorCommandData, ActuatorCommandDataT } from '../../synapse/topic/actuator-command-data';
 
 
 export class ActuatorCommand {
@@ -45,5 +45,29 @@ static createActuatorCommand(builder:flatbuffers.Builder, dataOffset:flatbuffers
   ActuatorCommand.startActuatorCommand(builder);
   ActuatorCommand.addData(builder, dataOffset);
   return ActuatorCommand.endActuatorCommand(builder);
+}
+
+unpack(): ActuatorCommandT {
+  return new ActuatorCommandT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: ActuatorCommandT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class ActuatorCommandT {
+constructor(
+  public data: ActuatorCommandDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return ActuatorCommand.createActuatorCommand(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

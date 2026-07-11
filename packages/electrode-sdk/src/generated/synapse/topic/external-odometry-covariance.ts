@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { ExternalOdometryCovarianceData } from '../../synapse/topic/external-odometry-covariance-data.js';
+import { ExternalOdometryCovarianceData, ExternalOdometryCovarianceDataT } from '../../synapse/topic/external-odometry-covariance-data';
 
 
 export class ExternalOdometryCovariance {
@@ -45,5 +45,29 @@ static createExternalOdometryCovariance(builder:flatbuffers.Builder, dataOffset:
   ExternalOdometryCovariance.startExternalOdometryCovariance(builder);
   ExternalOdometryCovariance.addData(builder, dataOffset);
   return ExternalOdometryCovariance.endExternalOdometryCovariance(builder);
+}
+
+unpack(): ExternalOdometryCovarianceT {
+  return new ExternalOdometryCovarianceT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: ExternalOdometryCovarianceT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class ExternalOdometryCovarianceT {
+constructor(
+  public data: ExternalOdometryCovarianceDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return ExternalOdometryCovariance.createExternalOdometryCovariance(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

@@ -1,11 +1,9 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { CirclePlay, Square } from '@lucide/svelte';
   import {
     fetchMapping,
     saveMapping,
     fetchPpmBridgeStatus,
-    setPpmBridgeRunning,
     type BridgeStatus,
     type MappingProfile
   } from '$lib/gcs';
@@ -25,7 +23,6 @@
   let profile: MappingProfile | null = null;
   let bridge: BridgeStatus | null = null;
   let status = '';
-  let busy = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -103,20 +100,6 @@
     }
   }
 
-  async function togglePpm(): Promise<void> {
-    if (busy) return;
-    busy = true;
-    status = ppmRunning ? 'stopping...' : 'starting...';
-    try {
-      bridge = await setPpmBridgeRunning(!ppmRunning);
-      status = bridge.ppmRunning ? 'hardware bridge running' : 'hardware bridge stopped';
-    } catch (err) {
-      status = err instanceof Error ? err.message : 'ppm toggle failed';
-    } finally {
-      busy = false;
-    }
-  }
-
   onMount(async () => {
     try {
       profile = normalized(await fetchMapping());
@@ -142,23 +125,6 @@
       <span class="dev">{liveSource ? 'ppm wire live' : 'ppm wire low'}</span>
       {#if status}<span class="status">{status}</span>{/if}
     </div>
-    <button
-      type="button"
-      class="btn"
-      class:primary={!ppmRunning}
-      class:danger={ppmRunning}
-      onclick={() => void togglePpm()}
-      disabled={busy}
-      title="Start/stop only the Arduino PPM serial bridge"
-    >
-      {#if ppmRunning}
-        <Square size={14} />
-        <span>Stop PPM</span>
-      {:else}
-        <CirclePlay size={14} />
-        <span>Start PPM</span>
-      {/if}
-    </button>
   </div>
 
   {#if !profile}
@@ -265,43 +231,6 @@
   .status.block {
     display: block;
     margin-top: 6px;
-  }
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 9px;
-    border: 1px solid rgba(53, 208, 127, 0.3);
-    border-radius: 7px;
-    background: rgba(5, 8, 8, 0.4);
-    color: #edf6f1;
-    font-size: 0.68rem;
-    font-weight: 760;
-    cursor: pointer;
-  }
-  .btn.primary {
-    background: #35d07f;
-    color: #10171a;
-    border-color: transparent;
-  }
-  .btn.danger {
-    background: #ff5d4a;
-    color: #10171a;
-    border-color: transparent;
-  }
-  .btn:disabled {
-    opacity: 0.55;
-    cursor: default;
-  }
-  .ppm-map.light .btn {
-    color: #12171b;
-    background: rgba(255, 255, 255, 0.85);
-  }
-  .ppm-map.light .btn.primary {
-    background: #35d07f;
-  }
-  .ppm-map.light .btn.danger {
-    background: #ff5d4a;
   }
   .toggles {
     display: flex;

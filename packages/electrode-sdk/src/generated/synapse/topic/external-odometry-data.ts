@@ -2,11 +2,11 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { ExternalOdometryFlags } from '../../synapse/topic/external-odometry-flags.js';
-import { ExternalOdometryStatus } from '../../synapse/topic/external-odometry-status.js';
-import { Quaternionf } from '../../synapse/types/quaternionf.js';
-import { RateTriplet } from '../../synapse/types/rate-triplet.js';
-import { Vec3f } from '../../synapse/types/vec3f.js';
+import { ExternalOdometryFlags } from '../../synapse/topic/external-odometry-flags';
+import { ExternalOdometryStatus } from '../../synapse/topic/external-odometry-status';
+import { Quaternionf, QuaternionfT } from '../../synapse/types/quaternionf';
+import { RateTriplet, RateTripletT } from '../../synapse/types/rate-triplet';
+import { Vec3f, Vec3fT } from '../../synapse/types/vec3f';
 
 
 export class ExternalOdometryData {
@@ -85,4 +85,69 @@ static createExternalOdometryData(builder:flatbuffers.Builder, timestamp_us: big
   return builder.offset();
 }
 
+
+unpack(): ExternalOdometryDataT {
+  return new ExternalOdometryDataT(
+    this.timestampUs(),
+    (this.positionEnuM() !== null ? this.positionEnuM()!.unpack() : null),
+    (this.attitude() !== null ? this.attitude()!.unpack() : null),
+    (this.linearVelocityEnuMS() !== null ? this.linearVelocityEnuMS()!.unpack() : null),
+    (this.angularVelocityFluRadS() !== null ? this.angularVelocityFluRadS()!.unpack() : null),
+    this.flags(),
+    this.status(),
+    this.sourceId(),
+    this.id()
+  );
+}
+
+
+unpackTo(_o: ExternalOdometryDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.positionEnuM = (this.positionEnuM() !== null ? this.positionEnuM()!.unpack() : null);
+  _o.attitude = (this.attitude() !== null ? this.attitude()!.unpack() : null);
+  _o.linearVelocityEnuMS = (this.linearVelocityEnuMS() !== null ? this.linearVelocityEnuMS()!.unpack() : null);
+  _o.angularVelocityFluRadS = (this.angularVelocityFluRadS() !== null ? this.angularVelocityFluRadS()!.unpack() : null);
+  _o.flags = this.flags();
+  _o.status = this.status();
+  _o.sourceId = this.sourceId();
+  _o.id = this.id();
+}
+}
+
+export class ExternalOdometryDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public positionEnuM: Vec3fT|null = null,
+  public attitude: QuaternionfT|null = null,
+  public linearVelocityEnuMS: Vec3fT|null = null,
+  public angularVelocityFluRadS: RateTripletT|null = null,
+  public flags: ExternalOdometryFlags = 0 as ExternalOdometryFlags,
+  public status: ExternalOdometryStatus = ExternalOdometryStatus.Unknown,
+  public sourceId: number = 0,
+  public id: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return ExternalOdometryData.createExternalOdometryData(builder,
+    this.timestampUs,
+    (this.positionEnuM?.x ?? 0),
+    (this.positionEnuM?.y ?? 0),
+    (this.positionEnuM?.z ?? 0),
+    (this.attitude?.w ?? 0),
+    (this.attitude?.x ?? 0),
+    (this.attitude?.y ?? 0),
+    (this.attitude?.z ?? 0),
+    (this.linearVelocityEnuMS?.x ?? 0),
+    (this.linearVelocityEnuMS?.y ?? 0),
+    (this.linearVelocityEnuMS?.z ?? 0),
+    (this.angularVelocityFluRadS?.roll ?? 0),
+    (this.angularVelocityFluRadS?.pitch ?? 0),
+    (this.angularVelocityFluRadS?.yaw ?? 0),
+    this.flags,
+    this.status,
+    this.sourceId,
+    this.id
+  );
+}
 }

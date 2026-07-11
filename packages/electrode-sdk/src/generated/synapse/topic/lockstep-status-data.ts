@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { LockstepStatusState } from '../../synapse/topic/lockstep-status-state.js';
+import { LockstepStatusState } from '../../synapse/topic/lockstep-status-state';
 
 
 export class LockstepStatusData {
@@ -54,4 +54,48 @@ static createLockstepStatusData(builder:flatbuffers.Builder, timestamp_us: bigin
   return builder.offset();
 }
 
+
+unpack(): LockstepStatusDataT {
+  return new LockstepStatusDataT(
+    this.timestampUs(),
+    this.runId(),
+    this.sequence(),
+    this.resultDetail(),
+    this.state(),
+    this.id()
+  );
+}
+
+
+unpackTo(_o: LockstepStatusDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.runId = this.runId();
+  _o.sequence = this.sequence();
+  _o.resultDetail = this.resultDetail();
+  _o.state = this.state();
+  _o.id = this.id();
+}
+}
+
+export class LockstepStatusDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public runId: number = 0,
+  public sequence: number = 0,
+  public resultDetail: number = 0,
+  public state: LockstepStatusState = LockstepStatusState.Unknown,
+  public id: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return LockstepStatusData.createLockstepStatusData(builder,
+    this.timestampUs,
+    this.runId,
+    this.sequence,
+    this.resultDetail,
+    this.state,
+    this.id
+  );
+}
 }

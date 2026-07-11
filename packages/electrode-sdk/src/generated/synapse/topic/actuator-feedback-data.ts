@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class ActuatorFeedbackData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -191,4 +193,160 @@ static createActuatorFeedbackData(builder:flatbuffers.Builder, timestamp_us: big
   return builder.offset();
 }
 
+
+unpack(): ActuatorFeedbackDataT {
+  return new ActuatorFeedbackDataT(
+    this.timestampUs(),
+    this.activeMask(),
+    this.output0(),
+    this.output1(),
+    this.output2(),
+    this.output3(),
+    this.output4(),
+    this.output5(),
+    this.output6(),
+    this.output7(),
+    this.output8(),
+    this.output9(),
+    this.output10(),
+    this.output11(),
+    this.output12(),
+    this.output13(),
+    this.output14(),
+    this.output15(),
+    this.output16(),
+    this.output17(),
+    this.output18(),
+    this.output19(),
+    this.output20(),
+    this.output21(),
+    this.output22(),
+    this.output23(),
+    this.output24(),
+    this.output25(),
+    this.output26(),
+    this.output27(),
+    this.output28(),
+    this.output29(),
+    this.output30(),
+    this.output31()
+  );
+}
+
+
+unpackTo(_o: ActuatorFeedbackDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.activeMask = this.activeMask();
+  _o.output0 = this.output0();
+  _o.output1 = this.output1();
+  _o.output2 = this.output2();
+  _o.output3 = this.output3();
+  _o.output4 = this.output4();
+  _o.output5 = this.output5();
+  _o.output6 = this.output6();
+  _o.output7 = this.output7();
+  _o.output8 = this.output8();
+  _o.output9 = this.output9();
+  _o.output10 = this.output10();
+  _o.output11 = this.output11();
+  _o.output12 = this.output12();
+  _o.output13 = this.output13();
+  _o.output14 = this.output14();
+  _o.output15 = this.output15();
+  _o.output16 = this.output16();
+  _o.output17 = this.output17();
+  _o.output18 = this.output18();
+  _o.output19 = this.output19();
+  _o.output20 = this.output20();
+  _o.output21 = this.output21();
+  _o.output22 = this.output22();
+  _o.output23 = this.output23();
+  _o.output24 = this.output24();
+  _o.output25 = this.output25();
+  _o.output26 = this.output26();
+  _o.output27 = this.output27();
+  _o.output28 = this.output28();
+  _o.output29 = this.output29();
+  _o.output30 = this.output30();
+  _o.output31 = this.output31();
+}
+}
+
+export class ActuatorFeedbackDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public activeMask: number = 0,
+  public output0: number = 0.0,
+  public output1: number = 0.0,
+  public output2: number = 0.0,
+  public output3: number = 0.0,
+  public output4: number = 0.0,
+  public output5: number = 0.0,
+  public output6: number = 0.0,
+  public output7: number = 0.0,
+  public output8: number = 0.0,
+  public output9: number = 0.0,
+  public output10: number = 0.0,
+  public output11: number = 0.0,
+  public output12: number = 0.0,
+  public output13: number = 0.0,
+  public output14: number = 0.0,
+  public output15: number = 0.0,
+  public output16: number = 0.0,
+  public output17: number = 0.0,
+  public output18: number = 0.0,
+  public output19: number = 0.0,
+  public output20: number = 0.0,
+  public output21: number = 0.0,
+  public output22: number = 0.0,
+  public output23: number = 0.0,
+  public output24: number = 0.0,
+  public output25: number = 0.0,
+  public output26: number = 0.0,
+  public output27: number = 0.0,
+  public output28: number = 0.0,
+  public output29: number = 0.0,
+  public output30: number = 0.0,
+  public output31: number = 0.0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return ActuatorFeedbackData.createActuatorFeedbackData(builder,
+    this.timestampUs,
+    this.activeMask,
+    this.output0,
+    this.output1,
+    this.output2,
+    this.output3,
+    this.output4,
+    this.output5,
+    this.output6,
+    this.output7,
+    this.output8,
+    this.output9,
+    this.output10,
+    this.output11,
+    this.output12,
+    this.output13,
+    this.output14,
+    this.output15,
+    this.output16,
+    this.output17,
+    this.output18,
+    this.output19,
+    this.output20,
+    this.output21,
+    this.output22,
+    this.output23,
+    this.output24,
+    this.output25,
+    this.output26,
+    this.output27,
+    this.output28,
+    this.output29,
+    this.output30,
+    this.output31
+  );
+}
 }

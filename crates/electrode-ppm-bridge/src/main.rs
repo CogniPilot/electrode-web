@@ -26,8 +26,8 @@ the ROS ppm_bridge Arduino encoder.",
     after_help = "\
 Examples:
   electrode-ppm-bridge --serial-device /dev/ttyACM0
-  electrode-ppm-bridge --manual-topic synapse/v1/topic/manual_control_command --control-output-topic synapse/v1/topic/pwm_signal_outputs --channel-map 1,2,0,3,4
-  electrode-ppm-bridge --no-serial --pwm-output-topic synapse/motor_output --radio-output-topic synapse/v1/topic/radio_control
+  electrode-ppm-bridge --manual-topic manual --control-output-topic pwm --channel-map 1,2,0,3,4
+  electrode-ppm-bridge --no-serial --pwm-output-topic synapse/motor_output --radio-output-topic rc
 
 Environment:
   ZENOH_CONNECT, ZENOH_TOPIC, ZENOH_CONTROL_OUTPUT_TOPIC, ZENOH_PWM_OUTPUT_TOPIC, ZENOH_RADIO_OUTPUT_TOPIC
@@ -63,7 +63,7 @@ struct ZenohArgs {
         alias = "topic",
         env = "ZENOH_TOPIC",
         value_name = "KEYEXPR",
-        default_value = "synapse/v1/topic/manual_control_command",
+        default_value = "manual",
         help = "Zenoh key expression carrying synapse.topic.ManualControlData bare structs"
     )]
     manual_topic: String,
@@ -72,7 +72,7 @@ struct ZenohArgs {
         long = "control-output-topic",
         env = "ZENOH_CONTROL_OUTPUT_TOPIC",
         value_name = "KEYEXPR",
-        default_value = "synapse/v1/topic/pwm_signal_outputs",
+        default_value = "pwm",
         help = "Zenoh key expression carrying the autopilot's arbitrated synapse.topic.PwmSignalOutputsData bare structs"
     )]
     control_output_topic: String,
@@ -81,7 +81,7 @@ struct ZenohArgs {
         long = "radio-output-topic",
         env = "ZENOH_RADIO_OUTPUT_TOPIC",
         value_name = "KEYEXPR",
-        default_value = "synapse/v1/topic/radio_control",
+        default_value = "rc",
         help = "Zenoh key expression mirroring the post-arbitration radio wire as synapse.topic.RadioControlData bare structs (must differ from the manual topic: the bridge subscribes there and would re-ingest its own output)"
     )]
     radio_output_topic: String,
@@ -239,6 +239,14 @@ fn run(
 
     print_runtime_config(&cli, channel_map, channel_invert, overrides);
 
+    // Catalog topics carry a mandatory value contract in the Zenoh encoding
+    // (synapse_fbs 0.6.0); resolve the expected contract for each subscribed
+    // key once. Non-catalog keys carry no contract.
+    let manual_contract = subscribed_contract(&cli.zenoh.manual_topic);
+    let control_contract = subscribed_contract(&cli.zenoh.control_output_topic);
+    let radio_encoding = topic_encoding("RadioControl");
+    let pwm_encoding = topic_encoding("PwmSignalOutputs");
+
     let mut manual_mode = ManualMode::Failsafe;
     let mut manual_channels = PpmChannels(FAILSAFE_CHANNELS);
     let mut control_channels: Option<PpmChannels> = None;
@@ -250,6 +258,9 @@ fn run(
             .recv_timeout(Duration::from_millis(10))
             .map_err(|error| BridgeError::Zenoh(error.to_string()))?
         {
+            if !contract_matches(&sample, manual_contract) {
+                continue;
+            }
             let payload = sample.payload().to_bytes();
             match manual_from_payload(&payload) {
                 Ok(manual) => {
@@ -270,6 +281,9 @@ fn run(
             .recv_timeout(Duration::ZERO)
             .map_err(|error| BridgeError::Zenoh(error.to_string()))?
         {
+            if !contract_matches(&sample, control_contract) {
+                continue;
+            }
             let payload = sample.payload().to_bytes();
             match pwm_signal_outputs_to_channels(&payload) {
                 Some(channels) => {
@@ -290,6 +304,7 @@ fn run(
         if let Some(publisher) = &pwm_publisher {
             publisher
                 .put(channels_to_pwm_signal_outputs_payload(channels))
+                .encoding(pwm_encoding.clone())
                 .wait()
                 .map_err(|error| BridgeError::Zenoh(error.to_string()))?;
         }
@@ -297,6 +312,7 @@ fn run(
         if let Some(publisher) = &radio_publisher {
             publisher
                 .put(encode_radio_control(wire_channels))
+                .encoding(radio_encoding.clone())
                 .wait()
                 .map_err(|error| BridgeError::Zenoh(error.to_string()))?;
         }
@@ -304,6 +320,43 @@ fn run(
             serial.write_all(&build_packet(wire_channels))?;
         }
     }
+}
+
+/// Catalog topic the subscribed key resolves to, when it is a catalog key.
+fn subscribed_contract(key: &str) -> Option<&'static synapse_fbs::topic_catalog::TopicInfo> {
+    synapse_fbs::topic_catalog::parse_key(key).map(|parsed| parsed.topic)
+}
+
+/// Canonical value-contract encoding for a catalog topic, by name.
+fn topic_encoding(name: &str) -> zenoh::bytes::Encoding {
+    synapse_fbs::topic_catalog::topic_by_name(name)
+        .map(synapse_fbs::value_contract::encoding_for_topic)
+        .map(|encoding| zenoh::bytes::Encoding::from(encoding.as_str()))
+        .unwrap_or_default()
+}
+
+/// Mandatory 0.6.0 value contract: reject catalog samples whose encoding does
+/// not match before decoding. Non-catalog keys pass through.
+fn contract_matches(
+    sample: &zenoh::sample::Sample,
+    expected: Option<&'static synapse_fbs::topic_catalog::TopicInfo>,
+) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    let encoding = sample.encoding().to_string();
+    // Topic metadata can originate from separate linked copies of synapse_fbs,
+    // so pointer identity is not a valid contract check. The generated numeric
+    // topic ID is the stable wire identity.
+    let valid = synapse_fbs::value_contract::topic_for_encoding(&encoding)
+        .is_ok_and(|topic| topic.id == expected.id);
+    if !valid {
+        eprintln!(
+            "dropping {} sample: value contract mismatch (encoding {encoding:?})",
+            sample.key_expr()
+        );
+    }
+    valid
 }
 
 fn declare_radio_publisher<'a>(
@@ -518,6 +571,15 @@ fn zenoh_config(cli: &Cli) -> Result<Config> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_contract_encoding_resolves_to_the_subscribed_topic_id() {
+        let expected = subscribed_contract("manual").unwrap();
+        let encoding = synapse_fbs::value_contract::encoding_for_topic(expected);
+        let resolved = synapse_fbs::value_contract::topic_for_encoding(&encoding).unwrap();
+
+        assert_eq!(resolved.id, expected.id);
+    }
 
     #[test]
     fn auto_mode_uses_control_channels_but_manual_stabilization() {

@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { GlobalPositionEstimateData } from '../../synapse/topic/global-position-estimate-data.js';
+import { GlobalPositionEstimateData, GlobalPositionEstimateDataT } from '../../synapse/topic/global-position-estimate-data';
 
 
 export class GlobalPositionEstimate {
@@ -45,5 +45,29 @@ static createGlobalPositionEstimate(builder:flatbuffers.Builder, dataOffset:flat
   GlobalPositionEstimate.startGlobalPositionEstimate(builder);
   GlobalPositionEstimate.addData(builder, dataOffset);
   return GlobalPositionEstimate.endGlobalPositionEstimate(builder);
+}
+
+unpack(): GlobalPositionEstimateT {
+  return new GlobalPositionEstimateT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: GlobalPositionEstimateT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class GlobalPositionEstimateT {
+constructor(
+  public data: GlobalPositionEstimateDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return GlobalPositionEstimate.createGlobalPositionEstimate(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

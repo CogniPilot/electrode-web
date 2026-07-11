@@ -2,10 +2,10 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { TrajectoryDegree } from '../../synapse/topic/trajectory-degree.js';
-import { TrajectoryType } from '../../synapse/topic/trajectory-type.js';
-import { LocalFrame } from '../../synapse/types/local-frame.js';
-import { Vec3f } from '../../synapse/types/vec3f.js';
+import { TrajectoryDegree } from '../../synapse/topic/trajectory-degree';
+import { TrajectoryType } from '../../synapse/topic/trajectory-type';
+import { LocalFrame } from '../../synapse/types/local-frame';
+import { Vec3f, Vec3fT } from '../../synapse/types/vec3f';
 
 
 export class TrajectorySegmentData {
@@ -186,4 +186,148 @@ static createTrajectorySegmentData(builder:flatbuffers.Builder, timestamp_us: bi
   return builder.offset();
 }
 
+
+unpack(): TrajectorySegmentDataT {
+  return new TrajectorySegmentDataT(
+    this.timestampUs(),
+    this.startTimeUs(),
+    (this.p0EnuM() !== null ? this.p0EnuM()!.unpack() : null),
+    (this.p1EnuM() !== null ? this.p1EnuM()!.unpack() : null),
+    (this.p2EnuM() !== null ? this.p2EnuM()!.unpack() : null),
+    (this.p3EnuM() !== null ? this.p3EnuM()!.unpack() : null),
+    (this.p4EnuM() !== null ? this.p4EnuM()!.unpack() : null),
+    (this.p5EnuM() !== null ? this.p5EnuM()!.unpack() : null),
+    (this.p6EnuM() !== null ? this.p6EnuM()!.unpack() : null),
+    (this.p7EnuM() !== null ? this.p7EnuM()!.unpack() : null),
+    this.yaw0Rad(),
+    this.yaw1Rad(),
+    this.yaw2Rad(),
+    this.yaw3Rad(),
+    this.yaw4Rad(),
+    this.yaw5Rad(),
+    this.yaw6Rad(),
+    this.yaw7Rad(),
+    this.trajectoryId(),
+    this.segmentSeq(),
+    this.durationUs(),
+    this.planVersion(),
+    this.flags(),
+    this.trajectoryType(),
+    this.degree(),
+    this.frame(),
+    this.id()
+  );
+}
+
+
+unpackTo(_o: TrajectorySegmentDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.startTimeUs = this.startTimeUs();
+  _o.p0EnuM = (this.p0EnuM() !== null ? this.p0EnuM()!.unpack() : null);
+  _o.p1EnuM = (this.p1EnuM() !== null ? this.p1EnuM()!.unpack() : null);
+  _o.p2EnuM = (this.p2EnuM() !== null ? this.p2EnuM()!.unpack() : null);
+  _o.p3EnuM = (this.p3EnuM() !== null ? this.p3EnuM()!.unpack() : null);
+  _o.p4EnuM = (this.p4EnuM() !== null ? this.p4EnuM()!.unpack() : null);
+  _o.p5EnuM = (this.p5EnuM() !== null ? this.p5EnuM()!.unpack() : null);
+  _o.p6EnuM = (this.p6EnuM() !== null ? this.p6EnuM()!.unpack() : null);
+  _o.p7EnuM = (this.p7EnuM() !== null ? this.p7EnuM()!.unpack() : null);
+  _o.yaw0Rad = this.yaw0Rad();
+  _o.yaw1Rad = this.yaw1Rad();
+  _o.yaw2Rad = this.yaw2Rad();
+  _o.yaw3Rad = this.yaw3Rad();
+  _o.yaw4Rad = this.yaw4Rad();
+  _o.yaw5Rad = this.yaw5Rad();
+  _o.yaw6Rad = this.yaw6Rad();
+  _o.yaw7Rad = this.yaw7Rad();
+  _o.trajectoryId = this.trajectoryId();
+  _o.segmentSeq = this.segmentSeq();
+  _o.durationUs = this.durationUs();
+  _o.planVersion = this.planVersion();
+  _o.flags = this.flags();
+  _o.trajectoryType = this.trajectoryType();
+  _o.degree = this.degree();
+  _o.frame = this.frame();
+  _o.id = this.id();
+}
+}
+
+export class TrajectorySegmentDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public startTimeUs: bigint = BigInt('0'),
+  public p0EnuM: Vec3fT|null = null,
+  public p1EnuM: Vec3fT|null = null,
+  public p2EnuM: Vec3fT|null = null,
+  public p3EnuM: Vec3fT|null = null,
+  public p4EnuM: Vec3fT|null = null,
+  public p5EnuM: Vec3fT|null = null,
+  public p6EnuM: Vec3fT|null = null,
+  public p7EnuM: Vec3fT|null = null,
+  public yaw0Rad: number = 0.0,
+  public yaw1Rad: number = 0.0,
+  public yaw2Rad: number = 0.0,
+  public yaw3Rad: number = 0.0,
+  public yaw4Rad: number = 0.0,
+  public yaw5Rad: number = 0.0,
+  public yaw6Rad: number = 0.0,
+  public yaw7Rad: number = 0.0,
+  public trajectoryId: number = 0,
+  public segmentSeq: number = 0,
+  public durationUs: number = 0,
+  public planVersion: number = 0,
+  public flags: number = 0,
+  public trajectoryType: TrajectoryType = TrajectoryType.Unknown,
+  public degree: TrajectoryDegree = TrajectoryDegree.Unknown,
+  public frame: LocalFrame = LocalFrame.LocalEnu,
+  public id: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return TrajectorySegmentData.createTrajectorySegmentData(builder,
+    this.timestampUs,
+    this.startTimeUs,
+    (this.p0EnuM?.x ?? 0),
+    (this.p0EnuM?.y ?? 0),
+    (this.p0EnuM?.z ?? 0),
+    (this.p1EnuM?.x ?? 0),
+    (this.p1EnuM?.y ?? 0),
+    (this.p1EnuM?.z ?? 0),
+    (this.p2EnuM?.x ?? 0),
+    (this.p2EnuM?.y ?? 0),
+    (this.p2EnuM?.z ?? 0),
+    (this.p3EnuM?.x ?? 0),
+    (this.p3EnuM?.y ?? 0),
+    (this.p3EnuM?.z ?? 0),
+    (this.p4EnuM?.x ?? 0),
+    (this.p4EnuM?.y ?? 0),
+    (this.p4EnuM?.z ?? 0),
+    (this.p5EnuM?.x ?? 0),
+    (this.p5EnuM?.y ?? 0),
+    (this.p5EnuM?.z ?? 0),
+    (this.p6EnuM?.x ?? 0),
+    (this.p6EnuM?.y ?? 0),
+    (this.p6EnuM?.z ?? 0),
+    (this.p7EnuM?.x ?? 0),
+    (this.p7EnuM?.y ?? 0),
+    (this.p7EnuM?.z ?? 0),
+    this.yaw0Rad,
+    this.yaw1Rad,
+    this.yaw2Rad,
+    this.yaw3Rad,
+    this.yaw4Rad,
+    this.yaw5Rad,
+    this.yaw6Rad,
+    this.yaw7Rad,
+    this.trajectoryId,
+    this.segmentSeq,
+    this.durationUs,
+    this.planVersion,
+    this.flags,
+    this.trajectoryType,
+    this.degree,
+    this.frame,
+    this.id
+  );
+}
 }

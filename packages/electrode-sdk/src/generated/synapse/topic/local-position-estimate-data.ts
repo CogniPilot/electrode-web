@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { Vec3f } from '../../synapse/types/vec3f.js';
+import { Vec3f, Vec3fT } from '../../synapse/types/vec3f';
 
 
 export class LocalPositionEstimateData {
@@ -78,4 +78,66 @@ static createLocalPositionEstimateData(builder:flatbuffers.Builder, timestamp_us
   return builder.offset();
 }
 
+
+unpack(): LocalPositionEstimateDataT {
+  return new LocalPositionEstimateDataT(
+    this.timestampUs(),
+    (this.positionEnuM() !== null ? this.positionEnuM()!.unpack() : null),
+    (this.velocityEnuMS() !== null ? this.velocityEnuMS()!.unpack() : null),
+    (this.accelerationEnuMS2() !== null ? this.accelerationEnuMS2()!.unpack() : null),
+    this.yawRad(),
+    this.yawRateRadS(),
+    this.flags(),
+    this.xyResetCounter(),
+    this.zResetCounter()
+  );
+}
+
+
+unpackTo(_o: LocalPositionEstimateDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.positionEnuM = (this.positionEnuM() !== null ? this.positionEnuM()!.unpack() : null);
+  _o.velocityEnuMS = (this.velocityEnuMS() !== null ? this.velocityEnuMS()!.unpack() : null);
+  _o.accelerationEnuMS2 = (this.accelerationEnuMS2() !== null ? this.accelerationEnuMS2()!.unpack() : null);
+  _o.yawRad = this.yawRad();
+  _o.yawRateRadS = this.yawRateRadS();
+  _o.flags = this.flags();
+  _o.xyResetCounter = this.xyResetCounter();
+  _o.zResetCounter = this.zResetCounter();
+}
+}
+
+export class LocalPositionEstimateDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public positionEnuM: Vec3fT|null = null,
+  public velocityEnuMS: Vec3fT|null = null,
+  public accelerationEnuMS2: Vec3fT|null = null,
+  public yawRad: number = 0.0,
+  public yawRateRadS: number = 0.0,
+  public flags: number = 0,
+  public xyResetCounter: number = 0,
+  public zResetCounter: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return LocalPositionEstimateData.createLocalPositionEstimateData(builder,
+    this.timestampUs,
+    (this.positionEnuM?.x ?? 0),
+    (this.positionEnuM?.y ?? 0),
+    (this.positionEnuM?.z ?? 0),
+    (this.velocityEnuMS?.x ?? 0),
+    (this.velocityEnuMS?.y ?? 0),
+    (this.velocityEnuMS?.z ?? 0),
+    (this.accelerationEnuMS2?.x ?? 0),
+    (this.accelerationEnuMS2?.y ?? 0),
+    (this.accelerationEnuMS2?.z ?? 0),
+    this.yawRad,
+    this.yawRateRadS,
+    this.flags,
+    this.xyResetCounter,
+    this.zResetCounter
+  );
+}
 }

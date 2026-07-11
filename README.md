@@ -95,19 +95,46 @@ Open <http://127.0.0.1:8790/>. The daemon serves the same static app and answers
 same-origin `gcs/*` requests for host capabilities. Add `?viewer` to force
 display-only mode even when the daemon is present.
 
-The daemon defaults to a local Zenoh hub that exposes:
+The daemon separates the trusted local UI, untrusted LAN requests, LAN
+telemetry, and the co-located outer-loop autopilot:
 
 ```text
-udp/127.0.0.1:7447    native tools and vehicle-side processes
-ws/127.0.0.1:7447     browser Zenoh WASM transport
+local GCS website ── ws/127.0.0.1:7447 ── trusted command mapping ─┐
+LAN request site  ── ws/0.0.0.0:7448 ──── checked command policy ─┤
+Qualisys router   ── UDP LAN client ────── validated telemetry ───┤
+                                                                  ▼
+                                              udp/127.0.0.1:7447 router
+                                                                  │
+                                                                  ▼
+                                                    local outer-loop autopilot
 ```
+
+Both trusted listeners are required to use loopback locators and multicast
+scouting is disabled. The station script connects only the telemetry session to
+the Qualisys LAN router. It validates and allowlists `synapse/mocap/frame`,
+rigid-body names, and external odometry. Local UI parameter values bypass LAN
+policy; LAN request values must pass it. The autopilot never joins the LAN.
+
+The standalone website-delivery console connects to the checked listener, not
+the trusted local listener. Set its endpoint before `zenoh-direct.js` loads:
+
+```html
+<script>window.ZENOH_WS_ENDPOINT = `ws/${window.location.hostname}:7448`;</script>
+```
+
+Velocity intents from that console carry a team-name envelope. Electrode keeps
+the five-command team allowance in `data/velocity-budget.csv` and publishes a
+JSON inspection mirror at `data/velocity-budget-db.json`. Override those paths
+with `ELECTRODE_GCS_VELOCITY_BUDGET_CSV` and
+`ELECTRODE_GCS_VELOCITY_BUDGET_DB`.
 
 ## Zenoh Connection
 
 Browsers can only use Zenoh over WebSocket. Use `ws/127.0.0.1:7447` in the app,
 or point it at another router/listener that exposes `ws/`.
 
-For a standalone router:
+For a standalone LAN telemetry/router surface (never use this as the local
+autopilot's command endpoint):
 
 ```bash
 zenohd -l udp/0.0.0.0:7447 -l ws/0.0.0.0:7447
@@ -134,15 +161,15 @@ npm run manual:bridge -- --device /dev/input/js0
 Inspect the manual-control stream:
 
 ```bash
-npm run manual:dump -- --topic synapse/v1/topic/manual_control_command
+npm run manual:dump -- --topic manual
 ```
 
 Run the PPM bridge for hardware-in-the-loop receiver output:
 
 ```bash
 npm run ppm:bridge -- \
-  --manual-topic synapse/v1/topic/manual_control_command \
-  --control-output-topic synapse/v1/topic/pwm_signal_outputs \
+  --manual-topic manual \
+  --control-output-topic pwm \
   --serial-device /dev/ttyACM0
 ```
 

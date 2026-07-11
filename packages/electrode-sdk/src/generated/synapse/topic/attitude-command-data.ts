@@ -2,8 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { Quaternionf } from '../../synapse/types/quaternionf.js';
-import { RateTriplet } from '../../synapse/types/rate-triplet.js';
+import { Quaternionf, QuaternionfT } from '../../synapse/types/quaternionf';
+import { RateTriplet, RateTripletT } from '../../synapse/types/rate-triplet';
 
 
 export class AttitudeCommandData {
@@ -57,4 +57,49 @@ static createAttitudeCommandData(builder:flatbuffers.Builder, timestamp_us: bigi
   return builder.offset();
 }
 
+
+unpack(): AttitudeCommandDataT {
+  return new AttitudeCommandDataT(
+    this.timestampUs(),
+    (this.attitude() !== null ? this.attitude()!.unpack() : null),
+    (this.bodyRateFluRadS() !== null ? this.bodyRateFluRadS()!.unpack() : null),
+    this.thrust(),
+    this.typeMask()
+  );
+}
+
+
+unpackTo(_o: AttitudeCommandDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.attitude = (this.attitude() !== null ? this.attitude()!.unpack() : null);
+  _o.bodyRateFluRadS = (this.bodyRateFluRadS() !== null ? this.bodyRateFluRadS()!.unpack() : null);
+  _o.thrust = this.thrust();
+  _o.typeMask = this.typeMask();
+}
+}
+
+export class AttitudeCommandDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public attitude: QuaternionfT|null = null,
+  public bodyRateFluRadS: RateTripletT|null = null,
+  public thrust: number = 0.0,
+  public typeMask: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return AttitudeCommandData.createAttitudeCommandData(builder,
+    this.timestampUs,
+    (this.attitude?.w ?? 0),
+    (this.attitude?.x ?? 0),
+    (this.attitude?.y ?? 0),
+    (this.attitude?.z ?? 0),
+    (this.bodyRateFluRadS?.roll ?? 0),
+    (this.bodyRateFluRadS?.pitch ?? 0),
+    (this.bodyRateFluRadS?.yaw ?? 0),
+    this.thrust,
+    this.typeMask
+  );
+}
 }

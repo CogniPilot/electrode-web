@@ -6,6 +6,7 @@
   import ManualLinkView from '$lib/components/ManualLinkView.svelte';
   import GroundStationPanel from '$lib/components/GroundStationPanel.svelte';
   import AutopilotConfigPanel from '$lib/components/AutopilotConfigPanel.svelte';
+  import RuntimeTuningPanel from '$lib/components/RuntimeTuningPanel.svelte';
   import RcMappingPanel from '$lib/components/RcMappingPanel.svelte';
   import PpmHardwarePanel from '$lib/components/PpmHardwarePanel.svelte';
   import SimulationPanel from '$lib/components/SimulationPanel.svelte';
@@ -14,6 +15,8 @@
     fetchDevices,
       fetchAutopilotRunStatus,
       fetchBridgeStatus,
+      requestRuntimeParameter,
+      setPpmBridgeRunning,
       setAutopilotRunning,
       setBridgeRunning,
       type AutopilotRunStatus
@@ -35,6 +38,7 @@
     Sun,
     Upload
   } from '@lucide/svelte';
+  import { parseKey } from '@cognipilot/synapse-fbs/topic_catalog';
   import {
     TOPIC_DEFINITIONS,
     createPlotPacketCatalog,
@@ -61,11 +65,13 @@
     | { type: 'recordingExport'; export: SynapseLogExport }
     | { type: 'plotState'; plotState: PlotState }
     | { type: 'topicCatalog'; catalog: TopicCatalog }
+    | { type: 'runtimeCommandStatus'; status: 'sent' | 'error'; message: string }
+    | { type: 'runtimeParameterValue'; name: string; value: number }
     | { type: 'replay'; replay: ReplayState };
 
   type MapViewMode = '2d' | '3d';
   type VehicleKind = 'quadrotor' | 'fixedwing';
-  type GroundStationPage = 'dashboard' | 'sim';
+  type GroundStationPage = 'dashboard' | 'autopilot-config' | 'radio-config' | 'sim';
   type PlotTraceSelection = {
     packetKey: string;
     fieldPath: string;
@@ -85,11 +91,33 @@
   const mapViewModes: MapViewMode[] = ['2d', '3d'];
   const groundStationPages: Array<{ key: GroundStationPage; label: string }> = [
     { key: 'dashboard', label: 'Dashboard' },
+    { key: 'autopilot-config', label: 'Autopilot Config' },
+    { key: 'radio-config', label: 'Radio Config' },
     { key: 'sim', label: 'SIM' }
+  ];
+  const RUNTIME_PARAMETER_NAMES = [
+    'velocity.setpoint',
+    'route.altitudeToFlightPathGain',
+    'route.altitudeLookaheadDistance',
+    'route.flightPathAngleLimit',
+    'route.crossTrackSteeringDistance',
+    'route.waypointSwitchingDistance',
+    'tecs.thrustKp',
+    'tecs.thrustKi',
+    'tecs.pitchKp',
+    'tecs.pitchKi',
+    'attitude.rollLimit',
+    'attitude.rollRateLimit',
+    'attitude.headingPid.kp',
+    'attitude.headingPid.ki',
+    'attitude.headingPid.kd',
+    'attitude.pitchPid.kp',
+    'attitude.pitchPid.ki',
+    'attitude.pitchPid.kd'
   ];
   type ThemeName = 'light' | 'dark';
   const manualLinks = [
-    ['Manual', 'synapse/v1/topic/manual_control_command'],
+    ['Manual', 'manual'],
     ['Selected PWM', 'synapse/motor_output'],
     ['Serial', '/dev/ttyACM0 · 57600']
   ] as const;
@@ -180,6 +208,8 @@
   let recordingCount = 0;
   let plotState: PlotState = { packets: createPlotPacketCatalog(vehicleId), series: [], updatedAtMs: 0 };
   let topicCatalog: TopicCatalog | null = null;
+  let runtimeCommandStatus = '';
+  let runtimeParameterValues: Record<string, number> = {};
   let plotTraces: PlotTraceSelection[] = [
     { packetKey: plotPacketKey(`vehicle/${vehicleId}/state/pose`, 'Pose'), fieldPath: 'altM' },
     { packetKey: plotPacketKey(`vehicle/${vehicleId}/state/velocity`, 'Velocity'), fieldPath: 'groundSpeedMps' }
@@ -219,18 +249,36 @@
 
   // State I/O panel: live per-topic snapshots (rate + staleness) for the
   // state bus around the autopilot, plant, mocap, and manual controller.
+  // Catalog topics use bare compact keys (`att`, `manual`, ...) — too short
+  // for substring matching, so resolve them via parseKey. Suffix matching
+  // remains only for custom non-catalog keys (motor_output, mocap trio).
   function topicBySuffix(state: VehicleState, suffix: string): TopicSnapshot | null {
     for (const snapshot of Object.values(state.topics)) {
       if (snapshot.topic.endsWith(suffix)) return snapshot;
     }
     return null;
   }
-  $: ioHealth = topicBySuffix(vehicle, 'vehicle_health');
-  $: ioAttitude = topicBySuffix(vehicle, 'attitude_estimate');
+  function topicByCatalogName(state: VehicleState, name: string, instance?: number): TopicSnapshot | null {
+    for (const snapshot of Object.values(state.topics)) {
+      const parsed = parseKey(snapshot.topic);
+      if (parsed?.topic.name === name && (instance === undefined || parsed.instance === instance)) {
+        return snapshot;
+      }
+    }
+    return null;
+  }
+  $: ioHealth = topicByCatalogName(vehicle, 'VehicleHealth');
+  $: ioAttitude = topicByCatalogName(vehicle, 'AttitudeEstimate');
   $: ioSelectedPwm = topicBySuffix(vehicle, 'motor_output');
-  $: ioPwm = ioSelectedPwm && !ioSelectedPwm.stale ? ioSelectedPwm : topicBySuffix(vehicle, 'pwm_signal_outputs');
-  $: ioManual = topicBySuffix(vehicle, 'manual_control_command');
-  $: ioMocap = topicBySuffix(vehicle, 'mocap_frame') ?? topicBySuffix(vehicle, 'pose');
+  $: ioPwm = ioSelectedPwm && !ioSelectedPwm.stale ? ioSelectedPwm : topicByCatalogName(vehicle, 'PwmSignalOutputs');
+  $: ioManual = topicByCatalogName(vehicle, 'ManualControlCommand');
+  $: ioMocap =
+    topicBySuffix(vehicle, 'qualisys/cub1/pose_raw') ??
+    topicByCatalogName(vehicle, 'RawPose') ??
+    topicByCatalogName(vehicle, 'MocapFrame') ??
+    topicByCatalogName(vehicle, 'MocapPoseFrame') ??
+    topicBySuffix(vehicle, 'mocap/frame') ??
+    topicBySuffix(vehicle, '/pose');
   $: requestedControlSource = manualControl
     ? manualControl.valid
       ? manualControl.flightMode > 0
@@ -242,7 +290,7 @@
     : 'unknown';
   $: requestedControlSourceDetail = manualControl
     ? `${manualControl.active ? 'stabilization on' : 'stabilization off'} · mode ${manualControl.flightMode}`
-    : 'waiting for manual_control_command';
+    : 'waiting for manual control';
   $: autopilotReportedMode = vehicle.mode.name;
   $: controlModeMismatch =
     manualControl?.valid === true &&
@@ -287,6 +335,8 @@
   let manualBridgeRunning = false;
   let manualBridgeBusy = false;
   let manualBridgeStatus = 'checking...';
+  let ppmBridgeRunning = false;
+  let ppmBridgeBusy = false;
   let joystickPresent = false;
   let keyboardRevision = 0;
   let lastVirtualManualSignature = '';
@@ -324,7 +374,11 @@
     autopilotBusy = true;
     autopilotError = '';
     try {
-      autopilotRun = await setAutopilotRunning(autopilotRunning ? 'stop' : 'start');
+      const starting = !autopilotRunning;
+      autopilotRun = await setAutopilotRunning(starting ? 'start' : 'stop');
+      if (starting && autopilotRun.running) {
+        setTimeout(() => refreshRuntimeParameters(RUNTIME_PARAMETER_NAMES), 1200);
+      }
     } catch (error) {
       autopilotError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -337,6 +391,7 @@
     try {
       const [status, devices] = await Promise.all([fetchBridgeStatus(), fetchDevices()]);
       manualBridgeRunning = status.running;
+      ppmBridgeRunning = status.ppmRunning ?? false;
       joystickPresent = devices.joysticks.length > 0;
       manualBridgeStatus = status.running
         ? `manual publisher active · ${status.bin}`
@@ -361,6 +416,20 @@
       manualBridgeStatus = error instanceof Error ? error.message : 'manual bridge toggle failed';
     } finally {
       manualBridgeBusy = false;
+    }
+  }
+
+  async function togglePpmBridge(): Promise<void> {
+    if (ppmBridgeBusy) return;
+    ppmBridgeBusy = true;
+    try {
+      const status = await setPpmBridgeRunning(!ppmBridgeRunning);
+      ppmBridgeRunning = status.ppmRunning ?? false;
+    } catch (error) {
+      manualBridgeStatus = error instanceof Error ? error.message : 'PPM bridge toggle failed';
+    } finally {
+      ppmBridgeBusy = false;
+      await refreshManualBridge();
     }
   }
 
@@ -452,6 +521,11 @@
         plotState = message.plotState;
       } else if (message.type === 'topicCatalog') {
         topicCatalog = message.catalog;
+      } else if (message.type === 'runtimeCommandStatus') {
+        runtimeCommandStatus = message.message;
+      } else if (message.type === 'runtimeParameterValue') {
+        runtimeParameterValues = { ...runtimeParameterValues, [message.name]: message.value };
+        runtimeCommandStatus = `refreshed ${Object.keys(runtimeParameterValues).length} parameters`;
       } else if (message.type === 'replay') {
         replay = message.replay;
       }
@@ -527,6 +601,41 @@
     window.history.replaceState({}, '', url);
   }
 
+  async function setRuntimeParameter(name: string, value: number): Promise<void> {
+    runtimeCommandStatus = `sending ${name}…`;
+    try {
+      const parameter = await requestRuntimeParameter(name, value);
+      runtimeParameterValues = { ...runtimeParameterValues, [parameter.name]: parameter.value };
+      runtimeCommandStatus = `${parameter.name} updated`;
+    } catch (error) {
+      runtimeCommandStatus = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function setRuntimeTrajectory(waypoints: Array<{ east: number; north: number; up: number }>): void {
+    runtimeCommandStatus = 'sending trajectory…';
+    worker?.postMessage({ type: 'runtimeTrajectory', waypoints });
+  }
+
+  async function refreshRuntimeParameters(names: string[]): Promise<void> {
+    runtimeCommandStatus = 'refreshing parameters…';
+    let refreshed = 0;
+    const next = { ...runtimeParameterValues };
+    for (const name of names) {
+      try {
+        const parameter = await requestRuntimeParameter(name);
+        next[parameter.name] = parameter.value;
+        refreshed += 1;
+      } catch {
+        // Continue so one unsupported parameter does not hide the others.
+      }
+    }
+    runtimeParameterValues = next;
+    runtimeCommandStatus = refreshed === names.length
+      ? `refreshed ${refreshed} parameters`
+      : `refreshed ${refreshed}/${names.length} parameters`;
+  }
+
   function toggleTopicSubscription(key: string): void {
     if (!topicCatalog) {
       return;
@@ -541,6 +650,32 @@
   }
 
   function startRecording(): void {
+    const requiredAutopilotTopics = ['att', 'att_sp', 'health', 'loop', 'mission', 'nav', 'pos_sp', 'pwm'];
+    const liveKeys = new Set(
+      (topicCatalog?.topics ?? [])
+        .filter((topic) => topic.rateHz > 0)
+        .map((topic) => topic.key)
+    );
+    const missing = requiredAutopilotTopics.filter(
+      (required) => ![...liveKeys].some((key) => key === required || key.endsWith(`/${required}`))
+    );
+    if (
+      missing.length > 0 &&
+      !window.confirm(
+        `Autopilot telemetry is not live: ${missing.join(', ')}. ` +
+        'The flight report will be incomplete. Record anyway?'
+      )
+    ) {
+      return;
+    }
+
+    // Recording promises all known telemetry, even if the operator previously
+    // hid a stream from the live display. Base compact-topic subscriptions are
+    // already active; selecting them makes the worker forward and record them.
+    const recordingKeys = (topicCatalog?.topics ?? [])
+      .filter((topic) => topic.decodable)
+      .map((topic) => topic.key);
+    worker?.postMessage({ type: 'setSubscriptions', keys: recordingKeys });
     worker?.postMessage({ type: 'startRecording' });
   }
 
@@ -782,12 +917,6 @@
   {#if !$isGroundStation || activePage === 'dashboard'}
     {#if $isGroundStation}
       <GroundStationPanel {theme} />
-      <details class="config-panel">
-        <summary>Dashboard config</summary>
-        <AutopilotConfigPanel {theme} />
-        <RcMappingPanel {theme} />
-        <PpmHardwarePanel {theme} channels={radioControl} />
-      </details>
     {/if}
 
     <div class="dashboard">
@@ -855,7 +984,11 @@
       </div>
 
       <div class="io-group">
-        <h3>Mocap 6DOF pose</h3>
+        <h3>CUB1 localization</h3>
+        <div class="io-row">
+          <span>Source</span>
+          <strong>qualisys/cub1/pose_raw</strong>
+        </div>
         <div class="io-row">
           <span>Position <em>{ioRate(ioMocap)}</em></span>
           <strong>
@@ -1085,6 +1218,23 @@
             {:else}
               <CirclePlay size={18} />
               <span>Start</span>
+            {/if}
+          </button>
+          <button
+            type="button"
+            class="icon-button"
+            class:primary={!ppmBridgeRunning}
+            class:danger={ppmBridgeRunning}
+            onclick={() => void togglePpmBridge()}
+            disabled={ppmBridgeBusy}
+            title="Start/stop the Arduino PPM serial bridge"
+          >
+            {#if ppmBridgeRunning}
+              <Square size={18} />
+              <span>Stop PPM</span>
+            {:else}
+              <CirclePlay size={18} />
+              <span>Start PPM</span>
             {/if}
           </button>
         </div>
@@ -1443,6 +1593,38 @@
       </div>
     </section>
   </div>
+  {:else if activePage === 'autopilot-config'}
+    <section class="configuration-page">
+      <div class="configuration-heading">
+        <div>
+          <h1>Autopilot Configuration</h1>
+          <p>Configure the local runtime profile, live controller parameters, velocity setpoint, and waypoint trajectory.</p>
+        </div>
+        <Settings size={24} />
+      </div>
+      <AutopilotConfigPanel {theme} />
+      <RuntimeTuningPanel
+        {theme}
+        autopilotRunning={autopilotRunning}
+        status={runtimeCommandStatus}
+        values={runtimeParameterValues}
+        onParameter={setRuntimeParameter}
+        onRefresh={refreshRuntimeParameters}
+        onTrajectory={setRuntimeTrajectory}
+      />
+    </section>
+  {:else if activePage === 'radio-config'}
+    <section class="configuration-page">
+      <div class="configuration-heading">
+        <div>
+          <h1>Radio Configuration</h1>
+          <p>Configure transmitter input mapping and PPM hardware output.</p>
+        </div>
+        <Radio size={24} />
+      </div>
+      <RcMappingPanel {theme} />
+      <PpmHardwarePanel {theme} channels={radioControl} />
+    </section>
   {:else}
     <SimulationPanel {theme} {zenohEndpoint} />
   {/if}
@@ -1489,7 +1671,7 @@
 
   .ground-nav {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0;
     overflow: hidden;
     margin-top: 10px;
@@ -1521,27 +1703,36 @@
     color: #ffffff;
   }
 
-  .config-panel {
+  .configuration-page {
+    display: grid;
+    gap: 12px;
     margin-top: 10px;
   }
 
-  .config-panel summary {
+  .configuration-heading {
     display: flex;
-    align-items: center;
-    min-height: 42px;
-    padding: 0 12px;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 16px;
     border: 1px solid #d9dee3;
     border-radius: 8px;
     background: #ffffff;
-    color: #5c6873;
-    cursor: pointer;
-    font-size: 0.78rem;
-    font-weight: 820;
-    text-transform: uppercase;
   }
 
-  .config-panel > :global(*:not(summary)) {
-    margin-top: 10px;
+  .configuration-heading h1,
+  .configuration-heading p {
+    margin: 0;
+  }
+
+  .configuration-heading h1 {
+    font-size: 1.05rem;
+  }
+
+  .configuration-heading p {
+    margin-top: 5px;
+    color: #5c6873;
+    font-size: 0.84rem;
   }
 
   .brand {
@@ -2130,7 +2321,8 @@
   }
 
   .topbar,
-  .panel {
+  .panel,
+  .configuration-heading {
     border: 1px solid #263239;
     border-radius: 8px;
     background: rgba(17, 23, 25, 0.92);
@@ -2158,13 +2350,6 @@
   .ground-nav button.active {
     background: #dfe9e4;
     color: #0a1111;
-  }
-
-  .config-panel summary {
-    border-color: #263239;
-    border-radius: 8px;
-    background: rgba(14, 20, 22, 0.96);
-    color: #8fa09a;
   }
 
   .brand {
@@ -3190,12 +3375,6 @@
   :global(html[data-theme='light']) .ground-nav button.active {
     background: #12171b;
     color: #ffffff;
-  }
-
-  :global(html[data-theme='light']) .config-panel summary {
-    border-color: #d9dee3;
-    background: #ffffff;
-    color: #5c6873;
   }
 
   :global(html[data-theme='light']) h1,

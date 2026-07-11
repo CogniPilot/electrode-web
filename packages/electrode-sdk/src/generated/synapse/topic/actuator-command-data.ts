@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class ActuatorCommandData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -111,4 +113,96 @@ static createActuatorCommandData(builder:flatbuffers.Builder, timestamp_us: bigi
   return builder.offset();
 }
 
+
+unpack(): ActuatorCommandDataT {
+  return new ActuatorCommandDataT(
+    this.timestampUs(),
+    this.activeMask(),
+    this.control0(),
+    this.control1(),
+    this.control2(),
+    this.control3(),
+    this.control4(),
+    this.control5(),
+    this.control6(),
+    this.control7(),
+    this.control8(),
+    this.control9(),
+    this.control10(),
+    this.control11(),
+    this.control12(),
+    this.control13(),
+    this.control14(),
+    this.control15()
+  );
+}
+
+
+unpackTo(_o: ActuatorCommandDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.activeMask = this.activeMask();
+  _o.control0 = this.control0();
+  _o.control1 = this.control1();
+  _o.control2 = this.control2();
+  _o.control3 = this.control3();
+  _o.control4 = this.control4();
+  _o.control5 = this.control5();
+  _o.control6 = this.control6();
+  _o.control7 = this.control7();
+  _o.control8 = this.control8();
+  _o.control9 = this.control9();
+  _o.control10 = this.control10();
+  _o.control11 = this.control11();
+  _o.control12 = this.control12();
+  _o.control13 = this.control13();
+  _o.control14 = this.control14();
+  _o.control15 = this.control15();
+}
+}
+
+export class ActuatorCommandDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public activeMask: number = 0,
+  public control0: number = 0.0,
+  public control1: number = 0.0,
+  public control2: number = 0.0,
+  public control3: number = 0.0,
+  public control4: number = 0.0,
+  public control5: number = 0.0,
+  public control6: number = 0.0,
+  public control7: number = 0.0,
+  public control8: number = 0.0,
+  public control9: number = 0.0,
+  public control10: number = 0.0,
+  public control11: number = 0.0,
+  public control12: number = 0.0,
+  public control13: number = 0.0,
+  public control14: number = 0.0,
+  public control15: number = 0.0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return ActuatorCommandData.createActuatorCommandData(builder,
+    this.timestampUs,
+    this.activeMask,
+    this.control0,
+    this.control1,
+    this.control2,
+    this.control3,
+    this.control4,
+    this.control5,
+    this.control6,
+    this.control7,
+    this.control8,
+    this.control9,
+    this.control10,
+    this.control11,
+    this.control12,
+    this.control13,
+    this.control14,
+    this.control15
+  );
+}
 }

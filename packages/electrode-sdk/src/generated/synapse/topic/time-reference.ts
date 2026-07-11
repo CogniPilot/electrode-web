@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { TimeReferenceData } from '../../synapse/topic/time-reference-data.js';
+import { TimeReferenceData, TimeReferenceDataT } from '../../synapse/topic/time-reference-data';
 
 
 export class TimeReference {
@@ -45,5 +45,29 @@ static createTimeReference(builder:flatbuffers.Builder, dataOffset:flatbuffers.O
   TimeReference.startTimeReference(builder);
   TimeReference.addData(builder, dataOffset);
   return TimeReference.endTimeReference(builder);
+}
+
+unpack(): TimeReferenceT {
+  return new TimeReferenceT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: TimeReferenceT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class TimeReferenceT {
+constructor(
+  public data: TimeReferenceDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return TimeReference.createTimeReference(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

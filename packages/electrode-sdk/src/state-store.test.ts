@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { ELECTRODE_SCHEMA_VERSION } from '@electrode/flatbuffers';
-import { applyGcsFrame, createInitialVehicleState, refreshStaleTopics } from './state-store';
+import {
+  applyGcsFrame,
+  createInitialVehicleState,
+  refreshStaleTopics,
+  setMocapDisplaySource
+} from './state-store';
 import { makeSimulatedTelemetryBundle } from './simulator';
 import type { TelemetryFrame } from './types';
 
@@ -26,7 +31,7 @@ function telemetryFrame(topic: string, payload: unknown, nowMs: number): Telemet
 
 describe('state store telemetry pipeline', () => {
   it('derives vehicle state from raw Synapse telemetry frames', () => {
-    let state = createInitialVehicleState('cubs2');
+    let state = setMocapDisplaySource(createInitialVehicleState('cubs2'), 'raw');
     const first = makeSimulatedTelemetryBundle({
       vehicleId: 'cubs2',
       elapsedMs: 0,
@@ -61,11 +66,11 @@ describe('state store telemetry pipeline', () => {
     expect(state.link?.packetLossPct).toBeLessThan(20);
     expect(state.mode).toMatchObject({ name: 'manual', armed: true, failsafe: false });
     expect(state.localization).toMatchObject({ source: 'mocap', fresh: true });
-    expect(Object.keys(state.topics)).toContain('synapse/v1/topic/manual_control_command');
+    expect(Object.keys(state.topics)).toContain('manual');
   });
 
   it('keeps mocap attitude authoritative when estimator attitude also arrives', () => {
-    let state = createInitialVehicleState('cubs2');
+    let state = setMocapDisplaySource(createInitialVehicleState('cubs2'), 'raw');
     const mocap = telemetryFrame(
       'synapse/mocap/rigid_body/cub1/pose',
       {
@@ -81,7 +86,7 @@ describe('state store telemetry pipeline', () => {
       10_000
     );
     const estimate = telemetryFrame(
-      'synapse/v1/topic/attitude_estimate',
+      'att',
       {
         data: {
           attitude: { w: Math.SQRT1_2, x: 0, y: 0, z: Math.SQRT1_2 },
@@ -123,9 +128,142 @@ describe('state store telemetry pipeline', () => {
   });
 });
 
+describe('Qualisys raw pose state handling', () => {
+  it('uses qualisys/cub1/pose_raw for pose and attitude', () => {
+    let state = createInitialVehicleState('cubs2');
+    const frame = telemetryFrame(
+      'qualisys/cub1/pose_raw',
+      {
+        data: {
+          timestamp_us: 1_000_000,
+          position: { x: 10, y: 20, z: 3 },
+          attitude: { w: 1, x: 0, y: 0, z: 0 },
+        }
+      },
+      10_000
+    );
+
+    state = applyGcsFrame(state, frame, 10_000);
+
+    expect(state.pose).toMatchObject({ xM: 10, yM: 20, altM: 3 });
+    expect(state.attitude).toMatchObject({ rollDeg: 0, pitchDeg: -0, yawDeg: 0 });
+    expect(state.localization).toMatchObject({
+      source: 'mocap',
+      fresh: true,
+      quality: 1
+    });
+  });
+
+  it('ignores the bridge estimate and keeps incoming raw mocap', () => {
+    let state = createInitialVehicleState('cubs2');
+    state = applyGcsFrame(
+      state,
+      telemetryFrame(
+        'qualisys/cub1/pose',
+        {
+          data: {
+            position: { x: 10, y: 20, z: 3 },
+            attitude: { w: 1, x: 0, y: 0, z: 0 },
+            position_valid: true,
+            attitude_valid: true,
+            linear_velocity_valid: false,
+            lost: false,
+            degraded: false,
+            extrapolated: false,
+            outlier_rejected: false,
+            id: 1
+          }
+        },
+        10_000
+      ),
+      10_000
+    );
+    state = applyGcsFrame(
+      state,
+      telemetryFrame(
+        'synapse/mocap/frame',
+        {
+          rigid_bodies: [{
+            id: 1,
+            position: { x: 99, y: 88, z: 7 },
+            attitude: { w: 1, x: 0, y: 0, z: 0 },
+            tracking_valid: true
+          }]
+        },
+        10_005
+      ),
+      10_005
+    );
+
+    expect(state.localization).toMatchObject({ source: 'mocap', fresh: true });
+    expect(state.pose).toMatchObject({ xM: 99, yM: 88, altM: 7 });
+  });
+
+});
+
+describe('mocap display source selection', () => {
+  it('ignores lost external odometry and retains raw mocap', () => {
+    let state = createInitialVehicleState('cubs2');
+    state = applyGcsFrame(
+      state,
+      telemetryFrame(
+        'synapse/mocap/frame',
+        { rigid_bodies: [{ id: 1, position: { x: 2, y: 3, z: 4 }, attitude: { w: 1, x: 0, y: 0, z: 0 }, tracking_valid: true }] },
+        10_000
+      ),
+      10_000
+    );
+    state = applyGcsFrame(
+      state,
+      telemetryFrame(
+        'qualisys/cub1/pose',
+        { data: { position_valid: false, lost: true, id: 1 } },
+        10_005
+      ),
+      10_005
+    );
+
+    expect(state.localization).toMatchObject({ source: 'mocap', fresh: true });
+    expect(state.pose).toMatchObject({ xM: 2, yM: 3, altM: 4 });
+  });
+
+  it('keeps raw mocap authoritative over external odometry', () => {
+    let state = setMocapDisplaySource(createInitialVehicleState('cubs2'), 'raw');
+    state = applyGcsFrame(
+      state,
+      telemetryFrame(
+        'qualisys/cub1/pose',
+        { data: { position: { x: 10, y: 20, z: 3 }, position_valid: true, id: 1 } },
+        10_000
+      ),
+      10_000
+    );
+    state = applyGcsFrame(
+      state,
+      telemetryFrame(
+        'synapse/mocap/frame',
+        {
+          rigid_bodies: [{
+            id: 1,
+            position: { x: 99, y: 88, z: 7 },
+            attitude: { w: 1, x: 0, y: 0, z: 0 },
+            tracking_valid: true
+          }]
+        },
+        10_005
+      ),
+      10_005
+    );
+
+    expect(state.mocapDisplaySource).toBe('raw');
+    expect(state.localization).toMatchObject({ source: 'mocap', fresh: true });
+    expect(state.pose).toMatchObject({ xM: 99, yM: 88, altM: 7 });
+  });
+});
+
 describe('mocap state handling', () => {
   it('preserves the last mocap pose when rigid body 0 becomes invalid', () => {
-    let state = createInitialVehicleState('cubs2');
+    let state = setMocapDisplaySource(createInitialVehicleState('cubs2'), 'raw');
     const valid = telemetryFrame(
       'synapse/mocap/frame',
       {

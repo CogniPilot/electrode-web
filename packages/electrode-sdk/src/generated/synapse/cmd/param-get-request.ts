@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class ParamGetRequest {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -64,5 +66,39 @@ static createParamGetRequest(builder:flatbuffers.Builder, nameOffset:flatbuffers
   ParamGetRequest.addOffset(builder, offset);
   ParamGetRequest.addLimit(builder, limit);
   return ParamGetRequest.endParamGetRequest(builder);
+}
+
+unpack(): ParamGetRequestT {
+  return new ParamGetRequestT(
+    this.name(),
+    this.offset(),
+    this.limit()
+  );
+}
+
+
+unpackTo(_o: ParamGetRequestT): void {
+  _o.name = this.name();
+  _o.offset = this.offset();
+  _o.limit = this.limit();
+}
+}
+
+export class ParamGetRequestT {
+constructor(
+  public name: string|Uint8Array|null = null,
+  public offset: number = 0,
+  public limit: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  const name = (this.name !== null ? builder.createString(this.name!) : 0);
+
+  return ParamGetRequest.createParamGetRequest(builder,
+    name,
+    this.offset,
+    this.limit
+  );
 }
 }

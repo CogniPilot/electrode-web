@@ -2,8 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { MocapRawComponent } from '../../synapse/topic/mocap-raw-component.js';
-import { Vec3f } from '../../synapse/types/vec3f.js';
+import { MocapRawComponent } from '../../synapse/topic/mocap-raw-component';
+import { Vec3f, Vec3fT } from '../../synapse/types/vec3f';
 
 
 export class MocapMarkerData {
@@ -53,4 +53,46 @@ static createMocapMarkerData(builder:flatbuffers.Builder, position_enu_m_x: numb
   return builder.offset();
 }
 
+
+unpack(): MocapMarkerDataT {
+  return new MocapMarkerDataT(
+    (this.positionEnuM() !== null ? this.positionEnuM()!.unpack() : null),
+    this.residualMm(),
+    this.id(),
+    this.flags(),
+    this.component()
+  );
+}
+
+
+unpackTo(_o: MocapMarkerDataT): void {
+  _o.positionEnuM = (this.positionEnuM() !== null ? this.positionEnuM()!.unpack() : null);
+  _o.residualMm = this.residualMm();
+  _o.id = this.id();
+  _o.flags = this.flags();
+  _o.component = this.component();
+}
+}
+
+export class MocapMarkerDataT {
+constructor(
+  public positionEnuM: Vec3fT|null = null,
+  public residualMm: number = 0.0,
+  public id: number = 0,
+  public flags: number = 0,
+  public component: MocapRawComponent = MocapRawComponent.Unknown
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return MocapMarkerData.createMocapMarkerData(builder,
+    (this.positionEnuM?.x ?? 0),
+    (this.positionEnuM?.y ?? 0),
+    (this.positionEnuM?.z ?? 0),
+    this.residualMm,
+    this.id,
+    this.flags,
+    this.component
+  );
+}
 }

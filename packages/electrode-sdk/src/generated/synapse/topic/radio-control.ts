@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { RadioControlData } from '../../synapse/topic/radio-control-data.js';
+import { RadioControlData, RadioControlDataT } from '../../synapse/topic/radio-control-data';
 
 
 export class RadioControl {
@@ -45,5 +45,29 @@ static createRadioControl(builder:flatbuffers.Builder, dataOffset:flatbuffers.Of
   RadioControl.startRadioControl(builder);
   RadioControl.addData(builder, dataOffset);
   return RadioControl.endRadioControl(builder);
+}
+
+unpack(): RadioControlT {
+  return new RadioControlT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: RadioControlT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class RadioControlT {
+constructor(
+  public data: RadioControlDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return RadioControl.createRadioControl(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

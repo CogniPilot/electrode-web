@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class EstimatorHealthData {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -72,4 +74,64 @@ static createEstimatorHealthData(builder:flatbuffers.Builder, timestamp_us: bigi
   return builder.offset();
 }
 
+
+unpack(): EstimatorHealthDataT {
+  return new EstimatorHealthDataT(
+    this.timestampUs(),
+    this.flags(),
+    this.velocityTestRatio(),
+    this.posHorizTestRatio(),
+    this.posVertTestRatio(),
+    this.magTestRatio(),
+    this.haglTestRatio(),
+    this.tasTestRatio(),
+    this.posHorizAccuracyM(),
+    this.posVertAccuracyM()
+  );
+}
+
+
+unpackTo(_o: EstimatorHealthDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.flags = this.flags();
+  _o.velocityTestRatio = this.velocityTestRatio();
+  _o.posHorizTestRatio = this.posHorizTestRatio();
+  _o.posVertTestRatio = this.posVertTestRatio();
+  _o.magTestRatio = this.magTestRatio();
+  _o.haglTestRatio = this.haglTestRatio();
+  _o.tasTestRatio = this.tasTestRatio();
+  _o.posHorizAccuracyM = this.posHorizAccuracyM();
+  _o.posVertAccuracyM = this.posVertAccuracyM();
+}
+}
+
+export class EstimatorHealthDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public flags: number = 0,
+  public velocityTestRatio: number = 0.0,
+  public posHorizTestRatio: number = 0.0,
+  public posVertTestRatio: number = 0.0,
+  public magTestRatio: number = 0.0,
+  public haglTestRatio: number = 0.0,
+  public tasTestRatio: number = 0.0,
+  public posHorizAccuracyM: number = 0.0,
+  public posVertAccuracyM: number = 0.0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return EstimatorHealthData.createEstimatorHealthData(builder,
+    this.timestampUs,
+    this.flags,
+    this.velocityTestRatio,
+    this.posHorizTestRatio,
+    this.posVertTestRatio,
+    this.magTestRatio,
+    this.haglTestRatio,
+    this.tasTestRatio,
+    this.posHorizAccuracyM,
+    this.posVertAccuracyM
+  );
+}
 }

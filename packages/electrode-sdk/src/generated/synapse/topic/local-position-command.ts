@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { LocalPositionCommandData } from '../../synapse/topic/local-position-command-data.js';
+import { LocalPositionCommandData, LocalPositionCommandDataT } from '../../synapse/topic/local-position-command-data';
 
 
 export class LocalPositionCommand {
@@ -45,5 +45,29 @@ static createLocalPositionCommand(builder:flatbuffers.Builder, dataOffset:flatbu
   LocalPositionCommand.startLocalPositionCommand(builder);
   LocalPositionCommand.addData(builder, dataOffset);
   return LocalPositionCommand.endLocalPositionCommand(builder);
+}
+
+unpack(): LocalPositionCommandT {
+  return new LocalPositionCommandT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: LocalPositionCommandT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class LocalPositionCommandT {
+constructor(
+  public data: LocalPositionCommandDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return LocalPositionCommand.createLocalPositionCommand(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

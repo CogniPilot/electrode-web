@@ -1,6 +1,7 @@
 export * from './mocap-encode';
 export * from './plotting';
 export * from './replay';
+export * from './runtime-control';
 export * from './simulator';
 export * from './state-store';
 export * from './synapse-decode';

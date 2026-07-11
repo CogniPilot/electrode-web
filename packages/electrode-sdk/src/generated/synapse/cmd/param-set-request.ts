@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { ParamValue } from '../../synapse/cmd/param-value.js';
+import { ParamValue, ParamValueT } from '../../synapse/cmd/param-value';
 
 
 export class ParamSetRequest {
@@ -45,5 +45,31 @@ static createParamSetRequest(builder:flatbuffers.Builder, valueOffset:flatbuffer
   ParamSetRequest.startParamSetRequest(builder);
   ParamSetRequest.addValue(builder, valueOffset);
   return ParamSetRequest.endParamSetRequest(builder);
+}
+
+unpack(): ParamSetRequestT {
+  return new ParamSetRequestT(
+    (this.value() !== null ? this.value()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: ParamSetRequestT): void {
+  _o.value = (this.value() !== null ? this.value()!.unpack() : null);
+}
+}
+
+export class ParamSetRequestT {
+constructor(
+  public value: ParamValueT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  const value = (this.value !== null ? this.value!.pack(builder) : 0);
+
+  return ParamSetRequest.createParamSetRequest(builder,
+    value
+  );
 }
 }

@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { GnssFixData } from '../../synapse/topic/gnss-fix-data.js';
+import { GnssFixData, GnssFixDataT } from '../../synapse/topic/gnss-fix-data';
 
 
 export class GnssFix {
@@ -45,5 +45,29 @@ static createGnssFix(builder:flatbuffers.Builder, dataOffset:flatbuffers.Offset)
   GnssFix.startGnssFix(builder);
   GnssFix.addData(builder, dataOffset);
   return GnssFix.endGnssFix(builder);
+}
+
+unpack(): GnssFixT {
+  return new GnssFixT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: GnssFixT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class GnssFixT {
+constructor(
+  public data: GnssFixDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return GnssFix.createGnssFix(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

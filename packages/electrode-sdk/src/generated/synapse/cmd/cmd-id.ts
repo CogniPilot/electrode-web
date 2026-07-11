@@ -7,5 +7,11 @@ export enum CmdId {
   MissionGet = 3,
   MissionSet = 4,
   TrajectoryGet = 5,
-  TrajectorySet = 6
+  TrajectorySet = 6,
+  FirmwareInfo = 7,
+  FirmwareStatus = 8,
+  FirmwarePrepare = 9,
+  FirmwareChunk = 10,
+  FirmwareCommit = 11,
+  FirmwareAbort = 12
 }

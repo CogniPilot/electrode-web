@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { PwmSignalOutputsData } from '../../synapse/topic/pwm-signal-outputs-data.js';
+import { PwmSignalOutputsData, PwmSignalOutputsDataT } from '../../synapse/topic/pwm-signal-outputs-data';
 
 
 export class PwmSignalOutputs {
@@ -45,5 +45,29 @@ static createPwmSignalOutputs(builder:flatbuffers.Builder, dataOffset:flatbuffer
   PwmSignalOutputs.startPwmSignalOutputs(builder);
   PwmSignalOutputs.addData(builder, dataOffset);
   return PwmSignalOutputs.endPwmSignalOutputs(builder);
+}
+
+unpack(): PwmSignalOutputsT {
+  return new PwmSignalOutputsT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: PwmSignalOutputsT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class PwmSignalOutputsT {
+constructor(
+  public data: PwmSignalOutputsDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return PwmSignalOutputs.createPwmSignalOutputs(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

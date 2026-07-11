@@ -8,6 +8,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const MOCAP_POSE_TOPIC: &str = "synapse/mocap/rigid_body/cub1/pose";
+/// Raw CUB1 pose from synapse_qualisys_bridge. Unlike the bridge's filtered
+/// pose/odometry outputs, this contains the unfiltered QTM measurement.
+pub(crate) const RAW_MOCAP_TOPIC: &str = "qualisys/cub1/pose_raw";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,13 +36,11 @@ pub(crate) struct AutopilotProfile {
     /// Port the firmware's csyn UDP transport sends to (outbound topics).
     #[serde(default = "default_udp_tx_port")]
     pub udp_tx_port: u16,
-    /// Topic key suffixes forwarded from Zenoh into the firmware. Only what
+    /// Topic keys forwarded from Zenoh into the firmware. Only what
     /// the autopilot consumes — its own publications must not loop back.
     #[serde(default = "default_inbound_topics")]
     pub inbound_topics: Vec<String>,
-    /// Which mocap producer is allowed onto the public pose topic the firmware
-    /// subscribes to directly: real capture publishes there natively, and the
-    /// sim bridge republishes the sim plant only when `Sim` is selected.
+    /// Which mocap producer is selected by the ground station.
     #[serde(default)]
     pub mocap_source: MocapSource,
 }
@@ -58,10 +59,7 @@ fn default_udp_tx_port() -> u16 {
 }
 
 fn default_inbound_topics() -> Vec<String> {
-    vec![
-        MOCAP_POSE_TOPIC.to_string(),
-        "manual_control_command".to_string(),
-    ]
+    vec![RAW_MOCAP_TOPIC.to_string(), "manual".to_string()]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -142,6 +140,10 @@ impl AutopilotProfile {
     }
 
     pub(crate) fn normalized(mut self) -> Self {
+        // The outer-loop process is co-located with the Ground Station. Keep
+        // its control plane on loopback even if an older profile points at a
+        // LAN router; external traffic must cross command authority first.
+        self.runtime_endpoint = "udp/127.0.0.1:7447".to_string();
         self.inbound_topics = self
             .inbound_topics
             .into_iter()
@@ -187,21 +189,32 @@ impl AutopilotProfile {
 
 fn normalize_inbound_topic(topic: &str) -> String {
     let topic = topic.trim();
-    if topic.contains("/mocap/rigid_body/")
-        || topic.contains("/mocap/selected/rigid_body/")
-        || topic.ends_with("mocap/frame")
-    {
-        return MOCAP_POSE_TOPIC.to_string();
+    if topic == "cub1/external_pose" || topic == "external_pose/1" {
+        return RAW_MOCAP_TOPIC.to_string();
+    }
+    if topic == "qualisys/cub1/pose" {
+        return RAW_MOCAP_TOPIC.to_string();
+    }
+    if topic.ends_with("mocap/frame") || topic.ends_with("mocap_frame") {
+        return RAW_MOCAP_TOPIC.to_string();
+    }
+    if topic.contains("/mocap/rigid_body/") || topic.contains("/mocap/selected/rigid_body/") {
+        return RAW_MOCAP_TOPIC.to_string();
+    }
+    // Profiles saved before synapse_fbs 0.6.0 name manual control by its old
+    // snake suffix; coerce onto the compact catalog key.
+    if topic == "manual_control_command" || topic.ends_with("/manual_control_command") {
+        return "manual".to_string();
     }
     topic.to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AutopilotProfile, MocapSource, MOCAP_POSE_TOPIC};
+    use super::{AutopilotProfile, MocapSource, RAW_MOCAP_TOPIC};
 
     #[test]
-    fn normalizes_legacy_selected_mocap_inbound_topic_to_direct_pose() {
+    fn normalizes_legacy_selected_mocap_inbound_topic_to_external_pose() {
         let profile = AutopilotProfile {
             inbound_topics: vec![
                 "synapse/mocap/selected/rigid_body/cub1/pose".to_string(),
@@ -212,8 +225,30 @@ mod tests {
         }
         .normalized();
 
-        assert_eq!(profile.inbound_topics[0], MOCAP_POSE_TOPIC);
-        assert_eq!(profile.inbound_topics[1], "manual_control_command");
+        assert_eq!(profile.inbound_topics[0], RAW_MOCAP_TOPIC);
+        assert_eq!(profile.inbound_topics[1], "manual");
         assert_eq!(profile.mocap_source, MocapSource::Sim);
+    }
+
+    #[test]
+    fn migrates_raw_mocap_profiles_to_external_pose() {
+        let profile = AutopilotProfile {
+            inbound_topics: vec!["synapse/mocap/frame".to_string()],
+            ..AutopilotProfile::default()
+        }
+        .normalized();
+
+        assert_eq!(profile.inbound_topics[0], RAW_MOCAP_TOPIC);
+    }
+
+    #[test]
+    fn forces_outer_loop_runtime_onto_localhost() {
+        let profile = AutopilotProfile {
+            runtime_endpoint: "udp/192.168.10.2:7447".to_string(),
+            ..AutopilotProfile::default()
+        }
+        .normalized();
+
+        assert_eq!(profile.runtime_endpoint, "udp/127.0.0.1:7447");
     }
 }

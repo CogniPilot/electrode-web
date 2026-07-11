@@ -24,8 +24,9 @@ use zenoh::Wait;
 pub(crate) const PRIVATE_RADIO_PWM_TOPIC: &str = "electrode/sim/rumoca/radio_pwm_signal_outputs";
 pub(crate) const PRIVATE_MOCAP_TOPIC: &str = "electrode/sim/rumoca/mocap_frame";
 
-const PUBLIC_PWM_TOPIC: &str = "synapse/v1/topic/pwm_signal_outputs";
-const PUBLIC_MANUAL_TOPIC: &str = "synapse/v1/topic/manual_control_command";
+// Bare compact 0.6.0 catalog keys, matching what csyn firmware publishes.
+const PUBLIC_PWM_TOPIC: &str = "pwm";
+const PUBLIC_MANUAL_TOPIC: &str = "manual";
 const PUBLIC_MOCAP_FRAME_TOPIC: &str = "synapse/mocap/frame";
 const PUBLIC_MOCAP_POSE_TOPIC: &str = "synapse/mocap/rigid_body/cub1/pose";
 const MANUAL_CONTROL_PAYLOAD_SIZE: usize = 40;
@@ -107,6 +108,9 @@ fn subscribe_public_pwm(
     subscribe_session
         .declare_subscriber(PUBLIC_PWM_TOPIC)
         .callback(move |sample| {
+            if !contract_matches(&sample, "PwmSignalOutputs") {
+                return;
+            }
             let bytes = sample.payload().to_bytes();
             handle_public_pwm_sample(&publish_session, state.as_ref(), &count, &bytes);
         })
@@ -124,6 +128,9 @@ fn subscribe_public_manual(
     subscribe_session
         .declare_subscriber(PUBLIC_MANUAL_TOPIC)
         .callback(move |sample| {
+            if !contract_matches(&sample, "ManualControlCommand") {
+                return;
+            }
             let payload = sample.payload().to_bytes();
             handle_public_manual_sample(&publish_session, state.as_ref(), &count, &payload);
         })
@@ -152,6 +159,21 @@ fn subscribe_private_mocap(
         .map_err(|error| {
             anyhow::anyhow!("sim bridge subscribe {PRIVATE_MOCAP_TOPIC} failed: {error}")
         })
+}
+
+/// Mandatory 0.6.0 value contract on catalog topics: reject before decoding.
+fn contract_matches(sample: &zenoh::sample::Sample, topic_name: &str) -> bool {
+    let encoding = sample.encoding().to_string();
+    let valid = synapse_fbs::value_contract::topic_for_encoding(&encoding)
+        .is_ok_and(|topic| topic.name == topic_name);
+    if !valid {
+        tracing::debug!(
+            key = %sample.key_expr(),
+            encoding,
+            "sim bridge rejected sample: value contract mismatch"
+        );
+    }
+    valid
 }
 
 fn handle_public_pwm_sample(
@@ -200,8 +222,16 @@ fn publish_sim_mocap_sample(session: &zenoh::Session, count: &AtomicU64, bytes: 
         return;
     };
 
+    // The frame key carries real MocapFrame FlatBuffers, so stamp the catalog
+    // contract; the compact 28-byte pose is the bridge's custom wire form and
+    // carries no catalog contract.
+    let mocap_encoding = synapse_fbs::topic_catalog::topic_by_name("MocapFrame")
+        .map(synapse_fbs::value_contract::encoding_for_topic)
+        .map(|encoding| zenoh::bytes::Encoding::from(encoding.as_str()))
+        .unwrap_or_default();
     let frame_ok = session
         .put(PUBLIC_MOCAP_FRAME_TOPIC, bytes.to_vec())
+        .encoding(mocap_encoding)
         .wait()
         .is_ok();
     let pose_ok = session
@@ -348,7 +378,18 @@ fn publish_selected_radio_pwm(
             }
         }
     };
-    if session.put(PRIVATE_RADIO_PWM_TOPIC, payload).wait().is_ok() {
+    // Private electrode key, but the payload is a catalog PwmSignalOutputs
+    // struct — stamp its contract so downstream validators can trust it.
+    let encoding = synapse_fbs::topic_catalog::topic_by_name("PwmSignalOutputs")
+        .map(synapse_fbs::value_contract::encoding_for_topic)
+        .map(|encoding| zenoh::bytes::Encoding::from(encoding.as_str()))
+        .unwrap_or_default();
+    if session
+        .put(PRIVATE_RADIO_PWM_TOPIC, payload)
+        .encoding(encoding)
+        .wait()
+        .is_ok()
+    {
         count.fetch_add(1, Ordering::Relaxed);
     }
 }

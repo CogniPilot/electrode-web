@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { ParamKind } from '../../synapse/cmd/param-kind.js';
+import { ParamKind } from '../../synapse/cmd/param-kind';
 
 
 export class ParamValue {
@@ -89,5 +89,48 @@ static createParamValue(builder:flatbuffers.Builder, nameOffset:flatbuffers.Offs
   ParamValue.addIntValue(builder, intValue);
   ParamValue.addTextValue(builder, textValueOffset);
   return ParamValue.endParamValue(builder);
+}
+
+unpack(): ParamValueT {
+  return new ParamValueT(
+    this.name(),
+    this.kind(),
+    this.floatValue(),
+    this.intValue(),
+    this.textValue()
+  );
+}
+
+
+unpackTo(_o: ParamValueT): void {
+  _o.name = this.name();
+  _o.kind = this.kind();
+  _o.floatValue = this.floatValue();
+  _o.intValue = this.intValue();
+  _o.textValue = this.textValue();
+}
+}
+
+export class ParamValueT {
+constructor(
+  public name: string|Uint8Array|null = null,
+  public kind: ParamKind = ParamKind.Float,
+  public floatValue: number = 0.0,
+  public intValue: bigint = BigInt('0'),
+  public textValue: string|Uint8Array|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  const name = (this.name !== null ? builder.createString(this.name!) : 0);
+  const textValue = (this.textValue !== null ? builder.createString(this.textValue!) : 0);
+
+  return ParamValue.createParamValue(builder,
+    name,
+    this.kind,
+    this.floatValue,
+    this.intValue,
+    textValue
+  );
 }
 }

@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { TrajectorySegmentData } from '../../synapse/topic/trajectory-segment-data.js';
+import { TrajectorySegmentData, TrajectorySegmentDataT } from '../../synapse/topic/trajectory-segment-data';
 
 
 export class TrajectorySetRequest {
@@ -124,5 +124,59 @@ static createTrajectorySetRequest(builder:flatbuffers.Builder, trajectoryId:numb
   TrajectorySetRequest.addFlags(builder, flags);
   TrajectorySetRequest.addSegments(builder, segmentsOffset);
   return TrajectorySetRequest.endTrajectorySetRequest(builder);
+}
+
+unpack(): TrajectorySetRequestT {
+  return new TrajectorySetRequestT(
+    this.trajectoryId(),
+    this.expectedPlanVersion(),
+    this.planVersion(),
+    this.offset(),
+    this.total(),
+    this.planCrc32(),
+    this.flags(),
+    this.bb!.createObjList(this.segments.bind(this), this.segmentsLength())
+  );
+}
+
+
+unpackTo(_o: TrajectorySetRequestT): void {
+  _o.trajectoryId = this.trajectoryId();
+  _o.expectedPlanVersion = this.expectedPlanVersion();
+  _o.planVersion = this.planVersion();
+  _o.offset = this.offset();
+  _o.total = this.total();
+  _o.planCrc32 = this.planCrc32();
+  _o.flags = this.flags();
+  _o.segments = this.bb!.createObjList(this.segments.bind(this), this.segmentsLength());
+}
+}
+
+export class TrajectorySetRequestT {
+constructor(
+  public trajectoryId: number = 0,
+  public expectedPlanVersion: number = 0,
+  public planVersion: number = 0,
+  public offset: number = 0,
+  public total: number = 0,
+  public planCrc32: number = 0,
+  public flags: number = 0,
+  public segments: (TrajectorySegmentDataT)[] = []
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  const segments = builder.createStructOffsetList(this.segments, TrajectorySetRequest.startSegmentsVector);
+
+  return TrajectorySetRequest.createTrajectorySetRequest(builder,
+    this.trajectoryId,
+    this.expectedPlanVersion,
+    this.planVersion,
+    this.offset,
+    this.total,
+    this.planCrc32,
+    this.flags,
+    segments
+  );
 }
 }

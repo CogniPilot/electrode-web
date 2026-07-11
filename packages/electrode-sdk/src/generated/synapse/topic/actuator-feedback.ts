@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { ActuatorFeedbackData } from '../../synapse/topic/actuator-feedback-data.js';
+import { ActuatorFeedbackData, ActuatorFeedbackDataT } from '../../synapse/topic/actuator-feedback-data';
 
 
 export class ActuatorFeedback {
@@ -45,5 +45,29 @@ static createActuatorFeedback(builder:flatbuffers.Builder, dataOffset:flatbuffer
   ActuatorFeedback.startActuatorFeedback(builder);
   ActuatorFeedback.addData(builder, dataOffset);
   return ActuatorFeedback.endActuatorFeedback(builder);
+}
+
+unpack(): ActuatorFeedbackT {
+  return new ActuatorFeedbackT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: ActuatorFeedbackT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class ActuatorFeedbackT {
+constructor(
+  public data: ActuatorFeedbackDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return ActuatorFeedback.createActuatorFeedback(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

@@ -2,6 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
+
+
 export class MissionGetRequest {
   bb: flatbuffers.ByteBuffer|null = null;
   bb_pos = 0;
@@ -62,5 +64,37 @@ static createMissionGetRequest(builder:flatbuffers.Builder, missionId:number, of
   MissionGetRequest.addOffset(builder, offset);
   MissionGetRequest.addLimit(builder, limit);
   return MissionGetRequest.endMissionGetRequest(builder);
+}
+
+unpack(): MissionGetRequestT {
+  return new MissionGetRequestT(
+    this.missionId(),
+    this.offset(),
+    this.limit()
+  );
+}
+
+
+unpackTo(_o: MissionGetRequestT): void {
+  _o.missionId = this.missionId();
+  _o.offset = this.offset();
+  _o.limit = this.limit();
+}
+}
+
+export class MissionGetRequestT {
+constructor(
+  public missionId: number = 0,
+  public offset: number = 0,
+  public limit: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return MissionGetRequest.createMissionGetRequest(builder,
+    this.missionId,
+    this.offset,
+    this.limit
+  );
 }
 }

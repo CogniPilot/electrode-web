@@ -8,7 +8,7 @@
   import { advanceLatch, emptyLatch, mapJoystickToManual, type LatchState } from '$lib/manualMapping';
   import type { ManualControlState } from '@electrode/sdk';
 
-  // Zenoh-derived manual control (decoded from synapse/v1/topic/manual_control_command).
+  // Zenoh-derived manual control (decoded from the `manual` catalog topic).
   export let manual: ManualControlState | null = null;
   export let theme: 'light' | 'dark' = 'dark';
   export let hardwareAvailable = true;
@@ -114,8 +114,8 @@
       {source === 'hardware'
         ? 'Controller → mapping, computed locally (not via Zenoh)'
         : !hardwareAvailable
-          ? 'keyboard fallback → manual_control_command over Zenoh'
-        : 'synapse/v1/topic/manual_control_command received over Zenoh'}
+          ? 'keyboard fallback → manual over Zenoh'
+        : 'manual received over Zenoh'}
     </p>
   {/if}
 

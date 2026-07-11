@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { MissionState } from '../../synapse/types/mission-state.js';
+import { MissionState } from '../../synapse/types/mission-state';
 
 
 export class MissionProgressData {
@@ -64,4 +64,56 @@ static createMissionProgressData(builder:flatbuffers.Builder, timestamp_us: bigi
   return builder.offset();
 }
 
+
+unpack(): MissionProgressDataT {
+  return new MissionProgressDataT(
+    this.timestampUs(),
+    this.missionId(),
+    this.fenceId(),
+    this.rallyPointsId(),
+    this.currentSeq(),
+    this.total(),
+    this.missionState(),
+    this.missionMode()
+  );
+}
+
+
+unpackTo(_o: MissionProgressDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.missionId = this.missionId();
+  _o.fenceId = this.fenceId();
+  _o.rallyPointsId = this.rallyPointsId();
+  _o.currentSeq = this.currentSeq();
+  _o.total = this.total();
+  _o.missionState = this.missionState();
+  _o.missionMode = this.missionMode();
+}
+}
+
+export class MissionProgressDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public missionId: number = 0,
+  public fenceId: number = 0,
+  public rallyPointsId: number = 0,
+  public currentSeq: number = 0,
+  public total: number = 0,
+  public missionState: MissionState = MissionState.Unknown,
+  public missionMode: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return MissionProgressData.createMissionProgressData(builder,
+    this.timestampUs,
+    this.missionId,
+    this.fenceId,
+    this.rallyPointsId,
+    this.currentSeq,
+    this.total,
+    this.missionState,
+    this.missionMode
+  );
+}
 }

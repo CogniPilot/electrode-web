@@ -8,8 +8,8 @@ import { get, writable } from 'svelte/store';
 import { fetchSimulationModel } from '$lib/gcs';
 import { InBrowserSim, type SimPhase } from '$lib/sim/inBrowserSim';
 
-/** Canonical Synapse topic prefix (synapse_fbs 0.5.0 key scheme). */
-export const SYNAPSE_TOPIC_PREFIX = 'synapse/v1/topic';
+// synapse_fbs 0.6.0 topics use bare compact catalog keys (no shared prefix);
+// the topics below are electrode-private wrapper keys, not catalog topics.
 const RUMOCA_RADIO_PWM_TOPIC = 'electrode/sim/rumoca/radio_pwm_signal_outputs';
 const RUMOCA_MOCAP_TOPIC = 'electrode/sim/rumoca/mocap_frame';
 

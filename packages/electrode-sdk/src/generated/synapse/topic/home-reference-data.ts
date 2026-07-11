@@ -2,8 +2,8 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { Quaternionf } from '../../synapse/types/quaternionf.js';
-import { Vec3f } from '../../synapse/types/vec3f.js';
+import { Quaternionf, QuaternionfT } from '../../synapse/types/quaternionf';
+import { Vec3f, Vec3fT } from '../../synapse/types/vec3f';
 
 
 export class HomeReferenceData {
@@ -75,4 +75,63 @@ static createHomeReferenceData(builder:flatbuffers.Builder, timestamp_us: bigint
   return builder.offset();
 }
 
+
+unpack(): HomeReferenceDataT {
+  return new HomeReferenceDataT(
+    this.timestampUs(),
+    this.latitudeDegE7(),
+    this.longitudeDegE7(),
+    this.altitudeMslMm(),
+    (this.localPositionEnuM() !== null ? this.localPositionEnuM()!.unpack() : null),
+    (this.attitude() !== null ? this.attitude()!.unpack() : null),
+    (this.approachEnuM() !== null ? this.approachEnuM()!.unpack() : null),
+    this.flags()
+  );
+}
+
+
+unpackTo(_o: HomeReferenceDataT): void {
+  _o.timestampUs = this.timestampUs();
+  _o.latitudeDegE7 = this.latitudeDegE7();
+  _o.longitudeDegE7 = this.longitudeDegE7();
+  _o.altitudeMslMm = this.altitudeMslMm();
+  _o.localPositionEnuM = (this.localPositionEnuM() !== null ? this.localPositionEnuM()!.unpack() : null);
+  _o.attitude = (this.attitude() !== null ? this.attitude()!.unpack() : null);
+  _o.approachEnuM = (this.approachEnuM() !== null ? this.approachEnuM()!.unpack() : null);
+  _o.flags = this.flags();
+}
+}
+
+export class HomeReferenceDataT {
+constructor(
+  public timestampUs: bigint = BigInt('0'),
+  public latitudeDegE7: number = 0,
+  public longitudeDegE7: number = 0,
+  public altitudeMslMm: number = 0,
+  public localPositionEnuM: Vec3fT|null = null,
+  public attitude: QuaternionfT|null = null,
+  public approachEnuM: Vec3fT|null = null,
+  public flags: number = 0
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return HomeReferenceData.createHomeReferenceData(builder,
+    this.timestampUs,
+    this.latitudeDegE7,
+    this.longitudeDegE7,
+    this.altitudeMslMm,
+    (this.localPositionEnuM?.x ?? 0),
+    (this.localPositionEnuM?.y ?? 0),
+    (this.localPositionEnuM?.z ?? 0),
+    (this.attitude?.w ?? 0),
+    (this.attitude?.x ?? 0),
+    (this.attitude?.y ?? 0),
+    (this.attitude?.z ?? 0),
+    (this.approachEnuM?.x ?? 0),
+    (this.approachEnuM?.y ?? 0),
+    (this.approachEnuM?.z ?? 0),
+    this.flags
+  );
+}
 }

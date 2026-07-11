@@ -2,7 +2,7 @@
 
 import * as flatbuffers from 'flatbuffers';
 
-import { InertialSampleData } from '../../synapse/topic/inertial-sample-data.js';
+import { InertialSampleData, InertialSampleDataT } from '../../synapse/topic/inertial-sample-data';
 
 
 export class InertialSample {
@@ -45,5 +45,29 @@ static createInertialSample(builder:flatbuffers.Builder, dataOffset:flatbuffers.
   InertialSample.startInertialSample(builder);
   InertialSample.addData(builder, dataOffset);
   return InertialSample.endInertialSample(builder);
+}
+
+unpack(): InertialSampleT {
+  return new InertialSampleT(
+    (this.data() !== null ? this.data()!.unpack() : null)
+  );
+}
+
+
+unpackTo(_o: InertialSampleT): void {
+  _o.data = (this.data() !== null ? this.data()!.unpack() : null);
+}
+}
+
+export class InertialSampleT {
+constructor(
+  public data: InertialSampleDataT|null = null
+){}
+
+
+pack(builder:flatbuffers.Builder): flatbuffers.Offset {
+  return InertialSample.createInertialSample(builder,
+    (this.data !== null ? this.data!.pack(builder) : 0)
+  );
 }
 }

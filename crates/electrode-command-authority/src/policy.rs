@@ -1,10 +1,12 @@
 //! Pure command decoding, validation, and key mapping.
 
-use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
-use synapse_fbs::cmd::{ParamKind, ParamSetRequest};
+use synapse_fbs::cmd::{ParamGetRequest, ParamKind, ParamSetRequest, TrajectorySetRequest};
 use synapse_fbs::topic::{LocalPositionCommandData, ManualControlData, RadioControlData};
+
+use crate::velocity_budget::{BudgetState, Credential, VelocityBudgetStore};
 
 const VELOCITY_ONLY_MASK: u16 = 3527;
 const LOCAL_ENU_FRAME: u8 = 0;
@@ -14,14 +16,19 @@ const MANUAL_FLAG_VALID: u8 = 8;
 const FIRMWARE_PREPARE_MAX_BYTES: usize = 4 * 1024;
 const FIRMWARE_CHUNK_MAX_BYTES: usize = 68 * 1024;
 const FIRMWARE_COMMIT_MAX_BYTES: usize = 2 * 1024;
+const VELOCITY_MAGIC: &[u8; 4] = b"EVC1";
+const VELOCITY_BUDGET_MAGIC: &[u8; 4] = b"EVB1";
+const RAW_VELOCITY_MAGIC: &[u8; 4] = b"EVR1";
+const VELOCITY_PAYLOAD_BYTES: usize = 56;
+const TEAM_NAME_MAX_BYTES: usize = 64;
 /// Canonical vehicle query keys used by the staged firmware-update transfer.
 pub const CANONICAL_FIRMWARE_QUERY_KEYS: [&str; 6] = [
-    "synapse/v1/cmd/firmware_info",
-    "synapse/v1/cmd/firmware_status",
-    "synapse/v1/cmd/firmware_prepare",
-    "synapse/v1/cmd/firmware_chunk",
-    "synapse/v1/cmd/firmware_commit",
-    "synapse/v1/cmd/firmware_abort",
+    "cmd/firmware_info",
+    "cmd/firmware_status",
+    "cmd/firmware_prepare",
+    "cmd/firmware_chunk",
+    "cmd/firmware_commit",
+    "cmd/firmware_abort",
 ];
 
 /// Whether the authorized payload is a Zenoh publication or request/reply query.
@@ -30,6 +37,7 @@ pub enum Delivery {
     Publish,
     Query,
     Firmware,
+    Budget,
 }
 
 /// The only data the runtime needs after policy authorization.
@@ -41,6 +49,13 @@ pub struct AuthorizedCommand {
     pub status_leaf: String,
     pub velocity_device: Option<String>,
     pub velocity_remaining: Option<u32>,
+    pub velocity_credential_id: Option<String>,
+    pub velocity_limit: Option<u32>,
+    pub velocity_used: Option<u32>,
+    pub velocity_budget_version: Option<String>,
+    /// Synapse value-contract encoding stamped on the outbound Zenoh value.
+    /// None for raw targets outside the catalog.
+    pub encoding: Option<String>,
 }
 
 /// Policy settings independent of Zenoh transport configuration.
@@ -50,10 +65,11 @@ pub struct PolicyConfig {
     pub vehicle_topic_prefix: String,
     pub parameter_key: String,
     pub firmware_key_prefix: String,
-    pub device: String,
     pub velocity_min_mps: f32,
     pub velocity_max_mps: f32,
     pub velocity_budget: u32,
+    pub velocity_budget_json: PathBuf,
+    pub velocity_budget_csv: PathBuf,
     pub raw_max_bytes: usize,
 }
 
@@ -61,13 +77,17 @@ impl Default for PolicyConfig {
     fn default() -> Self {
         Self {
             intent_prefix: "gcs/v1/cmd".to_string(),
-            vehicle_topic_prefix: "synapse/v1/topic".to_string(),
-            parameter_key: "synapse/v1/cmd/param_set".to_string(),
-            firmware_key_prefix: "synapse/v1/cmd/firmware".to_string(),
-            device: "default".to_string(),
+            // synapse_fbs 0.6.0 compact keys: the vehicle prefix is the
+            // deployment namespace prepended to topic/command keys. csyn
+            // publishes bare catalog keys, so the default is empty.
+            vehicle_topic_prefix: String::new(),
+            parameter_key: "cmd/param_set".to_string(),
+            firmware_key_prefix: "cmd/firmware".to_string(),
             velocity_min_mps: 1.0,
             velocity_max_mps: 4.0,
             velocity_budget: 5,
+            velocity_budget_json: PathBuf::from("data/velocity-budget-db.json"),
+            velocity_budget_csv: PathBuf::from("data/velocity-budget.csv"),
             raw_max_bytes: 4 * 1024,
         }
     }
@@ -89,15 +109,20 @@ pub enum PolicyError {
 /// Stateful policy engine. Only accepted velocity commands consume a budget entry.
 pub struct CommandPolicy {
     config: PolicyConfig,
-    velocity_used: Mutex<HashMap<String, u32>>,
+    velocity_budget: Mutex<VelocityBudgetStore>,
 }
 
 impl CommandPolicy {
     #[must_use]
     pub fn new(config: PolicyConfig) -> Self {
+        let velocity_budget = VelocityBudgetStore::new(
+            config.velocity_budget_json.clone(),
+            config.velocity_budget_csv.clone(),
+            config.velocity_budget,
+        );
         Self {
             config,
-            velocity_used: Mutex::new(HashMap::new()),
+            velocity_budget: Mutex::new(velocity_budget),
         }
     }
 
@@ -108,9 +133,12 @@ impl CommandPolicy {
             .ok_or(PolicyError::WrongNamespace)?;
         match suffix {
             "velocity" => self.authorize_velocity(payload),
+            "velocity_budget" => self.authorize_velocity_budget(payload),
             "manual" => self.authorize_manual(payload),
             "radio" => self.authorize_radio(payload),
             "gain" => self.authorize_gain(payload),
+            "parameters" => self.authorize_parameters(payload),
+            "trajectory" => self.authorize_trajectory(payload),
             raw if raw.starts_with("raw/") => self.authorize_raw(&raw[4..], payload),
             firmware if firmware.starts_with("firmware/") => {
                 self.authorize_firmware(&firmware[9..], payload)
@@ -119,21 +147,92 @@ impl CommandPolicy {
         }
     }
 
-    pub fn refund_velocity(&self, device: &str) {
-        let mut used = self
-            .velocity_used
-            .lock()
-            .expect("velocity budget lock poisoned");
-        if let Some(count) = used.get_mut(device) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                used.remove(device);
+    /// Map commands from the localhost-only GCS website without applying the
+    /// LAN policy limits. The autopilot remains responsible for decoding the
+    /// payload; this boundary only constrains the command namespace and target.
+    pub fn authorize_trusted(
+        &self,
+        key: &str,
+        payload: &[u8],
+    ) -> Result<AuthorizedCommand, PolicyError> {
+        let prefix = format!("{}/", self.config.intent_prefix.trim_end_matches('/'));
+        let suffix = key
+            .strip_prefix(&prefix)
+            .ok_or(PolicyError::WrongNamespace)?;
+        let query = |target: &str, command_name: &str, status_leaf: &str| AuthorizedCommand {
+            delivery: Delivery::Query,
+            target: target.to_string(),
+            payload: payload.to_vec(),
+            status_leaf: status_leaf.to_string(),
+            velocity_device: None,
+            velocity_remaining: None,
+            velocity_credential_id: None,
+            velocity_limit: None,
+            velocity_used: None,
+            velocity_budget_version: None,
+            encoding: command_request_encoding(command_name),
+        };
+        match suffix {
+            "gain" => Ok(query(&self.config.parameter_key, "param_set", "gain")),
+            "parameters" => Ok(query(
+                &self.vehicle_command_key("param_get"),
+                "param_get",
+                "parameters",
+            )),
+            "trajectory" => Ok(query(
+                &self.vehicle_command_key("trajectory_set"),
+                "trajectory_set",
+                "trajectory",
+            )),
+            "velocity" => Ok(self.publish_topic("pos_sp", payload, "velocity", None)),
+            "manual" => Ok(self.publish_topic("manual", payload, "manual", None)),
+            "radio" => Ok(self.publish_topic("rc", payload, "radio", None)),
+            raw if raw.starts_with("raw/") => self.authorize_raw(&raw[4..], payload),
+            firmware if firmware.starts_with("firmware/") => {
+                self.authorize_firmware(&firmware[9..], payload)
             }
+            other => Err(PolicyError::UnknownIntent(other.to_string())),
         }
     }
 
+    pub(crate) fn refund_velocity(
+        &self,
+        device: &str,
+        credential_id: &str,
+    ) -> Result<BudgetState, PolicyError> {
+        self.velocity_budget
+            .lock()
+            .expect("velocity budget lock poisoned")
+            .refund(&Credential {
+                device_id: device.to_string(),
+                credential_id: credential_id.to_string(),
+            })
+            .map_err(PolicyError::Rejected)
+    }
+
+    pub(crate) fn velocity_state_for_payload(
+        &self,
+        payload: &[u8],
+    ) -> Result<BudgetState, PolicyError> {
+        let team = team_name_from_any_velocity_envelope(payload)?;
+        let store = self
+            .velocity_budget
+            .lock()
+            .expect("velocity budget lock poisoned");
+        let credential = store.resolve(&team).map_err(PolicyError::Rejected)?;
+        store.state(&credential).map_err(PolicyError::Rejected)
+    }
+
+    pub(crate) fn credential_id_for_payload(payload: &[u8]) -> Option<String> {
+        team_name_from_any_velocity_envelope(payload)
+            .ok()
+            .map(|team| crate::velocity_budget::credential_id(&team))
+    }
+
     fn authorize_velocity(&self, payload: &[u8]) -> Result<AuthorizedCommand, PolicyError> {
-        let command = follow_struct::<LocalPositionCommandData>(payload, 56)?;
+        let (team, vehicle_payload) =
+            credential_envelope(payload, VELOCITY_MAGIC, Some(VELOCITY_PAYLOAD_BYTES))?;
+        let command = follow_struct::<LocalPositionCommandData>(vehicle_payload, 56)?;
         let velocity = command.velocity_enu_m_s();
         let (x, y, z) = (velocity.x(), velocity.y(), velocity.z());
         if !x.is_finite() || !y.is_finite() || !z.is_finite() {
@@ -153,14 +252,29 @@ impl CommandPolicy {
                 self.config.velocity_min_mps, self.config.velocity_max_mps
             ));
         }
-        let remaining = self.consume_velocity_budget()?;
+        let state = self.consume_velocity_budget(&team, Some(x))?;
         let mut command = self.publish_topic(
-            "local_position_command",
-            payload,
+            "pos_sp",
+            vehicle_payload,
             "velocity",
-            Some(self.config.device.clone()),
+            Some(state.device_id.clone()),
         );
-        command.velocity_remaining = Some(remaining);
+        apply_budget_state(&mut command, &state);
+        Ok(command)
+    }
+
+    fn authorize_velocity_budget(&self, payload: &[u8]) -> Result<AuthorizedCommand, PolicyError> {
+        let (team, _) = credential_envelope(payload, VELOCITY_BUDGET_MAGIC, Some(0))?;
+        let store = self
+            .velocity_budget
+            .lock()
+            .expect("velocity budget lock poisoned");
+        let credential = store.resolve(&team).map_err(PolicyError::Rejected)?;
+        let state = store.state(&credential).map_err(PolicyError::Rejected)?;
+        let mut command = self.publish_topic("", &[], "velocity", Some(state.device_id.clone()));
+        command.delivery = Delivery::Budget;
+        command.target.clear();
+        apply_budget_state(&mut command, &state);
         Ok(command)
     }
 
@@ -188,7 +302,7 @@ impl CommandPolicy {
         if command.flags() & required != required {
             return rejected("manual command must be active and valid");
         }
-        Ok(self.publish_topic("manual_control_command", payload, "manual", None))
+        Ok(self.publish_topic("manual", payload, "manual", None))
     }
 
     fn authorize_radio(&self, payload: &[u8]) -> Result<AuthorizedCommand, PolicyError> {
@@ -207,7 +321,7 @@ impl CommandPolicy {
                 return rejected(format!("radio channel {index} is outside [900, 2100] us"));
             }
         }
-        Ok(self.publish_topic("radio_control", payload, "radio", None))
+        Ok(self.publish_topic("rc", payload, "radio", None))
     }
 
     fn authorize_gain(&self, payload: &[u8]) -> Result<AuthorizedCommand, PolicyError> {
@@ -228,6 +342,71 @@ impl CommandPolicy {
             status_leaf: "gain".to_string(),
             velocity_device: None,
             velocity_remaining: None,
+            velocity_credential_id: None,
+            velocity_limit: None,
+            velocity_used: None,
+            velocity_budget_version: None,
+            encoding: command_request_encoding("param_set"),
+        })
+    }
+
+    fn authorize_parameters(&self, payload: &[u8]) -> Result<AuthorizedCommand, PolicyError> {
+        let request = flatbuffers::root::<ParamGetRequest<'_>>(payload)
+            .map_err(|error| invalid(error.to_string()))?;
+        let name = request.name().unwrap_or("").trim();
+        if name.is_empty() || name.len() > 128 {
+            return rejected("parameter name must contain 1 to 128 characters");
+        }
+        Ok(AuthorizedCommand {
+            delivery: Delivery::Query,
+            target: self.vehicle_command_key("param_get"),
+            payload: payload.to_vec(),
+            status_leaf: "parameters".to_string(),
+            velocity_device: None,
+            velocity_remaining: None,
+            velocity_credential_id: None,
+            velocity_limit: None,
+            velocity_used: None,
+            velocity_budget_version: None,
+            encoding: command_request_encoding("param_get"),
+        })
+    }
+
+    fn authorize_trajectory(&self, payload: &[u8]) -> Result<AuthorizedCommand, PolicyError> {
+        let request = flatbuffers::root::<TrajectorySetRequest<'_>>(payload)
+            .map_err(|error| invalid(error.to_string()))?;
+        let segments = request
+            .segments()
+            .ok_or_else(|| invalid("TrajectorySetRequest has no segments"))?;
+        if !(1..=6).contains(&segments.len()) || request.total() != segments.len() as u32 {
+            return rejected("trajectory must contain one to six complete segments");
+        }
+        for index in 0..segments.len() {
+            let segment = segments.get(index);
+            if segment.segment_seq() != index as u32 || segment.frame().0 != LOCAL_ENU_FRAME {
+                return rejected("trajectory segments must be ordered Local ENU segments");
+            }
+            let start = segment.p0_enu_m();
+            let end = segment.p1_enu_m();
+            if [start.x(), start.y(), start.z(), end.x(), end.y(), end.z()]
+                .iter()
+                .any(|value| !value.is_finite())
+            {
+                return rejected("trajectory coordinates must be finite");
+            }
+        }
+        Ok(AuthorizedCommand {
+            delivery: Delivery::Query,
+            target: self.vehicle_command_key("trajectory_set"),
+            payload: payload.to_vec(),
+            status_leaf: "trajectory".to_string(),
+            velocity_device: None,
+            velocity_remaining: None,
+            velocity_credential_id: None,
+            velocity_limit: None,
+            velocity_used: None,
+            velocity_budget_version: None,
+            encoding: command_request_encoding("trajectory_set"),
         })
     }
 
@@ -239,6 +418,21 @@ impl CommandPolicy {
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
         {
             return rejected("raw target must be one safe topic leaf");
+        }
+        if leaf == "pos_sp" || leaf == "local_position_command" {
+            let (team, vehicle_payload) = credential_envelope(payload, RAW_VELOCITY_MAGIC, None)?;
+            if vehicle_payload.is_empty() || vehicle_payload.len() > self.config.raw_max_bytes {
+                return rejected("credentialed raw velocity payload has an invalid size");
+            }
+            let state = self.consume_velocity_budget(&team, None)?;
+            let mut command = self.publish_topic(
+                leaf,
+                vehicle_payload,
+                "velocity",
+                Some(state.device_id.clone()),
+            );
+            apply_budget_state(&mut command, &state);
+            return Ok(command);
         }
         if payload.is_empty() || payload.len() > self.config.raw_max_bytes {
             return rejected(format!(
@@ -280,52 +474,139 @@ impl CommandPolicy {
             status_leaf: format!("firmware/{update_id}"),
             velocity_device: None,
             velocity_remaining: None,
+            velocity_credential_id: None,
+            velocity_limit: None,
+            velocity_used: None,
+            velocity_budget_version: None,
+            encoding: None,
         })
     }
 
-    fn consume_velocity_budget(&self) -> Result<u32, PolicyError> {
-        let mut used = self
-            .velocity_used
-            .lock()
-            .expect("velocity budget lock poisoned");
-        let count = used.entry(self.config.device.clone()).or_insert(0);
-        if *count >= self.config.velocity_budget {
-            return rejected("velocity command budget exhausted");
-        }
-        *count += 1;
-        Ok(self.config.velocity_budget.saturating_sub(*count))
-    }
-
-    #[must_use]
-    pub fn velocity_remaining(&self, device: &str) -> u32 {
-        let used = self
-            .velocity_used
-            .lock()
-            .expect("velocity budget lock poisoned");
-        self.config
+    fn consume_velocity_budget(
+        &self,
+        team: &str,
+        velocity: Option<f32>,
+    ) -> Result<BudgetState, PolicyError> {
+        let store = self
             .velocity_budget
-            .saturating_sub(used.get(device).copied().unwrap_or(0))
+            .lock()
+            .expect("velocity budget lock poisoned");
+        let credential = store.resolve(team).map_err(PolicyError::Rejected)?;
+        store
+            .consume(&credential, velocity)
+            .map_err(PolicyError::Rejected)
     }
 
+    /// Compact-key publication (`[<namespace>/]<catalog key>`).
     fn publish_topic(
         &self,
-        leaf: &str,
+        key: &str,
         payload: &[u8],
         status_leaf: &str,
         velocity_device: Option<String>,
     ) -> AuthorizedCommand {
+        let namespace = self.config.vehicle_topic_prefix.trim_matches('/');
         AuthorizedCommand {
             delivery: Delivery::Publish,
-            target: format!(
-                "{}/{}",
-                self.config.vehicle_topic_prefix.trim_end_matches('/'),
-                leaf
-            ),
+            target: if namespace.is_empty() {
+                key.to_string()
+            } else {
+                format!("{namespace}/{key}")
+            },
             payload: payload.to_vec(),
             status_leaf: status_leaf.to_string(),
             velocity_device,
             velocity_remaining: None,
+            velocity_credential_id: None,
+            velocity_limit: None,
+            velocity_used: None,
+            velocity_budget_version: None,
+            encoding: synapse_fbs::topic_catalog::topic_by_key(key)
+                .map(synapse_fbs::value_contract::encoding_for_topic),
         }
+    }
+
+    /// Command queryable key (`[<namespace>/]cmd/<command>`).
+    fn vehicle_command_key(&self, name: &str) -> String {
+        let namespace = self.config.vehicle_topic_prefix.trim_matches('/');
+        let cmd = synapse_fbs::topic_catalog::CMD_KEY_PREFIX;
+        if namespace.is_empty() {
+            format!("{cmd}/{name}")
+        } else {
+            format!("{namespace}/{cmd}/{name}")
+        }
+    }
+}
+
+/// Canonical value-contract encoding for a command's request payload.
+pub(crate) fn command_request_encoding(name: &str) -> Option<String> {
+    let command = synapse_fbs::topic_catalog::command_by_name(name)?;
+    let media_type = if command.request_encoding == "struct" {
+        synapse_fbs::value_contract::STRUCT_MEDIA_TYPE
+    } else {
+        synapse_fbs::value_contract::FLATBUFFER_MEDIA_TYPE
+    };
+    Some(format!(
+        "{media_type};type={};schema=sha256-128:{}",
+        command.request_type, command.request_schema_hash
+    ))
+}
+
+fn apply_budget_state(command: &mut AuthorizedCommand, state: &BudgetState) {
+    command.velocity_device = Some(state.device_id.clone());
+    command.velocity_credential_id = Some(state.credential_id.clone());
+    command.velocity_limit = Some(state.limit);
+    command.velocity_used = Some(state.used);
+    command.velocity_remaining = Some(state.remaining);
+    command.velocity_budget_version = Some(state.budget_version.clone());
+}
+
+fn credential_envelope<'a>(
+    payload: &'a [u8],
+    magic: &[u8; 4],
+    expected_body: Option<usize>,
+) -> Result<(String, &'a [u8]), PolicyError> {
+    if payload.get(..4) != Some(magic.as_slice()) {
+        return Err(invalid("velocity credential envelope has invalid magic"));
+    }
+    let name_len = *payload
+        .get(4)
+        .ok_or_else(|| invalid("velocity credential envelope is missing a team name"))?
+        as usize;
+    if name_len == 0 || name_len > TEAM_NAME_MAX_BYTES {
+        return Err(invalid("velocity team name length is out of range"));
+    }
+    let body_start = 5 + name_len;
+    let name = std::str::from_utf8(
+        payload
+            .get(5..body_start)
+            .ok_or_else(|| invalid("velocity team name is truncated"))?,
+    )
+    .map_err(|_| invalid("velocity team name is not valid UTF-8"))?;
+    if !crate::velocity_budget::safe_device_id(name) || name.len() > TEAM_NAME_MAX_BYTES {
+        return rejected(
+            "team name must be 1-64 characters of letters, numbers, dot, underscore, colon, or hyphen",
+        );
+    }
+    let body = &payload[body_start..];
+    if expected_body.is_some_and(|expected| body.len() != expected) {
+        return Err(invalid("velocity payload has an invalid size"));
+    }
+    Ok((name.to_ascii_lowercase(), body))
+}
+
+fn team_name_from_any_velocity_envelope(payload: &[u8]) -> Result<String, PolicyError> {
+    let magic = payload
+        .get(..4)
+        .ok_or_else(|| invalid("velocity credential envelope is too short"))?;
+    if magic == VELOCITY_MAGIC {
+        credential_envelope(payload, VELOCITY_MAGIC, Some(VELOCITY_PAYLOAD_BYTES)).map(|v| v.0)
+    } else if magic == VELOCITY_BUDGET_MAGIC {
+        credential_envelope(payload, VELOCITY_BUDGET_MAGIC, Some(0)).map(|v| v.0)
+    } else if magic == RAW_VELOCITY_MAGIC {
+        credential_envelope(payload, RAW_VELOCITY_MAGIC, None).map(|v| v.0)
+    } else {
+        Err(invalid("velocity credential envelope has invalid magic"))
     }
 }
 
@@ -334,9 +615,26 @@ fn validate_gain(name: &str, kind: ParamKind, value: f64) -> Result<(), PolicyEr
         return rejected("controller gains must use ParamKind::Float");
     }
     let (min, max) = match name {
-        "attitude.headingPid.kp" => (0.0, 5.0),
-        "attitude.headingPid.ki" => (0.0, 1.0),
-        "attitude.headingPid.kd" => (0.0, 2.0),
+        "velocity.setpoint" | "guidance.cruiseSpeed" | "route.cruiseSpeed" => (1.0, 12.0),
+        "route.altitudeToFlightPathGain" | "route.speedToAccelerationGain" => (0.0, 10.0),
+        "route.altitudeLookaheadDistance"
+        | "route.crossTrackSteeringDistance"
+        | "route.waypointSwitchingDistance" => (0.1, 50.0),
+        "route.flightPathAngleLimit" | "tecs.pitchCommandLimit" => (0.02, 0.7),
+        "tecs.thrustKp" | "tecs.thrustKi" | "tecs.pitchKp" | "tecs.pitchKi" => (0.0, 2.0),
+        "tecs.energyRateIntegralMax" | "tecs.energyDistributionIntegralMax" => (0.0, 100.0),
+        "tecs.turnThrustGain" => (0.0, 5.0),
+        "tecs.turnPitchGain" => (-2.0, 2.0),
+        "attitude.rollLimit" => (0.05, 1.2),
+        "attitude.rollRateLimit" => (0.1, 8.0),
+        "attitude.headingPid.kp"
+        | "attitude.headingPid.ki"
+        | "attitude.headingPid.kd"
+        | "attitude.headingPid.integralMax"
+        | "attitude.pitchPid.kp"
+        | "attitude.pitchPid.ki"
+        | "attitude.pitchPid.kd"
+        | "attitude.pitchPid.integralMax" => (0.0, 10.0),
         _ => return rejected(format!("gain parameter {name:?} is not allowlisted")),
     };
     if !value.is_finite() || value < min || value > max {
