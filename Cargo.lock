@@ -745,7 +745,6 @@ dependencies = [
  "electrode-ppm-bridge",
  "electrode-web-core",
  "flatbuffers",
- "libc",
  "serde",
  "serde_json",
  "synapse_fbs",

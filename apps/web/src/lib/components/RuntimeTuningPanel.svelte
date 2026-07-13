@@ -3,7 +3,7 @@
   export let autopilotRunning = false;
   export let status = '';
   export let values: Record<string, number> = {};
-  export let onParameter: (name: string, value: number) => void;
+  export let onParameter: (name: string, value: number) => Promise<void>;
   export let onRefresh: (names: string[]) => void;
   export let onTrajectory: (waypoints: Array<{ east: number; north: number; up: number }>) => void;
 
@@ -47,7 +47,7 @@
 
   $: syncRuntimeValues(values);
 
-  function applyParameter(parameter: Parameter): boolean {
+  async function applyParameter(parameter: Parameter): Promise<boolean> {
     if (!autopilotRunning) {
       localStatus = 'Start the autopilot before applying parameter configuration';
       return false;
@@ -57,13 +57,13 @@
       return false;
     }
     localStatus = `sending ${parameter.label}…`;
-    onParameter(parameter.name, parameter.value);
+    await onParameter(parameter.name, parameter.value);
     return true;
   }
 
-  function applyAll(): void {
+  async function applyAll(): Promise<void> {
     for (const parameter of parameters) {
-      if (!applyParameter(parameter)) {
+      if (!(await applyParameter(parameter))) {
         return;
       }
     }

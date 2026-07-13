@@ -169,7 +169,37 @@ async fn runtime_parameter(
                 reply.result() == CommandResultCode::Accepted,
                 "parameter set rejected"
             );
-            reply.value().map(|value| value.float_value())
+            anyhow::ensure!(
+                reply.value().is_some(),
+                "parameter set reply contained no value"
+            );
+
+            // Accepted means CUBS2 staged the update. It applies staged
+            // values atomically at the next 50 Hz controller boundary, so
+            // read the live value back after one complete control period.
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            let mut readback_builder = FlatBufferBuilder::new();
+            let readback_name = readback_builder.create_string(&name);
+            let readback_root = ParamGetRequest::create(
+                &mut readback_builder,
+                &ParamGetRequestArgs {
+                    name: Some(readback_name),
+                    offset: 0,
+                    limit: 1,
+                },
+            );
+            readback_builder.finish(readback_root, None);
+            let readback_payload = state
+                ._command_authority
+                .trusted_query("cmd/param_get", readback_builder.finished_data().to_vec())?;
+            let readback = flatbuffers::root::<ParamGetReply<'_>>(&readback_payload)?;
+            anyhow::ensure!(
+                readback.result() == CommandResultCode::Accepted,
+                "parameter read-back rejected"
+            );
+            readback
+                .values()
+                .and_then(|values| (!values.is_empty()).then(|| values.get(0).float_value()))
         } else {
             let reply = flatbuffers::root::<ParamGetReply<'_>>(&payload)?;
             anyhow::ensure!(

@@ -1,28 +1,13 @@
-//! Runs the native cubs2 autopilot and bridges it onto Zenoh.
-//!
-//! The cubs2 `native_sim` build talks csyn's UDP transport: framed topic
-//! packets ("CSYN" magic + LE u16 synapse catalog id + LE u16 payload length)
-//! on localhost — the firmware listens on `udp_rx_port` and sends on
-//! `udp_tx_port`. Payloads are the canonical synapse_fbs wire encodings, so
-//! this link is a pure re-framer:
-//!
-//!  - autopilot → UDP → strip header → Zenoh put on the catalog key
-//!  - Zenoh subscribe (inbound whitelist) → add header → UDP → autopilot
-//!
-//! The whitelist forwards only the topics the autopilot consumes (mocap pose
-//! from the sim or a real mocap system, manual control from the RC bridge) so
-//! the autopilot's own publications never loop back at it.
+//! Runs the native cubs2 autopilot and observes its direct localhost Zenoh
+//! traffic. The firmware is itself a client of the Ground Station's private
+//! vehicle router; this module does not relay or republish control traffic.
 
-use std::io::ErrorKind;
 use std::io::Write;
-use std::net::UdpSocket;
-#[cfg(target_os = "linux")]
-use std::os::unix::process::CommandExt;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -31,9 +16,9 @@ use zenoh::Wait;
 
 use crate::autopilot::{AutopilotProfile, MOCAP_POSE_TOPIC};
 
-const CSYN_MAGIC: [u8; 4] = *b"CSYN";
-const CSYN_HEADER: usize = 8;
-const MAX_FRAME: usize = 2048;
+const AUTOPILOT_OUTPUT_TOPICS: &[&str] = &[
+    "pwm", "health", "att", "att_sp", "loop", "mission", "pos_sp", "traj", "nav",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,9 +43,8 @@ pub(crate) struct AutopilotRunStatus {
 struct LinkChild {
     child: Child,
     started_at_ms: u128,
-    stop: Arc<AtomicBool>,
-    threads: Vec<std::thread::JoinHandle<()>>,
-    // Subscribers live for the link's lifetime; dropping them undeclares.
+    // Traffic observers live for the link's lifetime; dropping them
+    // undeclares without affecting the firmware's own subscriptions.
     _subscribers: Vec<zenoh::pubsub::Subscriber<()>>,
     session: zenoh::Session,
     binary: String,
@@ -165,17 +149,10 @@ impl AutopilotLink {
             Some(session) => session,
             None => open_autopilot_session(profile)?,
         };
-        let rx = UdpSocket::bind(("127.0.0.1", profile.udp_tx_port))?;
-        rx.set_read_timeout(Some(Duration::from_millis(200)))?;
-        let tx = UdpSocket::new_target(profile.udp_rx_port)?;
-
-        let stop = Arc::new(AtomicBool::new(false));
         let frames_out = Arc::new(AtomicU64::new(0));
         let frames_in = Arc::new(AtomicU64::new(0));
-
-        let udp_to_zenoh =
-            spawn_udp_to_zenoh(rx, session.clone(), stop.clone(), frames_out.clone());
-        let subscribers = declare_inbound_subscribers(profile, &session, &tx, frames_in.clone())?;
+        let subscribers =
+            declare_traffic_observers(profile, &session, frames_in.clone(), frames_out.clone())?;
 
         // The firmware last: everything it may immediately talk to is ready.
         // Do not put this in a separate process group. Earlier versions tried
@@ -188,8 +165,6 @@ impl AutopilotLink {
         *self.inner.lock().expect("autopilot link lock poisoned") = Some(LinkChild {
             child,
             started_at_ms,
-            stop,
-            threads: vec![udp_to_zenoh],
             _subscribers: subscribers,
             session,
             binary: binary.clone(),
@@ -293,19 +268,11 @@ fn append_lifecycle(log_path: &str, event: &str, status: &AutopilotRunStatus) {
     }
 }
 
-struct InboundTopic {
+struct MonitoredTopic {
     key: String,
-    id: u16,
-    /// Catalog topic whose value contract inbound samples must satisfy.
-    /// None for the custom mocap keys, whose wire forms are not catalog
-    /// encodings (compact 28-byte pose and bridge MocapFrame).
+    /// Catalog topic whose value contract samples must satisfy. None is used
+    /// only for legacy custom mocap keys.
     contract: Option<&'static synapse_fbs::topic_catalog::TopicInfo>,
-}
-
-enum UdpRead {
-    Frame(usize),
-    Timeout,
-    Closed,
 }
 
 fn validate_native_binary(profile: &AutopilotProfile) -> anyhow::Result<String> {
@@ -360,92 +327,48 @@ fn open_autopilot_session(profile: &AutopilotProfile) -> anyhow::Result<zenoh::S
         .map_err(|error| anyhow::anyhow!("zenoh open failed: {error}"))
 }
 
-fn spawn_udp_to_zenoh(
-    rx: UdpSocket,
-    session: zenoh::Session,
-    stop: Arc<AtomicBool>,
-    count: Arc<AtomicU64>,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        let mut buf = [0_u8; MAX_FRAME];
-        while !stop.load(Ordering::Relaxed) {
-            match read_udp(&rx, &mut buf) {
-                UdpRead::Frame(len) => forward_udp_frame(&session, &count, &buf[..len]),
-                UdpRead::Timeout => {}
-                UdpRead::Closed => break,
-            }
-        }
-    })
-}
-
-fn read_udp(rx: &UdpSocket, buf: &mut [u8]) -> UdpRead {
-    match rx.recv(buf) {
-        Ok(len) => UdpRead::Frame(len),
-        Err(err) if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut => {
-            UdpRead::Timeout
-        }
-        Err(_) => UdpRead::Closed,
-    }
-}
-
-fn forward_udp_frame(session: &zenoh::Session, count: &AtomicU64, bytes: &[u8]) {
-    let Some((id, payload)) = parse_frame(bytes) else {
-        return;
-    };
-    let Some(topic) = synapse_fbs::topic_catalog::topic_by_id(id) else {
-        return;
-    };
-    let encoding = synapse_fbs::value_contract::encoding_for_topic(topic);
-    if session
-        .put(topic.key, payload.to_vec())
-        .encoding(zenoh::bytes::Encoding::from(encoding))
-        .wait()
-        .is_ok()
-    {
-        count.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-fn declare_inbound_subscribers(
+fn declare_traffic_observers(
     profile: &AutopilotProfile,
     session: &zenoh::Session,
-    tx: &UdpSocket,
-    count: Arc<AtomicU64>,
+    frames_in: Arc<AtomicU64>,
+    frames_out: Arc<AtomicU64>,
 ) -> anyhow::Result<Vec<zenoh::pubsub::Subscriber<()>>> {
     let mut subscribers = Vec::new();
     for spec in profile.inbound_topics() {
-        let Some(topic) = resolve_inbound_topic(&spec) else {
-            tracing::warn!(spec, "unknown inbound topic; skipping");
+        let Some(topic) = resolve_monitored_topic(&spec) else {
+            tracing::warn!(spec, "unknown autopilot input topic; not counting");
             continue;
         };
-        subscribers.push(declare_inbound_subscriber(
+        subscribers.push(declare_counter_subscriber(
             session,
-            tx,
-            count.clone(),
+            frames_in.clone(),
+            topic,
+        )?);
+    }
+    for key in AUTOPILOT_OUTPUT_TOPICS {
+        let topic = synapse_fbs::topic_catalog::parse_key(key)
+            .map(|parsed| MonitoredTopic {
+                key: (*key).to_string(),
+                contract: Some(parsed.topic),
+            })
+            .ok_or_else(|| anyhow::anyhow!("unknown autopilot output topic {key}"))?;
+        subscribers.push(declare_counter_subscriber(
+            session,
+            frames_out.clone(),
             topic,
         )?);
     }
     Ok(subscribers)
 }
 
-#[allow(clippy::excessive_nesting)]
-fn declare_inbound_subscriber(
+fn declare_counter_subscriber(
     session: &zenoh::Session,
-    tx: &UdpSocket,
     count: Arc<AtomicU64>,
-    topic: InboundTopic,
+    topic: MonitoredTopic,
 ) -> anyhow::Result<zenoh::pubsub::Subscriber<()>> {
-    let tx = tx.try_clone()?;
-    let id = topic.id;
     let key = topic.key;
     let contract = topic.contract;
     let callback_key = key.clone();
-    let logged = Arc::new(AtomicBool::new(false));
-    let rejected = Arc::new(AtomicBool::new(false));
-    // No zenoh republish here: zenoh-transport firmware subscribes to the
-    // pose keys directly (CSYN_ZENOH_MOCAP_POSE_KEY) with its own
-    // selected-vs-fallback arbitration; republishing onto the catalog key
-    // would bypass that arbitration and double the stream on the bus.
     session
         .declare_subscriber(key.clone())
         .callback(move |sample| {
@@ -454,36 +377,14 @@ fn declare_inbound_subscriber(
                 let valid = synapse_fbs::value_contract::topic_for_encoding(&encoding)
                     .is_ok_and(|resolved| resolved.id == topic.id);
                 if !valid {
-                    if !rejected.swap(true, Ordering::Relaxed) {
-                        tracing::warn!(
-                            key = %callback_key,
-                            encoding,
-                            "inbound sample rejected: value contract mismatch"
-                        );
-                    }
+                    tracing::debug!(key = %callback_key, encoding, "sample not counted: value contract mismatch");
                     return;
                 }
             }
-            let payload = sample.payload().to_bytes();
-            log_inbound_once(&logged, &callback_key, id, payload.len());
-            send_inbound_frame(&tx, &count, id, &payload);
+            count.fetch_add(1, Ordering::Relaxed);
         })
         .wait()
-        .map_err(|error| anyhow::anyhow!("zenoh subscribe {key} failed: {error}"))
-}
-
-fn log_inbound_once(logged: &AtomicBool, key: &str, id: u16, bytes: usize) {
-    if logged.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    tracing::info!(key, id, bytes, "autopilot inbound sample");
-}
-
-fn send_inbound_frame(tx: &UdpSocket, count: &AtomicU64, id: u16, payload: &[u8]) {
-    let frame = build_frame(id, payload);
-    if tx.send(&frame).is_ok() {
-        count.fetch_add(1, Ordering::Relaxed);
-    }
+        .map_err(|error| anyhow::anyhow!("zenoh traffic observer {key} failed: {error}"))
 }
 
 fn spawn_native_binary(
@@ -495,22 +396,10 @@ fn spawn_native_binary(
     command
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err));
-    #[cfg(target_os = "linux")]
-    // SAFETY: `pre_exec` runs after fork and before exec. `prctl`, `getppid`,
-    // and `raise` are async-signal-safe syscalls and do not touch Rust-owned
-    // state. The parent check closes the race where the GCS exits between
-    // spawning the child and installing the parent-death signal.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::getppid() == 1 {
-                libc::raise(libc::SIGKILL);
-            }
-            Ok(())
-        });
-    }
+    // Do not use Linux PR_SET_PDEATHSIG here. `Command::spawn` may run on a
+    // short-lived Tokio worker, and Linux defines the parent as that thread;
+    // the kernel would then kill a healthy autopilot when the worker exits.
+    // AutopilotLink owns the Child and performs explicit stop/shutdown cleanup.
     Ok(command.spawn()?)
 }
 
@@ -526,7 +415,7 @@ fn push_unique_endpoint(endpoints: &mut Vec<String>, endpoint: &str) {
     }
 }
 
-fn resolve_inbound_topic(spec: &str) -> Option<InboundTopic> {
+fn resolve_monitored_topic(spec: &str) -> Option<MonitoredTopic> {
     let spec = spec.trim();
     if spec.is_empty() {
         return None;
@@ -540,10 +429,9 @@ fn resolve_inbound_topic(spec: &str) -> Option<InboundTopic> {
         || spec.ends_with("mocap/frame")
         || spec.ends_with("mocap_frame")
     {
-        let topic = synapse_fbs::topic_catalog::topic_by_name("MocapFrame")?;
-        return Some(InboundTopic {
+        synapse_fbs::topic_catalog::topic_by_name("MocapFrame")?;
+        return Some(MonitoredTopic {
             key: spec.to_string(),
-            id: topic.id,
             contract: None,
         });
     }
@@ -551,9 +439,8 @@ fn resolve_inbound_topic(spec: &str) -> Option<InboundTopic> {
     // Compact catalog key, bare or namespaced. Subscribe to the spec as
     // written so any namespace is preserved.
     let parsed = synapse_fbs::topic_catalog::parse_key(spec)?;
-    Some(InboundTopic {
+    Some(MonitoredTopic {
         key: spec.to_string(),
-        id: parsed.topic.id,
         contract: Some(parsed.topic),
     })
 }
@@ -565,15 +452,12 @@ fn shutdown(link: Option<LinkChild>) {
 
     let LinkChild {
         mut child,
-        stop,
-        threads,
         _subscribers,
         session,
         binary,
         ..
     } = link;
 
-    stop.store(true, Ordering::Relaxed);
     drop(_subscribers);
     drop(session);
 
@@ -588,12 +472,6 @@ fn shutdown(link: Option<LinkChild>) {
         Err(err) => {
             tracing::warn!(binary, error = %err, "failed to query autopilot child status");
         }
-    }
-
-    // Do not join these threads in the HTTP stop path. They poll with short
-    // timeouts and will observe `stop`; blocking here risks freezing the GCS.
-    for thread in threads {
-        drop(thread);
     }
 }
 
@@ -617,29 +495,6 @@ fn wait_child_bounded(child: &mut Child, timeout: Duration, binary: &str) {
     }
 }
 
-/// Parse a csyn UDP frame; returns (catalog id, payload) when valid.
-fn parse_frame(buf: &[u8]) -> Option<(u16, &[u8])> {
-    if buf.len() < CSYN_HEADER || buf[..4] != CSYN_MAGIC {
-        return None;
-    }
-    let id = u16::from_le_bytes([buf[4], buf[5]]);
-    let len = u16::from_le_bytes([buf[6], buf[7]]) as usize;
-    if CSYN_HEADER + len != buf.len() {
-        return None;
-    }
-    Some((id, &buf[CSYN_HEADER..]))
-}
-
-/// Build a csyn UDP frame around a synapse payload.
-fn build_frame(id: u16, payload: &[u8]) -> Vec<u8> {
-    let mut frame = Vec::with_capacity(CSYN_HEADER + payload.len());
-    frame.extend_from_slice(&CSYN_MAGIC);
-    frame.extend_from_slice(&id.to_le_bytes());
-    frame.extend_from_slice(&(payload.len() as u16).to_le_bytes());
-    frame.extend_from_slice(payload);
-    frame
-}
-
 fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -647,45 +502,28 @@ fn now_ms() -> u128 {
         .unwrap_or_default()
 }
 
-/// Small helper: a connected UDP sender to the firmware's RX port.
-trait UdpTarget: Sized {
-    fn new_target(port: u16) -> std::io::Result<Self>;
-}
-
-impl UdpTarget for UdpSocket {
-    fn new_target(port: u16) -> std::io::Result<Self> {
-        let socket = UdpSocket::bind(("127.0.0.1", 0))?;
-        socket.connect(("127.0.0.1", port))?;
-        Ok(socket)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn frame_roundtrip() {
-        let payload = [1_u8, 2, 3, 4];
-        let frame = build_frame(27, &payload);
-        let (id, body) = parse_frame(&frame).expect("valid frame");
-        assert_eq!(id, 27);
-        assert_eq!(body, payload);
-    }
-
-    #[test]
     fn bridge_raw_pose_resolves_to_raw_pose_contract() {
-        let inbound = resolve_inbound_topic("qualisys/cub1/pose_raw").unwrap();
+        let inbound = resolve_monitored_topic("qualisys/cub1/pose_raw").unwrap();
         let expected = synapse_fbs::topic_catalog::topic_by_name("RawPose").unwrap();
 
-        assert_eq!(inbound.id, expected.id);
         assert_eq!(inbound.contract.map(|topic| topic.id), Some(expected.id));
     }
 
     #[test]
+    fn output_topics_include_mission_segments() {
+        assert!(AUTOPILOT_OUTPUT_TOPICS.contains(&"traj"));
+        assert!(synapse_fbs::topic_catalog::parse_key("traj").is_some());
+    }
+
+    #[test]
     #[ignore = "requires loopback network listeners"]
-    fn raw_mocap_is_forwarded_from_zenoh_to_firmware_udp() {
-        let endpoint = "udp/127.0.0.1:17448";
+    fn direct_zenoh_observers_count_inputs_and_outputs() {
+        let endpoint = "udp/127.0.0.1:17449";
         let mut router_config = zenoh::Config::default();
         router_config.insert_json5("mode", "\"router\"").unwrap();
         router_config
@@ -701,55 +539,55 @@ mod tests {
                 .unwrap();
             zenoh::open(config).wait().unwrap()
         };
+        let observer = open_client();
         let publisher = open_client();
-        let subscriber = open_client();
-        let udp_rx = UdpSocket::bind(("127.0.0.1", 18450)).unwrap();
-        udp_rx
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        let udp_tx = UdpSocket::new_target(18450).unwrap();
-        let count = Arc::new(AtomicU64::new(0));
-        let inbound = resolve_inbound_topic("qualisys/cub1/pose_raw").unwrap();
-        let topic_id = inbound.id;
-        let contract = inbound.contract.unwrap();
-        let _subscription =
-            declare_inbound_subscriber(&subscriber, &udp_tx, count.clone(), inbound).unwrap();
-
+        let frames_in = Arc::new(AtomicU64::new(0));
+        let frames_out = Arc::new(AtomicU64::new(0));
+        let profile = AutopilotProfile {
+            inbound_topics: vec!["qualisys/cub1/pose_raw".to_string()],
+            ..AutopilotProfile::default()
+        };
+        let _subscriptions =
+            declare_traffic_observers(&profile, &observer, frames_in.clone(), frames_out.clone())
+                .unwrap();
         std::thread::sleep(Duration::from_millis(100));
-        publisher
-            .put("qualisys/cub1/pose_raw", vec![0_u8; 40])
-            .encoding(zenoh::bytes::Encoding::from(
-                synapse_fbs::value_contract::encoding_for_topic(contract),
-            ))
-            .wait()
-            .unwrap();
 
-        let mut frame = [0_u8; 128];
-        let len = udp_rx.recv(&mut frame).unwrap();
-        let (id, payload) = parse_frame(&frame[..len]).unwrap();
-        assert_eq!(id, topic_id);
-        assert_eq!(payload.len(), 40);
-        assert_eq!(count.load(Ordering::Relaxed), 1);
+        for (key, topic_name, payload_len) in [
+            ("qualisys/cub1/pose_raw", "RawPose", 40),
+            ("pwm", "PwmSignalOutputs", 48),
+        ] {
+            let topic = synapse_fbs::topic_catalog::topic_by_name(topic_name).unwrap();
+            publisher
+                .put(key, vec![0_u8; payload_len])
+                .encoding(zenoh::bytes::Encoding::from(
+                    synapse_fbs::value_contract::encoding_for_topic(topic),
+                ))
+                .wait()
+                .unwrap();
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while (frames_in.load(Ordering::Relaxed) == 0 || frames_out.load(Ordering::Relaxed) == 0)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(frames_in.load(Ordering::Relaxed), 1);
+        assert_eq!(frames_out.load(Ordering::Relaxed), 1);
 
         let _ = publisher.close().wait();
-        let _ = subscriber.close().wait();
+        let _ = observer.close().wait();
         let _ = router.close().wait();
     }
 
     #[test]
-    fn rejects_bad_magic_and_length() {
-        assert!(parse_frame(b"NOPE\x01\x00\x00\x00").is_none());
-        let mut frame = build_frame(1, &[9, 9]);
-        frame.push(0); // trailing garbage breaks the declared length
-        assert!(parse_frame(&frame).is_none());
-    }
-
-    #[test]
     fn pose_streams_resolve_to_the_mocap_frame_id() {
-        let pose = resolve_inbound_topic("synapse/mocap/rigid_body/cub1/pose").unwrap();
+        let pose = resolve_monitored_topic("synapse/mocap/rigid_body/cub1/pose").unwrap();
         let selected =
-            resolve_inbound_topic("synapse/mocap/selected/rigid_body/cub1/pose").unwrap();
-        assert_eq!(pose.id, selected.id);
+            resolve_monitored_topic("synapse/mocap/selected/rigid_body/cub1/pose").unwrap();
+        assert_eq!(
+            pose.contract.map(|topic| topic.id),
+            selected.contract.map(|topic| topic.id)
+        );
         assert_eq!(pose.key, "synapse/mocap/rigid_body/cub1/pose");
     }
 }

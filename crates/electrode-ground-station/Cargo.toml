@@ -21,7 +21,6 @@ electrode-ppm-bridge = { path = "../electrode-ppm-bridge" }
 electrode-command-authority = { path = "../electrode-command-authority" }
 electrode-web-core = { path = "../electrode-web-core" }
 flatbuffers.workspace = true
-libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 synapse_fbs.workspace = true

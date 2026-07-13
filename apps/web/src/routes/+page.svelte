@@ -650,7 +650,7 @@
   }
 
   function startRecording(): void {
-    const requiredAutopilotTopics = ['att', 'att_sp', 'health', 'loop', 'mission', 'nav', 'pos_sp', 'pwm'];
+    const requiredAutopilotTopics = ['att', 'att_sp', 'health', 'loop', 'mission', 'nav', 'pos_sp', 'pwm', 'traj'];
     const liveKeys = new Set(
       (topicCatalog?.topics ?? [])
         .filter((topic) => topic.rateHz > 0)
@@ -940,11 +940,11 @@
             <strong>{autopilotRunning ? `running · pid ${autopilotRun?.pid ?? '—'}` : 'stopped'}</strong>
           </div>
           <div class="metric">
-            <span>Frames out</span>
+            <span>Autopilot outputs</span>
             <strong>{autopilotRun?.framesOut ?? 0}</strong>
           </div>
           <div class="metric">
-            <span>Frames in</span>
+            <span>Autopilot inputs</span>
             <strong>{autopilotRun?.framesIn ?? 0}</strong>
           </div>
         </div>

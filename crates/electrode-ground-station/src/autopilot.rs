@@ -30,14 +30,16 @@ pub(crate) struct AutopilotProfile {
     /// control (see `autopilot_link`).
     #[serde(default = "default_native_binary")]
     pub native_binary: String,
-    /// Port the firmware's csyn UDP transport listens on (inbound topics).
+    /// Legacy CSyn UDP relay port retained for profile compatibility. Direct
+    /// Zenoh native builds do not use it.
     #[serde(default = "default_udp_rx_port")]
     pub udp_rx_port: u16,
-    /// Port the firmware's csyn UDP transport sends to (outbound topics).
+    /// Legacy CSyn UDP relay port retained for profile compatibility. Direct
+    /// Zenoh native builds do not use it.
     #[serde(default = "default_udp_tx_port")]
     pub udp_tx_port: u16,
-    /// Topic keys forwarded from Zenoh into the firmware. Only what
-    /// the autopilot consumes — its own publications must not loop back.
+    /// Topics consumed directly by the autopilot and monitored by Electrode
+    /// for its input traffic counter.
     #[serde(default = "default_inbound_topics")]
     pub inbound_topics: Vec<String>,
     /// Which mocap producer is selected by the ground station.

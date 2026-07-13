@@ -111,30 +111,8 @@
         </select>
       </label>
 
-      <label>
-        <span>UDP firmware listens</span>
-        <input
-          type="number"
-          min="1"
-          max="65535"
-          value={profile.udpRxPort}
-          oninput={(e) => setField('udpRxPort', Number(e.currentTarget.value))}
-        />
-      </label>
-
-      <label>
-        <span>UDP firmware sends</span>
-        <input
-          type="number"
-          min="1"
-          max="65535"
-          value={profile.udpTxPort}
-          oninput={(e) => setField('udpTxPort', Number(e.currentTarget.value))}
-        />
-      </label>
-
       <label class="wide">
-        <span>Inbound Zenoh topics sent to firmware</span>
+        <span>Autopilot input topics monitored on local Zenoh</span>
         <textarea spellcheck="false" value={inboundTopicsText} oninput={(e) => setInboundTopics(e.currentTarget.value)}></textarea>
       </label>
     </div>
