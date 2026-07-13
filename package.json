@@ -29,7 +29,7 @@
     "build:gcs": "cargo build && npm run build"
   },
   "dependencies": {
-    "@cognipilot/synapse-fbs": "^0.7.0"
+    "@cognipilot/synapse-fbs": "^0.8.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
