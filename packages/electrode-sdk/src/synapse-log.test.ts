@@ -43,6 +43,47 @@ describe('Synapse log recorder', () => {
   it('rejects non-MCAP log bytes', () => {
     expect(() => decodeSynapseLogFrames(new Uint8Array([0, 1, 2, 3]))).toThrow('Invalid MCAP log file');
   });
+
+  it('preserves structured parameter audit records', async () => {
+    const recorder = new SynapseLogRecorder({
+      vehicleId: 'cubs2',
+      source: 'vitest',
+      createdUnixUs: 1_700_000_000_000_000n
+    });
+    const audit = {
+      schema: 'electrode.parameter-audit.v1',
+      timestampUnixMs: 1_700_000_000_000,
+      source: 'public_lan',
+      name: 'velocity.setpoint',
+      requestedValue: 4.5,
+      effectiveValue: 4.5,
+      status: 'accepted'
+    };
+    expect(
+      recorder.recordFrame({
+        kind: 'telemetry',
+        topic: 'gcs/v1/audit/parameter',
+        header: {
+          sequence: 1,
+          sourceTimeNs: 1_700_000_000_000_000_000,
+          receiveTimeNs: 1_700_000_000_000_000_000,
+          expireTimeNs: 0,
+          vehicleId: 'cubs2',
+          schemaVersion: 1,
+          messageType: 'ParameterAudit',
+          priority: 'normal',
+          streamId: 'gcs/v1/audit/parameter'
+        },
+        payload: audit
+      })
+    ).toBe(true);
+
+    const log = await recorder.export('audit');
+    expect(decodeSynapseLogFrames(log.bytes)[0]).toMatchObject({
+      topic: 'gcs/v1/audit/parameter',
+      payload: audit
+    });
+  });
 });
 
 function readMcapChannelTopics(bytes: Uint8Array): string[] {

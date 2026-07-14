@@ -67,6 +67,7 @@ const DEFAULT_KEY_EXPRS = [
   'qualisys/cub1/pose_raw',
   'synapse/motor_output',
   'gcs/v1/status/reply/parameters',
+  'gcs/v1/audit/parameter',
 ];
 // Matches electrode_web_core::SCHEMA_VERSION on the native side.
 const SCHEMA_VERSION = 1;

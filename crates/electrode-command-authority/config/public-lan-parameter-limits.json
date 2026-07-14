@@ -1,0 +1,12 @@
+{
+  "schema": "electrode.public-lan-parameter-limits.v1",
+  "parameters": [
+    { "name": "velocity.setpoint", "minimum": 0.0, "maximum": 5.0 },
+    { "name": "route.crossTrackSteeringDistance", "minimum": 0.0, "maximum": 50.0 },
+    { "name": "route.waypointSwitchingDistance", "minimum": 0.2, "maximum": 50.0 },
+    { "name": "attitude.rollLimit", "minimum": 0.4363323129985824, "maximum": 3.141592653589793 },
+    { "name": "attitude.headingPid.kp", "minimum": 0.2, "maximum": 5.0 },
+    { "name": "attitude.headingPid.ki", "minimum": 0.0, "maximum": 10.0 },
+    { "name": "attitude.headingPid.kd", "minimum": 0.0, "maximum": 3.0 }
+  ]
+}

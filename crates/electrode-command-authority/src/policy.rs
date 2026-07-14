@@ -1,8 +1,11 @@
 //! Pure command decoding, validation, and key mapping.
 
+use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use serde::Deserialize;
 use synapse_fbs::cmd::{ParamGetRequest, ParamKind, ParamSetRequest, TrajectorySetRequest};
 use synapse_fbs::topic::{LocalPositionCommandData, ManualControlData, RadioControlData};
 
@@ -21,6 +24,17 @@ const VELOCITY_BUDGET_MAGIC: &[u8; 4] = b"EVB1";
 const RAW_VELOCITY_MAGIC: &[u8; 4] = b"EVR1";
 const VELOCITY_PAYLOAD_BYTES: usize = 56;
 const TEAM_NAME_MAX_BYTES: usize = 64;
+const PARAMETER_LIMITS_SCHEMA: &str = "electrode.public-lan-parameter-limits.v1";
+const DEFAULT_PARAMETER_LIMITS: &str = include_str!("../config/public-lan-parameter-limits.json");
+const PUBLIC_PARAMETER_NAMES: [&str; 7] = [
+    "velocity.setpoint",
+    "route.crossTrackSteeringDistance",
+    "route.waypointSwitchingDistance",
+    "attitude.rollLimit",
+    "attitude.headingPid.kp",
+    "attitude.headingPid.ki",
+    "attitude.headingPid.kd",
+];
 /// Canonical vehicle query keys used by the staged firmware-update transfer.
 pub const CANONICAL_FIRMWARE_QUERY_KEYS: [&str; 6] = [
     "cmd/firmware_info",
@@ -71,6 +85,7 @@ pub struct PolicyConfig {
     pub velocity_budget_json: PathBuf,
     pub velocity_budget_csv: PathBuf,
     pub raw_max_bytes: usize,
+    pub parameter_limits_path: Option<PathBuf>,
 }
 
 impl Default for PolicyConfig {
@@ -89,6 +104,7 @@ impl Default for PolicyConfig {
             velocity_budget_json: PathBuf::from("data/velocity-budget-db.json"),
             velocity_budget_csv: PathBuf::from("data/velocity-budget.csv"),
             raw_max_bytes: 4 * 1024,
+            parameter_limits_path: None,
         }
     }
 }
@@ -110,6 +126,22 @@ pub enum PolicyError {
 pub struct CommandPolicy {
     config: PolicyConfig,
     velocity_budget: Mutex<VelocityBudgetStore>,
+    parameter_limits: HashMap<String, (f64, f64)>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ParameterLimitsFile {
+    schema: String,
+    parameters: Vec<ParameterLimit>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ParameterLimit {
+    name: String,
+    minimum: f64,
+    maximum: f64,
 }
 
 impl CommandPolicy {
@@ -120,9 +152,11 @@ impl CommandPolicy {
             config.velocity_budget_csv.clone(),
             config.velocity_budget,
         );
+        let parameter_limits = load_parameter_limits(config.parameter_limits_path.as_deref());
         Self {
             config,
             velocity_budget: Mutex::new(velocity_budget),
+            parameter_limits,
         }
     }
 
@@ -334,7 +368,12 @@ impl CommandPolicy {
         if name.is_empty() || name.len() > 128 {
             return rejected("parameter name must contain 1 to 128 characters");
         }
-        validate_gain(name, value.kind(), value.float_value())?;
+        validate_gain(
+            &self.parameter_limits,
+            name,
+            value.kind(),
+            value.float_value(),
+        )?;
         Ok(AuthorizedCommand {
             delivery: Delivery::Query,
             target: self.config.parameter_key.clone(),
@@ -610,35 +649,84 @@ fn team_name_from_any_velocity_envelope(payload: &[u8]) -> Result<String, Policy
     }
 }
 
-fn validate_gain(name: &str, kind: ParamKind, value: f64) -> Result<(), PolicyError> {
-    if kind != ParamKind::Float {
-        return rejected("controller gains must use ParamKind::Float");
-    }
-    let (min, max) = match name {
-        "velocity.setpoint" | "guidance.cruiseSpeed" | "route.cruiseSpeed" => (1.0, 12.0),
-        "route.altitudeToFlightPathGain" | "route.speedToAccelerationGain" => (0.0, 10.0),
-        "route.altitudeLookaheadDistance"
-        | "route.crossTrackSteeringDistance"
-        | "route.waypointSwitchingDistance" => (0.1, 50.0),
-        "route.flightPathAngleLimit" | "tecs.pitchCommandLimit" => (0.02, 0.7),
-        "tecs.thrustKp" | "tecs.thrustKi" | "tecs.pitchKp" | "tecs.pitchKi" => (0.0, 2.0),
-        "tecs.energyRateIntegralMax" | "tecs.energyDistributionIntegralMax" => (0.0, 100.0),
-        "tecs.turnThrustGain" => (0.0, 5.0),
-        "tecs.turnPitchGain" => (-2.0, 2.0),
-        "attitude.rollLimit" => (0.05, 1.2),
-        "attitude.rollRateLimit" => (0.1, 8.0),
-        "attitude.headingPid.kp"
-        | "attitude.headingPid.ki"
-        | "attitude.headingPid.kd"
-        | "attitude.headingPid.integralMax"
-        | "attitude.pitchPid.kp"
-        | "attitude.pitchPid.ki"
-        | "attitude.pitchPid.kd"
-        | "attitude.pitchPid.integralMax" => (0.0, 10.0),
-        _ => return rejected(format!("gain parameter {name:?} is not allowlisted")),
+fn load_parameter_limits(path: Option<&std::path::Path>) -> HashMap<String, (f64, f64)> {
+    let json = match path {
+        Some(path) => match fs::read_to_string(path) {
+            Ok(json) => json,
+            Err(error) => {
+                tracing::error!(
+                    path = %path.display(),
+                    %error,
+                    "LAN parameter limits unavailable; denying all LAN parameter writes"
+                );
+                return HashMap::new();
+            }
+        },
+        None => DEFAULT_PARAMETER_LIMITS.to_string(),
     };
-    if !value.is_finite() || value < min || value > max {
-        return rejected(format!("gain {name} must be within [{min}, {max}]"));
+    match parse_parameter_limits(&json) {
+        Ok(limits) => limits,
+        Err(error) => {
+            tracing::error!(%error, "LAN parameter limits invalid; denying all LAN parameter writes");
+            HashMap::new()
+        }
+    }
+}
+
+fn parse_parameter_limits(json: &str) -> Result<HashMap<String, (f64, f64)>, String> {
+    let file: ParameterLimitsFile =
+        serde_json::from_str(json).map_err(|error| format!("parse limits: {error}"))?;
+    if file.schema != PARAMETER_LIMITS_SCHEMA {
+        return Err(format!("unsupported schema {:?}", file.schema));
+    }
+    if file.parameters.len() != PUBLIC_PARAMETER_NAMES.len() {
+        return Err("limits must define exactly seven public parameters".into());
+    }
+    let expected = PUBLIC_PARAMETER_NAMES.into_iter().collect::<HashSet<_>>();
+    let mut limits = HashMap::with_capacity(file.parameters.len());
+    for parameter in file.parameters {
+        if !expected.contains(parameter.name.as_str()) {
+            return Err(format!("unexpected public parameter {:?}", parameter.name));
+        }
+        if !parameter.minimum.is_finite()
+            || !parameter.maximum.is_finite()
+            || parameter.minimum > parameter.maximum
+        {
+            return Err(format!("invalid limits for {:?}", parameter.name));
+        }
+        let name = parameter.name;
+        if limits
+            .insert(name.clone(), (parameter.minimum, parameter.maximum))
+            .is_some()
+        {
+            return Err(format!("duplicate public parameter {name:?}"));
+        }
+    }
+    if limits.len() != expected.len() {
+        return Err("limits do not define every public parameter".into());
+    }
+    Ok(limits)
+}
+
+fn validate_gain(
+    limits: &HashMap<String, (f64, f64)>,
+    name: &str,
+    kind: ParamKind,
+    value: f64,
+) -> Result<(), PolicyError> {
+    if kind != ParamKind::Float {
+        return rejected("public parameters must use ParamKind::Float");
+    }
+    let &(minimum, maximum) = limits.get(name).ok_or_else(|| {
+        PolicyError::Rejected(format!("public parameter {name:?} is not allowlisted"))
+    })?;
+    if !value.is_finite() {
+        return rejected(format!("parameter {name} must be finite"));
+    }
+    if value < minimum || value > maximum {
+        return rejected(format!(
+            "parameter {name} must be within [{minimum}, {maximum}]"
+        ));
     }
     Ok(())
 }

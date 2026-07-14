@@ -85,4 +85,23 @@ describe('Zenoh browser transport subscriptions', () => {
     });
     await transport.disconnect();
   });
+
+  it('subscribes to parameter audit records for MCAP recording', async () => {
+    const onRawSample = vi.fn();
+    const transport = new ZenohWasmTransport(
+      'ws/127.0.0.1:7447',
+      vi.fn(),
+      vi.fn(),
+      undefined,
+      { onRawSample }
+    );
+    await transport.connect();
+
+    const key = 'gcs/v1/audit/parameter';
+    const payload = new TextEncoder().encode('{"name":"velocity.setpoint"}');
+    zenohMock.subscribers.get(key)?.(key, payload);
+
+    expect(onRawSample).toHaveBeenCalledWith(key, payload);
+    await transport.disconnect();
+  });
 });

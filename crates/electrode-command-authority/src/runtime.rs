@@ -6,10 +6,10 @@ use std::path::PathBuf;
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
-use synapse_fbs::cmd::{ParamGetReply, ParamSetReply, TrajectorySetReply};
+use synapse_fbs::cmd::{ParamGetReply, ParamSetReply, ParamSetRequest, TrajectorySetReply};
 use synapse_fbs::topic::{MocapFrame, RawPoseData};
 use synapse_fbs::types::CommandResultCode;
 use zenoh::{Session, Wait};
@@ -24,6 +24,7 @@ const RIGID_BODY_NAMES_TOPIC: &str = "synapse/mocap/rigid_body_names";
 const RAW_POSE_TOPIC: &str = "qualisys/cub1/pose_raw";
 const PRIVATE_PWM_TOPIC: &str = "electrode/sim/rumoca/radio_pwm_signal_outputs";
 const SYNAPSE_CATALOG_KEY: &str = "electrode/catalog/synapse";
+const PARAMETER_AUDIT_KEY: &str = "gcs/v1/audit/parameter";
 const SYNAPSE_CATALOG_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Runtime endpoints. The two sessions never discover one another directly.
@@ -105,6 +106,8 @@ impl CommandAuthorityConfig {
                     defaults.policy.velocity_budget_csv,
                 ),
                 raw_max_bytes: defaults.policy.raw_max_bytes,
+                parameter_limits_path: optional("ELECTRODE_GCS_LAN_PARAMETER_LIMITS_PATH")
+                    .map(PathBuf::from),
             },
         }
     }
@@ -130,6 +133,7 @@ pub struct CommandAuthority {
 struct QueuedQuery {
     command: AuthorizedCommand,
     response: Session,
+    source: &'static str,
 }
 
 impl CommandAuthority {
@@ -157,6 +161,7 @@ impl CommandAuthority {
         ));
         let (query_sender, query_receiver) = sync_channel::<QueuedQuery>(PARAMETER_QUEUE_CAPACITY);
         let worker_vehicle = vehicle_session.clone();
+        let worker_audit_browser = browser_session.clone();
         let worker_config = config.clone();
         let worker_firmware_gate = firmware_gate;
         let query_worker = std::thread::Builder::new()
@@ -168,7 +173,9 @@ impl CommandAuthority {
                         Delivery::Query => execute_query(
                             &worker_vehicle,
                             &queued.response,
+                            &worker_audit_browser,
                             &worker_config,
+                            queued.source,
                             command,
                         ),
                         Delivery::Firmware => worker_firmware_gate.handle_intent(
@@ -191,17 +198,21 @@ impl CommandAuthority {
             subscribe_intents(
                 &browser_session,
                 &vehicle_session,
+                &browser_session,
                 policy.clone(),
                 query_sender.clone(),
                 &config,
+                "ground_station",
                 true,
             )?,
             subscribe_intents(
                 &lan_request_session,
                 &vehicle_session,
+                &browser_session,
                 policy,
                 query_sender.clone(),
                 &config,
+                "public_lan",
                 false,
             )?,
             relay_synapse_to_browser(
@@ -277,6 +288,7 @@ impl CommandAuthority {
     /// Execute a trusted localhost request against the private vehicle router.
     pub fn trusted_query(&self, target: &str, payload: Vec<u8>) -> Result<Vec<u8>> {
         let session = open_session("client", "", Some(&self.vehicle_endpoint))?;
+        let parameter_request = (target == "cmd/param_set").then(|| payload.clone());
         let mut request = session
             .get(target)
             .payload(payload)
@@ -295,6 +307,26 @@ impl CommandAuthority {
             .into_result()
             .map_err(|error| anyhow!(error.to_string()))?;
         let payload = reply.payload().to_bytes().to_vec();
+        if let Some(request) = parameter_request.as_deref() {
+            match parameter_reply_status(&payload) {
+                Ok((status, message)) => publish_parameter_audit(
+                    &self.browser_session,
+                    "ground_station",
+                    request,
+                    Some(&payload),
+                    status,
+                    &message,
+                ),
+                Err(error) => publish_parameter_audit(
+                    &self.browser_session,
+                    "ground_station",
+                    request,
+                    Some(&payload),
+                    "rejected",
+                    &error.to_string(),
+                ),
+            }
+        }
         let _ = session.close().wait();
         Ok(payload)
     }
@@ -344,14 +376,17 @@ impl Drop for CommandAuthority {
 fn subscribe_intents(
     browser: &Session,
     vehicle: &Session,
+    audit_browser: &Session,
     policy: Arc<CommandPolicy>,
     query_sender: SyncSender<QueuedQuery>,
     config: &CommandAuthorityConfig,
+    source: &'static str,
     trusted: bool,
 ) -> Result<zenoh::pubsub::Subscriber<()>> {
     let key = format!("{}/**", config.policy.intent_prefix.trim_end_matches('/'));
     let callback_vehicle = vehicle.clone();
     let callback_browser = browser.clone();
+    let callback_audit_browser = audit_browser.clone();
     let callback_config = config.clone();
     browser
         .declare_subscriber(key.clone())
@@ -388,15 +423,22 @@ fn subscribe_intents(
                         "authoritative velocity budget",
                     );
                 }
-                Ok(command) => {
-                    enqueue_query(&query_sender, &callback_browser, &callback_config, command)
-                }
+                Ok(command) => enqueue_query(
+                    &query_sender,
+                    &callback_browser,
+                    &callback_audit_browser,
+                    &callback_config,
+                    source,
+                    command,
+                ),
                 Err(error) => {
                     tracing::warn!(key = intent_key, %error, "browser command rejected");
                     publish_policy_error(
                         &callback_browser,
+                        &callback_audit_browser,
                         &callback_config,
                         policy.as_ref(),
+                        source,
                         intent_key,
                         &payload,
                         &error.to_string(),
@@ -410,8 +452,10 @@ fn subscribe_intents(
 
 fn publish_policy_error(
     browser: &Session,
+    audit_browser: &Session,
     config: &CommandAuthorityConfig,
     policy: &CommandPolicy,
+    source: &'static str,
     intent_key: &str,
     payload: &[u8],
     message: &str,
@@ -430,7 +474,10 @@ fn publish_policy_error(
                 ),
             }
         }
-        "gain" => publish_status(browser, config, "gain", "rejected", message),
+        "gain" => {
+            publish_parameter_audit(audit_browser, source, payload, None, "rejected", message);
+            publish_status(browser, config, "gain", "rejected", message);
+        }
         firmware if firmware.starts_with("firmware/") => {
             let update_id = firmware[9..].split('/').next().unwrap_or("");
             if !publish_policy_rejection(browser, &config.policy.intent_prefix, update_id, message)
@@ -504,30 +551,52 @@ fn execute_publish(
 fn enqueue_query(
     sender: &SyncSender<QueuedQuery>,
     browser: &Session,
+    audit_browser: &Session,
     config: &CommandAuthorityConfig,
+    source: &'static str,
     command: AuthorizedCommand,
 ) {
     let status_leaf = command.status_leaf.clone();
+    let audit_payload = command.payload.clone();
     let message = match sender.try_send(QueuedQuery {
         command,
         response: browser.clone(),
+        source,
     }) {
         Ok(()) => return,
         Err(TrySendError::Full(_)) => "command query queue is full",
         Err(TrySendError::Disconnected(_)) => "command query worker is unavailable",
     };
+    publish_parameter_audit(
+        audit_browser,
+        source,
+        &audit_payload,
+        None,
+        "rejected",
+        message,
+    );
     publish_status(browser, config, &status_leaf, "rejected", message);
 }
 
 fn execute_query(
     _vehicle: &Session,
     browser: &Session,
+    audit_browser: &Session,
     config: &CommandAuthorityConfig,
+    source: &'static str,
     command: AuthorizedCommand,
 ) {
     let query_session = match open_session("client", "", Some(&config.vehicle_listen)) {
         Ok(session) => session,
         Err(error) => {
+            publish_parameter_audit(
+                audit_browser,
+                source,
+                &command.payload,
+                None,
+                "rejected",
+                &error.to_string(),
+            );
             publish_status(
                 browser,
                 config,
@@ -548,6 +617,14 @@ fn execute_query(
     let replies = match request.wait() {
         Ok(replies) => replies,
         Err(error) => {
+            publish_parameter_audit(
+                audit_browser,
+                source,
+                &command.payload,
+                None,
+                "rejected",
+                &error.to_string(),
+            );
             publish_status(
                 browser,
                 config,
@@ -563,47 +640,153 @@ fn execute_query(
             Ok(sample) => {
                 let payload = sample.payload().to_bytes().to_vec();
                 let reply_key = format!(
-                    "{}/reply/{}",
+                    "{}/status/reply/{}",
                     status_prefix(&config.policy.intent_prefix),
                     command.status_leaf
                 );
                 let _ = browser.put(reply_key, payload.clone()).wait();
                 match command_reply_status(&command.status_leaf, &payload) {
                     Ok((status, message)) => {
+                        publish_parameter_audit(
+                            audit_browser,
+                            source,
+                            &command.payload,
+                            Some(&payload),
+                            status,
+                            &message,
+                        );
                         publish_status(browser, config, &command.status_leaf, status, &message)
                     }
-                    Err(error) => publish_status(
-                        browser,
-                        config,
-                        &command.status_leaf,
-                        "rejected",
-                        &error.to_string(),
-                    ),
+                    Err(error) => {
+                        publish_parameter_audit(
+                            audit_browser,
+                            source,
+                            &command.payload,
+                            Some(&payload),
+                            "rejected",
+                            &error.to_string(),
+                        );
+                        publish_status(
+                            browser,
+                            config,
+                            &command.status_leaf,
+                            "rejected",
+                            &error.to_string(),
+                        )
+                    }
                 }
             }
-            Err(error) => publish_status(
+            Err(error) => {
+                publish_parameter_audit(
+                    audit_browser,
+                    source,
+                    &command.payload,
+                    None,
+                    "rejected",
+                    &error.to_string(),
+                );
+                publish_status(
+                    browser,
+                    config,
+                    &command.status_leaf,
+                    "rejected",
+                    &error.to_string(),
+                )
+            }
+        },
+        Ok(None) => {
+            let message = "target service returned no reply";
+            publish_parameter_audit(
+                audit_browser,
+                source,
+                &command.payload,
+                None,
+                "rejected",
+                message,
+            );
+            publish_status(browser, config, &command.status_leaf, "rejected", message)
+        }
+        Err(error) => {
+            publish_parameter_audit(
+                audit_browser,
+                source,
+                &command.payload,
+                None,
+                "rejected",
+                &error.to_string(),
+            );
+            publish_status(
                 browser,
                 config,
                 &command.status_leaf,
                 "rejected",
                 &error.to_string(),
-            ),
-        },
-        Ok(None) => publish_status(
-            browser,
-            config,
-            &command.status_leaf,
-            "rejected",
-            "target service returned no reply",
-        ),
-        Err(error) => publish_status(
-            browser,
-            config,
-            &command.status_leaf,
-            "rejected",
-            &error.to_string(),
-        ),
+            )
+        }
     }
+}
+
+fn publish_parameter_audit(
+    browser: &Session,
+    source: &'static str,
+    request_payload: &[u8],
+    reply_payload: Option<&[u8]>,
+    status: &str,
+    message: &str,
+) {
+    let timestamp_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let Some(payload) = parameter_audit_payload(
+        source,
+        request_payload,
+        reply_payload,
+        status,
+        message,
+        timestamp_unix_ms,
+    ) else {
+        return;
+    };
+    if let Err(error) = browser.put(PARAMETER_AUDIT_KEY, payload).wait() {
+        tracing::warn!(%error, "parameter audit publish failed");
+    }
+}
+
+fn parameter_audit_payload(
+    source: &'static str,
+    request_payload: &[u8],
+    reply_payload: Option<&[u8]>,
+    status: &str,
+    message: &str,
+    timestamp_unix_ms: u128,
+) -> Option<String> {
+    let Ok(request) = flatbuffers::root::<ParamSetRequest<'_>>(request_payload) else {
+        return None;
+    };
+    let Some(requested) = request.value() else {
+        return None;
+    };
+    let Some(name) = requested.name() else {
+        return None;
+    };
+    let effective_value = reply_payload
+        .and_then(|payload| flatbuffers::root::<ParamSetReply<'_>>(payload).ok())
+        .and_then(|reply| reply.value())
+        .map(|value| value.float_value());
+    Some(
+        serde_json::json!({
+            "schema": "electrode.parameter-audit.v1",
+            "timestampUnixMs": timestamp_unix_ms,
+            "source": source,
+            "name": name,
+            "requestedValue": requested.float_value(),
+            "effectiveValue": effective_value,
+            "status": status,
+            "message": message,
+        })
+        .to_string(),
+    )
 }
 
 fn command_reply_status(leaf: &str, payload: &[u8]) -> Result<(&'static str, String)> {
@@ -1046,11 +1229,14 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        ensure_loopback_browser_endpoint, ensure_loopback_vehicle_endpoint, parameter_reply_status,
-        should_announce_topic,
+        ensure_loopback_browser_endpoint, ensure_loopback_vehicle_endpoint,
+        parameter_audit_payload, parameter_reply_status, should_announce_topic,
     };
     use flatbuffers::FlatBufferBuilder;
-    use synapse_fbs::cmd::{ParamSetReply, ParamSetReplyArgs};
+    use synapse_fbs::cmd::{
+        ParamKind, ParamSetReply, ParamSetReplyArgs, ParamSetRequest, ParamSetRequestArgs,
+        ParamValue, ParamValueArgs,
+    };
     use synapse_fbs::types::CommandResultCode;
 
     fn reply(result: CommandResultCode, result_detail: i32) -> Vec<u8> {
@@ -1064,6 +1250,24 @@ mod tests {
             },
         );
         builder.finish(reply, None);
+        builder.finished_data().to_vec()
+    }
+
+    fn request(name: &str, number: f64) -> Vec<u8> {
+        let mut builder = FlatBufferBuilder::new();
+        let name = builder.create_string(name);
+        let value = ParamValue::create(
+            &mut builder,
+            &ParamValueArgs {
+                name: Some(name),
+                kind: ParamKind::Float,
+                float_value: number,
+                ..Default::default()
+            },
+        );
+        let request =
+            ParamSetRequest::create(&mut builder, &ParamSetRequestArgs { value: Some(value) });
+        builder.finish(request, None);
         builder.finished_data().to_vec()
     }
 
@@ -1086,6 +1290,26 @@ mod tests {
             .to_string();
         assert!(denied.contains("Denied"));
         assert!(denied.contains("detail 7"));
+    }
+
+    #[test]
+    fn parameter_audit_identifies_public_lan_request_and_value() {
+        let payload = parameter_audit_payload(
+            "public_lan",
+            &request("velocity.setpoint", 4.5),
+            None,
+            "rejected",
+            "outside limit",
+            1234,
+        )
+        .unwrap();
+        let audit: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(audit["schema"], "electrode.parameter-audit.v1");
+        assert_eq!(audit["timestampUnixMs"], 1234);
+        assert_eq!(audit["source"], "public_lan");
+        assert_eq!(audit["name"], "velocity.setpoint");
+        assert_eq!(audit["requestedValue"], 4.5);
+        assert_eq!(audit["status"], "rejected");
     }
 
     #[test]

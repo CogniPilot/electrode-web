@@ -7,8 +7,9 @@ use synapse_fbs::cmd::{
     ParamKind, ParamSetRequest, ParamSetRequestArgs, ParamValue, ParamValueArgs,
 };
 
+static NEXT: AtomicU64 = AtomicU64::new(0);
+
 fn policy() -> CommandPolicy {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
     let mut config = PolicyConfig::default();
     let dir = std::env::temp_dir().join(format!(
         "electrode-command-authority-{}-{}",
@@ -168,11 +169,52 @@ fn typed_manual_and_radio_have_exact_mappings_and_ranges() {
 #[test]
 fn gain_is_schema_verified_and_allowlisted() {
     let policy = policy();
-    let command = policy
-        .authorize("gcs/v1/cmd/gain", &parameter("attitude.headingPid.kp", 1.2))
-        .unwrap();
-    assert_eq!(command.delivery, Delivery::Query);
-    assert_eq!(command.target, "cmd/param_set");
+    for (name, minimum, maximum) in [
+        ("velocity.setpoint", 0.0, 5.0),
+        ("route.crossTrackSteeringDistance", 0.0, 50.0),
+        ("route.waypointSwitchingDistance", 0.2, 50.0),
+        (
+            "attitude.rollLimit",
+            0.4363323129985824,
+            std::f64::consts::PI,
+        ),
+        ("attitude.headingPid.kp", 0.2, 5.0),
+        ("attitude.headingPid.ki", 0.0, 10.0),
+        ("attitude.headingPid.kd", 0.0, 3.0),
+    ] {
+        for value in [minimum, maximum] {
+            let command = policy
+                .authorize("gcs/v1/cmd/gain", &parameter(name, value))
+                .unwrap();
+            assert_eq!(command.delivery, Delivery::Query);
+            assert_eq!(command.target, "cmd/param_set");
+        }
+        let below = policy
+            .authorize("gcs/v1/cmd/gain", &parameter(name, minimum - 0.01))
+            .unwrap_err()
+            .to_string();
+        assert!(below.contains("must be within"));
+        let above = policy
+            .authorize("gcs/v1/cmd/gain", &parameter(name, maximum + 0.01))
+            .unwrap_err()
+            .to_string();
+        assert!(above.contains("must be within"));
+        let non_finite = policy
+            .authorize("gcs/v1/cmd/gain", &parameter(name, f64::NAN))
+            .unwrap_err()
+            .to_string();
+        assert!(non_finite.contains("must be finite"));
+    }
+    for rejected in [
+        "route.cruiseSpeed",
+        "attitude.rollRateLimit",
+        "attitude.pitchPid.kp",
+        "tecs.thrustKp",
+    ] {
+        assert!(policy
+            .authorize("gcs/v1/cmd/gain", &parameter(rejected, 1.0))
+            .is_err());
+    }
     assert!(policy
         .authorize(
             "gcs/v1/cmd/gain",
@@ -184,6 +226,37 @@ fn gain_is_schema_verified_and_allowlisted() {
             "gcs/v1/cmd/config",
             &parameter("attitude.headingPid.kp", 1.2),
         )
+        .is_err());
+}
+
+#[test]
+fn deployment_parameter_limits_override_is_loaded_and_invalid_files_fail_closed() {
+    let root = std::env::temp_dir().join(format!(
+        "electrode-command-authority-limits-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let limits_path = root.join("limits.json");
+    let limits = include_str!("../config/public-lan-parameter-limits.json")
+        .replace("\"maximum\": 5.0", "\"maximum\": 3.0");
+    std::fs::write(&limits_path, limits).unwrap();
+    let mut config = PolicyConfig::default();
+    config.velocity_budget_json = root.join("budget.json");
+    config.velocity_budget_csv = root.join("budget.csv");
+    config.parameter_limits_path = Some(limits_path.clone());
+    let policy = CommandPolicy::new(config.clone());
+    assert!(policy
+        .authorize("gcs/v1/cmd/gain", &parameter("velocity.setpoint", 3.0))
+        .is_ok());
+    assert!(policy
+        .authorize("gcs/v1/cmd/gain", &parameter("velocity.setpoint", 3.1))
+        .is_err());
+
+    std::fs::write(&limits_path, "{}").unwrap();
+    let policy = CommandPolicy::new(config);
+    assert!(policy
+        .authorize("gcs/v1/cmd/gain", &parameter("attitude.rollLimit", 0.5))
         .is_err());
 }
 

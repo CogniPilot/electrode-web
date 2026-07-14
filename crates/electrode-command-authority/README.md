@@ -27,6 +27,25 @@ Accepted typed intents:
 - `gcs/v1/cmd/parameters` -> `cmd/param_get` query
 - `gcs/v1/cmd/trajectory` -> `cmd/trajectory_set` query
 
+LAN `gain` requests must be FlatBuffer `ParamSetRequest` values using
+`ParamKind::Float`. Exactly seven public parameters are accepted, with absolute
+limits defined in `config/public-lan-parameter-limits.json`:
+
+- `velocity.setpoint`
+- `route.crossTrackSteeringDistance`
+- `route.waypointSwitchingDistance`
+- `attitude.rollLimit`
+- `attitude.headingPid.{kp,ki,kd}`
+
+All values must be finite. Bounds are inclusive.
+
+Rejected requests are not forwarded to the localhost vehicle session. Their
+reason is published as JSON on `gcs/v1/status/gain`. Trusted Ground Station
+requests on `ws/127.0.0.1:7447` bypass this LAN policy. A deployment may select
+another limits file with `ELECTRODE_GCS_LAN_PARAMETER_LIMITS_PATH`; malformed,
+missing, incomplete, or expanded policies fail closed and deny every public
+parameter write.
+
 `gcs/v1/cmd/raw/<leaf>` preserves the Packet Traffic prototype feature. The
 leaf must be one safe segment and each payload is bounded to 4 KiB. Explicitly
 selected typed leaves are allowed; the bytes are forwarded exactly and are not

@@ -62,6 +62,7 @@ const ctx = self as unknown as DedicatedWorkerGlobalScope;
 const MAX_PLOT_SAMPLES = 240;
 const PLOT_POST_INTERVAL_MS = 250;
 const VIRTUAL_MANUAL_TOPIC = 'gcs/v1/cmd/manual';
+const PARAMETER_AUDIT_TOPIC = 'gcs/v1/audit/parameter';
 const VIRTUAL_MANUAL_PERIOD_MS = 20;
 const MANUAL_AXIS_MASK = 0x03ff;
 const MANUAL_FLAG_ARM = 1;
@@ -88,6 +89,7 @@ let virtualManualEnabled = false;
 let virtualManualTimer: ReturnType<typeof setInterval> | null = null;
 let runtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRuntimeParameters = new Set<string>();
+let parameterAuditSequence = 0;
 let virtualManualInput: VirtualManualInput = {
   roll: 0,
   pitch: 0,
@@ -293,6 +295,40 @@ function refreshRuntimeParameters(names: string[]): void {
 }
 
 function handleRawSample(key: string, payload: Uint8Array): void {
+  if (key === PARAMETER_AUDIT_TOPIC) {
+    try {
+      const audit = JSON.parse(new TextDecoder().decode(payload)) as Record<string, unknown>;
+      const timestampMs = Number(audit.timestampUnixMs ?? Date.now());
+      const timestampNs = timestampMs * 1_000_000;
+      applyFrames([
+        {
+          kind: 'telemetry',
+          topic: PARAMETER_AUDIT_TOPIC,
+          header: {
+            sequence: parameterAuditSequence++,
+            sourceTimeNs: timestampNs,
+            receiveTimeNs: Date.now() * 1_000_000,
+            expireTimeNs: 0,
+            vehicleId,
+            schemaVersion: 1,
+            messageType: 'ParameterAudit',
+            priority: 'normal',
+            streamId: PARAMETER_AUDIT_TOPIC
+          },
+          payload: audit
+        }
+      ]);
+    } catch {
+      state = appendEvent(state, {
+        severity: 'warning',
+        code: 'parameter_audit_decode',
+        message: 'invalid parameter audit record',
+        timestampMs: Date.now()
+      });
+      postState();
+    }
+    return;
+  }
   if (key !== 'gcs/v1/status/reply/parameters') return;
   try {
     const parameter = decodeRuntimeParameterReply(payload);
