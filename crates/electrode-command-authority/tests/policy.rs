@@ -33,17 +33,12 @@ fn default_runtime_uses_distinct_browser_and_vehicle_transports() {
     assert_ne!(config.browser_listen, config.lan_request_listen);
 }
 
-fn velocity(x: f32, y: f32, z: f32) -> Vec<u8> {
-    let mut payload = vec![0_u8; 56];
-    payload[20..24].copy_from_slice(&x.to_le_bytes());
-    payload[24..28].copy_from_slice(&y.to_le_bytes());
-    payload[28..32].copy_from_slice(&z.to_le_bytes());
-    payload[52..54].copy_from_slice(&3527_u16.to_le_bytes());
-    payload
+fn velocity_intent(team: &str, value: f64) -> Vec<u8> {
+    envelope(b"EVC1", team, &parameter("velocity.setpoint", value))
 }
 
-fn velocity_intent(team: &str, x: f32, y: f32, z: f32) -> Vec<u8> {
-    envelope(b"EVC1", team, &velocity(x, y, z))
+fn named_velocity_intent(team: &str, name: &str, kind: ParamKind, value: f64) -> Vec<u8> {
+    envelope(b"EVC1", team, &parameter_with_kind(name, kind, value))
 }
 
 fn velocity_budget_request(team: &str) -> Vec<u8> {
@@ -59,14 +54,6 @@ fn envelope(magic: &[u8; 4], team: &str, body: &[u8]) -> Vec<u8> {
     payload
 }
 
-fn manual(flags: u8) -> Vec<u8> {
-    let mut payload = vec![0_u8; 40];
-    payload[12..14].copy_from_slice(&15_u16.to_le_bytes());
-    payload[18..20].copy_from_slice(&700_i16.to_le_bytes());
-    payload[35] = flags;
-    payload
-}
-
 fn radio(channel: u16) -> Vec<u8> {
     let mut payload = vec![0_u8; 48];
     payload[8] = 5;
@@ -79,13 +66,17 @@ fn radio(channel: u16) -> Vec<u8> {
 }
 
 fn parameter(name: &str, value: f64) -> Vec<u8> {
+    parameter_with_kind(name, ParamKind::Float, value)
+}
+
+fn parameter_with_kind(name: &str, kind: ParamKind, value: f64) -> Vec<u8> {
     let mut builder = FlatBufferBuilder::new();
     let name = builder.create_string(name);
     let parameter = ParamValue::create(
         &mut builder,
         &ParamValueArgs {
             name: Some(name),
-            kind: ParamKind::Float,
+            kind,
             float_value: value,
             ..Default::default()
         },
@@ -101,36 +92,52 @@ fn parameter(name: &str, value: f64) -> Vec<u8> {
 }
 
 #[test]
-fn maps_only_valid_x_velocity_and_enforces_budget() {
+fn budgeted_velocity_is_a_canonical_param_set_query() {
     let policy = policy();
+    let vehicle_payload = parameter("velocity.setpoint", 2.5);
     let command = policy
         .authorize(
             "gcs/v1/cmd/velocity",
-            &velocity_intent("team-alpha", 2.5, 0.0, 0.0),
+            &envelope(b"EVC1", "team-alpha", &vehicle_payload),
         )
         .unwrap();
-    assert_eq!(command.delivery, Delivery::Publish);
-    assert_eq!(command.target, "pos_sp");
+    assert_eq!(command.delivery, Delivery::Query);
+    assert_eq!(command.target, "cmd/param_set");
+    assert_eq!(command.payload, vehicle_payload);
+    assert_eq!(command.status_leaf, "velocity");
+    assert!(command
+        .encoding
+        .as_deref()
+        .is_some_and(|encoding| encoding.contains("synapse.cmd.ParamSetRequest")));
     assert_eq!(command.velocity_remaining, Some(4));
+
     assert!(policy
         .authorize(
             "gcs/v1/cmd/velocity",
-            &velocity_intent("team-alpha", 2.5, 0.1, 0.0)
+            &named_velocity_intent("team-alpha", "route.cruiseSpeed", ParamKind::Float, 2.5,),
         )
         .is_err());
-    for _ in 0..4 {
-        policy
+    assert!(policy
+        .authorize(
+            "gcs/v1/cmd/velocity",
+            &named_velocity_intent("team-alpha", "velocity.setpoint", ParamKind::Int, 2.5,),
+        )
+        .is_err());
+    for invalid in [0.999, 4.001, f64::NAN] {
+        assert!(policy
             .authorize(
                 "gcs/v1/cmd/velocity",
-                &velocity_intent("TEAM-ALPHA", 1.0, 0.0, 0.0),
+                &velocity_intent("team-alpha", invalid),
             )
+            .is_err());
+    }
+    for _ in 0..4 {
+        policy
+            .authorize("gcs/v1/cmd/velocity", &velocity_intent("TEAM-ALPHA", 1.0))
             .unwrap();
     }
     assert!(policy
-        .authorize(
-            "gcs/v1/cmd/velocity",
-            &velocity_intent("team-alpha", 1.0, 0.0, 0.0)
-        )
+        .authorize("gcs/v1/cmd/velocity", &velocity_intent("team-alpha", 1.0))
         .is_err());
     let budget = policy
         .authorize(
@@ -144,16 +151,23 @@ fn maps_only_valid_x_velocity_and_enforces_budget() {
 }
 
 #[test]
-fn typed_manual_and_radio_have_exact_mappings_and_ranges() {
+fn checked_manual_is_denied_but_trusted_manual_is_preserved() {
     let policy = policy();
-    assert_eq!(
-        policy
-            .authorize("gcs/v1/cmd/manual", &manual(12))
-            .unwrap()
-            .target,
-        "manual"
-    );
-    assert!(policy.authorize("gcs/v1/cmd/manual", &manual(0)).is_err());
+    let payload = (0_u8..40).collect::<Vec<_>>();
+    assert!(policy.authorize("gcs/v1/cmd/manual", &payload).is_err());
+    let trusted = policy
+        .authorize_trusted("gcs/v1/cmd/manual", &payload)
+        .unwrap();
+    assert_eq!(trusted.target, "manual");
+    assert_eq!(trusted.payload, payload);
+    assert!(policy
+        .authorize_trusted("gcs/v1/cmd/velocity", &parameter("velocity.setpoint", 2.0))
+        .is_err());
+}
+
+#[test]
+fn typed_radio_has_exact_mapping_and_ranges() {
+    let policy = policy();
     assert_eq!(
         policy
             .authorize("gcs/v1/cmd/radio", &radio(1500))
@@ -168,17 +182,46 @@ fn typed_manual_and_radio_have_exact_mappings_and_ranges() {
 #[test]
 fn gain_is_schema_verified_and_allowlisted() {
     let policy = policy();
-    let command = policy
-        .authorize("gcs/v1/cmd/gain", &parameter("attitude.headingPid.kp", 1.2))
-        .unwrap();
-    assert_eq!(command.delivery, Delivery::Query);
-    assert_eq!(command.target, "cmd/param_set");
+    for (name, min, max) in [
+        ("route.crossTrackSteeringDistance", 0.25, 50.0),
+        ("route.waypointSwitchingDistance", 0.1, 50.0),
+        ("attitude.rollLimit", 0.05, 1.2),
+        ("attitude.headingPid.kp", 0.0, 10.0),
+        ("attitude.headingPid.ki", 0.0, 10.0),
+        ("attitude.headingPid.kd", 0.0, 10.0),
+    ] {
+        for value in [min, max] {
+            let command = policy
+                .authorize("gcs/v1/cmd/gain", &parameter(name, value))
+                .unwrap();
+            assert_eq!(command.delivery, Delivery::Query);
+            assert_eq!(command.target, "cmd/param_set");
+        }
+        assert!(policy
+            .authorize("gcs/v1/cmd/gain", &parameter(name, min - 0.001))
+            .is_err());
+        assert!(policy
+            .authorize("gcs/v1/cmd/gain", &parameter(name, max + 0.001))
+            .is_err());
+    }
     assert!(policy
         .authorize(
             "gcs/v1/cmd/gain",
             &parameter("attitude.headingPid.trim", 1.0),
         )
         .is_err());
+    assert!(policy
+        .authorize("gcs/v1/cmd/gain", &parameter("attitude.rollRateLimit", 1.0),)
+        .is_err());
+    for name in [
+        "velocity.setpoint",
+        "guidance.cruiseSpeed",
+        "route.cruiseSpeed",
+    ] {
+        assert!(policy
+            .authorize("gcs/v1/cmd/gain", &parameter(name, 2.0))
+            .is_err());
+    }
     assert!(policy
         .authorize(
             "gcs/v1/cmd/config",
@@ -200,7 +243,7 @@ fn trusted_local_parameters_bypass_lan_value_policy() {
 }
 
 #[test]
-fn raw_path_is_one_bounded_leaf_and_preserves_selected_topics() {
+fn raw_path_denies_checked_control_topics_but_preserves_trusted_bytes() {
     let policy = policy();
     assert_eq!(
         policy
@@ -210,11 +253,27 @@ fn raw_path_is_one_bounded_leaf_and_preserves_selected_topics() {
         "text_status"
     );
     let payload = (0_u8..40).collect::<Vec<_>>();
-    let command = policy
+    assert!(policy
         .authorize("gcs/v1/cmd/raw/manual_control_command", &payload)
+        .is_err());
+    assert!(policy.authorize("gcs/v1/cmd/raw/manual", &payload).is_err());
+    let trusted = policy
+        .authorize_trusted("gcs/v1/cmd/raw/manual_control_command", &payload)
         .unwrap();
-    assert_eq!(command.target, "manual_control_command");
-    assert_eq!(command.payload, payload);
+    assert_eq!(trusted.target, "manual_control_command");
+    assert_eq!(trusted.payload, payload);
+
+    for leaf in ["pos_sp", "local_position_command"] {
+        assert!(policy
+            .authorize(&format!("gcs/v1/cmd/raw/{leaf}"), &[1, 2, 3, 4])
+            .is_err());
+    }
+    let command = policy
+        .authorize_trusted("gcs/v1/cmd/raw/pos_sp", &[1, 2, 3, 4])
+        .unwrap();
+    assert_eq!(command.target, "pos_sp");
+    assert_eq!(command.payload, vec![1, 2, 3, 4]);
+    assert_eq!(command.velocity_remaining, None);
     assert!(policy
         .authorize("gcs/v1/cmd/raw/nested/channel", &[0; 16])
         .is_err());

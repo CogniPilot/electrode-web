@@ -13,25 +13,31 @@ policy. LAN command requests use `CommandPolicy`. LAN telemetry is allowlisted
 and validated before it is copied into the trusted browser or vehicle domains.
 
 The checked LAN protocol accepts team-scoped velocity (`EVC1`) and budget-query
-(`EVB1`) envelopes from the standalone website. Each normalized team name has
-five persistent velocity attempts. CSV is authoritative, JSON is an inspection
-mirror, and status is returned on `gcs/v1/status/velocity`. This quota is not an
-authentication mechanism; team names are self-asserted.
+(`EVB1`) envelopes from the standalone website. An `EVC1` body must be a
+`ParamSetRequest` for exactly the floating-point parameter
+`velocity.setpoint`, within 1-4 m/s. The envelope is removed and the canonical
+request is sent as a `cmd/param_set` query. Each normalized team name has five
+persistent velocity attempts. CSV is authoritative, JSON is an inspection
+mirror, and query success or failure is returned with budget metadata on
+`gcs/v1/status/velocity`. This quota is not an authentication mechanism; team
+names are self-asserted.
 
 Accepted typed intents:
 
-- `gcs/v1/cmd/velocity` -> `pos_sp`
-- `gcs/v1/cmd/manual` -> `manual`
+- `gcs/v1/cmd/velocity` -> `cmd/param_set` query for `velocity.setpoint`
 - `gcs/v1/cmd/radio` -> `rc`
-- `gcs/v1/cmd/gain` -> `cmd/param_set` query
+- `gcs/v1/cmd/gain` -> allowlisted `cmd/param_set` query (velocity aliases are excluded)
 - `gcs/v1/cmd/parameters` -> `cmd/param_get` query
 - `gcs/v1/cmd/trajectory` -> `cmd/trajectory_set` query
 
 `gcs/v1/cmd/raw/<leaf>` preserves the Packet Traffic prototype feature. The
 leaf must be one safe segment and each payload is bounded to 4 KiB. Explicitly
 selected typed leaves are allowed; the bytes are forwarded exactly and are not
-claimed to be a schema-verified FlatBuffer. Repeat and interval are controlled
-by the website.
+claimed to be a schema-verified FlatBuffer. Checked raw targets `manual` and
+`manual_control_command`, `pos_sp`, and `local_position_command` are denied.
+Repeat and interval are controlled by the website. Native Electrode controls
+and trusted localhost raw forwarding remain available and are not part of the
+checked LAN protocol.
 
 Vehicle telemetry is relayed one way to the trusted local browser. LAN
 `MocapFrame`, rigid-body names, and external-odometry streams are validated and
@@ -45,13 +51,17 @@ The browser's staged namespace is
 query keys are `cmd/firmware_{info,status,prepare,chunk,commit,abort}`.
 The request and reply payloads use the generated firmware bindings exported by
 `synapse_fbs` 0.5.1. This crate assembles and hashes the browser upload,
-compares it with a trusted baseline,
-allows differences only inside configured gain windows, and only then performs
-the vehicle query transfer with chunk retries. Progress is published on
-`gcs/v1/status/firmware/<update-id>`.
+compares it with an explicitly configured trusted baseline, allows
+substitutions only inside configured autopilot-parameter regions, and only then
+performs the vehicle query transfer with retries. Added, removed, or changed
+bytes outside those regions are rejected. Progress is published on
+`gcs/v1/status/firmware/<update-id>` using participant-safe messages; detailed
+validation and transport reasons stay in organizer logs.
 
 Set `ELECTRODE_GCS_FIRMWARE_BASELINE` to the trusted binary and
-`ELECTRODE_GCS_GAIN_WINDOWS_PATH` to the gain-window JSON. The CUBS2 prototype
-artifact paths are detected when present. First-upload baseline bootstrapping
-is disabled unless `ELECTRODE_GCS_FIRMWARE_AUTOBOOTSTRAP=true` is explicitly
-set.
+`ELECTRODE_GCS_PARAMETER_MANIFEST_PATH` to the parameter-region JSON generated for
+that exact build. There are no artifact or byte-offset fallbacks. With a
+baseline but no regions, only an identical image can pass. First-upload
+baseline bootstrapping is disabled unless
+`ELECTRODE_GCS_FIRMWARE_AUTOBOOTSTRAP=true` is explicitly set for a transport
+test.

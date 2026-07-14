@@ -3,21 +3,12 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use zenoh::{Session, Wait};
 
-use crate::firmware::{self, GainWindow, Origin, TransferConfig};
-
-const DEFAULT_BASELINE_PATH: &str = "artifacts/cubs2-firmware/baseline-cubs2-mr-vmu-tropic.bin";
-const DEFAULT_GAIN_WINDOWS_PATH: &str = "artifacts/cubs2-firmware/gain-windows-cubs2.json";
-const DEFAULT_GAIN_WINDOWS: &[GainWindow] = &[GainWindow {
-    origin: Origin::Start,
-    offset: 18_480,
-    length: 8,
-}];
+use crate::firmware::{self, ParameterPolicy, TransferConfig};
 const MAX_PENDING_UPLOADS: usize = 4;
 const MAX_PREPARE_PAYLOAD: usize = 4 * 1024;
 const MAX_COMMIT_PAYLOAD: usize = 2 * 1024;
@@ -25,8 +16,7 @@ const MAX_CHUNK_OVERHEAD: usize = 4 * 1024;
 
 pub(crate) struct FirmwareGate {
     baseline: Mutex<Option<Vec<u8>>>,
-    windows: Vec<GainWindow>,
-    auto_bootstrap: bool,
+    policy: Option<ParameterPolicy>,
     uploads: Mutex<HashMap<String, FirmwareUpload>>,
     max_image_size: usize,
     transfer: TransferConfig,
@@ -43,14 +33,25 @@ struct FirmwareUpload {
 
 impl FirmwareGate {
     pub(crate) fn from_env(key_prefix: String, query_timeout: Duration) -> Self {
+        let transfer = TransferConfig {
+            key_prefix,
+            target: env::var("ELECTRODE_GCS_FIRMWARE_TARGET")
+                .unwrap_or_else(|_| "cubs2".to_string()),
+            board_id: env::var("ELECTRODE_GCS_FIRMWARE_BOARD_ID")
+                .unwrap_or_else(|_| "mr_vmu_tropic".to_string()),
+            chunk_size: env_usize("ELECTRODE_GCS_FIRMWARE_CHUNK_SIZE", 512, 128, 4096),
+            retries: env_u32("ELECTRODE_GCS_FIRMWARE_RETRIES", 3).clamp(1, 10),
+            timeout: Duration::from_millis(
+                env_u64(
+                    "ELECTRODE_GCS_FIRMWARE_TIMEOUT_MS",
+                    query_timeout.as_millis() as u64,
+                )
+                .clamp(100, 60_000),
+            ),
+        };
         let baseline_path = env::var("ELECTRODE_GCS_FIRMWARE_BASELINE")
             .ok()
-            .filter(|path| !path.trim().is_empty())
-            .or_else(|| {
-                Path::new(DEFAULT_BASELINE_PATH)
-                    .exists()
-                    .then(|| DEFAULT_BASELINE_PATH.to_string())
-            });
+            .filter(|path| !path.trim().is_empty());
         let baseline = baseline_path.and_then(|path| match fs::read(&path) {
             Ok(bytes) => {
                 tracing::info!(%path, size = bytes.len(), "firmware baseline loaded");
@@ -61,23 +62,46 @@ impl FirmwareGate {
                 None
             }
         });
-        let windows = env::var("ELECTRODE_GCS_GAIN_WINDOWS_JSON")
+        let manifest_json = env::var("ELECTRODE_GCS_PARAMETER_MANIFEST_JSON")
             .ok()
             .or_else(|| {
-                env::var("ELECTRODE_GCS_GAIN_WINDOWS_PATH")
+                env::var("ELECTRODE_GCS_PARAMETER_MANIFEST_PATH")
                     .ok()
                     .and_then(|path| fs::read_to_string(path).ok())
-            })
-            .or_else(|| fs::read_to_string(DEFAULT_GAIN_WINDOWS_PATH).ok())
-            .map(|json| firmware::parse_gain_windows(&json))
-            .filter(|windows| !windows.is_empty())
-            .unwrap_or_else(|| DEFAULT_GAIN_WINDOWS.to_vec());
-        let auto_bootstrap = baseline.is_none() && env_bool("ELECTRODE_GCS_FIRMWARE_AUTOBOOTSTRAP");
+            });
+        let policy = baseline.as_deref().and_then(|baseline| {
+            let json = manifest_json.as_deref()?;
+            match firmware::parse_parameter_policy(
+                json,
+                baseline,
+                &transfer.target,
+                &transfer.board_id,
+            ) {
+                Ok(policy) => {
+                    tracing::info!(
+                        target = %policy.target,
+                        board_id = %policy.board_id,
+                        baseline_sha256 = %policy.baseline_sha256,
+                        parameter_count = policy.regions.len(),
+                        "firmware autopilot parameter policy loaded"
+                    );
+                    Some(policy)
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "firmware autopilot parameter manifest rejected");
+                    None
+                }
+            }
+        });
+        if baseline.is_some() && policy.is_none() {
+            tracing::warn!(
+                "firmware parameter policy is not configured; firmware updates will be rejected"
+            );
+        }
 
         Self {
             baseline: Mutex::new(baseline),
-            windows,
-            auto_bootstrap,
+            policy,
             uploads: Mutex::new(HashMap::new()),
             max_image_size: env_usize(
                 "ELECTRODE_GCS_FIRMWARE_MAX_IMAGE_SIZE",
@@ -85,21 +109,7 @@ impl FirmwareGate {
                 1,
                 64 * 1024 * 1024,
             ),
-            transfer: TransferConfig {
-                key_prefix,
-                target: env::var("ELECTRODE_GCS_FIRMWARE_TARGET")
-                    .unwrap_or_else(|_| "cubs2".to_string()),
-                board_id: env::var("ELECTRODE_GCS_FIRMWARE_BOARD_ID").unwrap_or_default(),
-                chunk_size: env_usize("ELECTRODE_GCS_FIRMWARE_CHUNK_SIZE", 512, 128, 4096),
-                retries: env_u32("ELECTRODE_GCS_FIRMWARE_RETRIES", 3).clamp(1, 10),
-                timeout: Duration::from_millis(
-                    env_u64(
-                        "ELECTRODE_GCS_FIRMWARE_TIMEOUT_MS",
-                        query_timeout.as_millis() as u64,
-                    )
-                    .clamp(100, 60_000),
-                ),
-            },
+            transfer,
         }
     }
 
@@ -427,27 +437,11 @@ impl FirmwareGate {
             "Validating candidate against the trusted baseline.",
             None,
         );
-        let baseline = {
-            let mut baseline = self
-                .baseline
-                .lock()
-                .expect("firmware baseline lock poisoned");
-            if baseline.is_none() && self.auto_bootstrap {
-                *baseline = Some(image.to_vec());
-                publish_status(
-                    browser,
-                    intent_prefix,
-                    update_id,
-                    "complete",
-                    "baseline",
-                    100,
-                    "Firmware image stored as the local baseline; no update was transferred.",
-                    None,
-                );
-                return;
-            }
-            baseline.clone()
-        };
+        let baseline = self
+            .baseline
+            .lock()
+            .expect("firmware baseline lock poisoned")
+            .clone();
         let Some(baseline) = baseline else {
             self.reject_validation(
                 browser,
@@ -457,10 +451,20 @@ impl FirmwareGate {
             );
             return;
         };
-        let validation = firmware::validate_gain_only_change(image, &baseline, &self.windows);
+        let Some(policy) = self.policy.as_ref() else {
+            self.reject_validation(
+                browser,
+                intent_prefix,
+                update_id,
+                "No trusted firmware parameter policy is configured.",
+            );
+            return;
+        };
+        let validation =
+            firmware::validate_parameter_only_change(image, &baseline, &policy.regions);
         if !validation.allowed {
             let first_outside = validation
-                .outside_gain_diffs
+                .outside_parameter_diffs
                 .first()
                 .map(|diff| diff.offset);
             tracing::warn!(
@@ -468,7 +472,8 @@ impl FirmwareGate {
                 candidate_size = validation.candidate_size,
                 baseline_size = validation.baseline_size,
                 differing = validation.differing_byte_count,
-                gain_differing = validation.gain_differing_byte_count,
+                parameter_differing = validation.parameter_differing_byte_count,
+                invalid_parameters = ?validation.invalid_parameters,
                 ?first_outside,
                 reason = %validation.reason,
                 "firmware candidate rejected"
@@ -498,7 +503,8 @@ impl FirmwareGate {
             update_id,
             version,
             image,
-            &self.windows,
+            &policy.regions,
+            &policy.manifest_json,
             progress,
         ) {
             tracing::error!(%update_id, %error, "firmware update failed");
@@ -541,12 +547,23 @@ fn publish_status(
         "{}/status/firmware/{update_id}",
         intent_prefix.strip_suffix("/cmd").unwrap_or(intent_prefix)
     );
+    let public_message = participant_firmware_message(status, phase);
+    let public_phase = participant_firmware_phase(status, phase);
+    tracing::debug!(
+        %update_id,
+        %status,
+        %phase,
+        internal_message = %message,
+        public_phase,
+        public_message,
+        "firmware status"
+    );
     let mut value = serde_json::json!({
         "updateId": update_id,
         "status": status,
-        "phase": phase,
+        "phase": public_phase,
         "progressPct": progress_pct,
-        "message": message,
+        "message": public_message,
     });
     if let Some((received, total, chunk_index)) = upload {
         value["receivedBytes"] = received.into();
@@ -555,6 +572,35 @@ fn publish_status(
     }
     if let Err(error) = browser.put(&key, value.to_string()).wait() {
         tracing::warn!(%key, %error, "firmware status publish failed");
+    }
+}
+
+fn participant_firmware_phase(status: &str, phase: &str) -> &'static str {
+    if phase == "upload" {
+        "upload"
+    } else if matches!(
+        status,
+        "complete" | "failed" | "error" | "rejected" | "cancelled"
+    ) {
+        "complete"
+    } else {
+        "update"
+    }
+}
+
+fn participant_firmware_message(status: &str, phase: &str) -> &'static str {
+    match (status, phase) {
+        ("rejected", "upload") => "Firmware upload could not be accepted.",
+        ("rejected", "validate") => "Firmware update rejected.",
+        ("failed" | "error", _) => "Firmware update could not be completed. Contact an organizer.",
+        ("complete", "baseline") => "Firmware upload received.",
+        ("complete", _) => "Firmware update accepted.",
+        (_, "upload") => "Firmware upload is in progress.",
+        (_, "validate") => "Firmware upload is being checked.",
+        (_, "connect" | "prepare") => "Preparing firmware update.",
+        (_, "chunk") => "Firmware update is in progress.",
+        (_, "commit") => "Finalizing firmware update.",
+        _ => "Firmware update is in progress.",
     }
 }
 
@@ -611,12 +657,6 @@ fn sanitized_version(value: &str) -> String {
     }
 }
 
-fn env_bool(key: &str) -> bool {
-    env::var(key)
-        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
-
 fn env_u32(key: &str, default: u32) -> u32 {
     env::var(key)
         .ok()
@@ -660,5 +700,46 @@ mod tests {
         );
         assert_eq!(sanitized_version(""), "browser-upload.bin");
         assert_eq!(sanitized_version(&"a".repeat(200)).len(), 128);
+    }
+
+    #[test]
+    fn participant_firmware_messages_do_not_disclose_policy_or_transport_details() {
+        let cases = [
+            ("rejected", "upload"),
+            ("rejected", "validate"),
+            ("failed", "error"),
+            ("complete", "baseline"),
+            ("complete", "complete"),
+            ("in_progress", "upload"),
+            ("validating", "validate"),
+            ("in_progress", "connect"),
+            ("in_progress", "prepare"),
+            ("in_progress", "chunk"),
+            ("in_progress", "commit"),
+        ];
+        let forbidden = [
+            "baseline",
+            "gain",
+            "window",
+            "sha",
+            "chunk",
+            "cmd/",
+            "channel",
+            "flatbuffer",
+        ];
+
+        for (status, phase) in cases {
+            let message = participant_firmware_message(status, phase).to_ascii_lowercase();
+            for secret in forbidden {
+                assert!(
+                    !message.contains(secret),
+                    "participant message {message:?} exposes {secret:?}"
+                );
+            }
+            assert!(matches!(
+                participant_firmware_phase(status, phase),
+                "upload" | "update" | "complete"
+            ));
+        }
     }
 }

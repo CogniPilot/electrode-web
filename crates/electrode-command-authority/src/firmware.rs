@@ -1,14 +1,15 @@
-//! Firmware gain-window checksum validation — the GCS's second security gate.
+//! Firmware parameter-region validation — the GCS's second security gate.
 //!
 //! A candidate firmware image is accepted only if it is byte-identical to a trusted baseline
-//! *except* inside authorized "gain windows" (small regions where tuning gains
-//! live). Anything else — a size change or a single byte flipped outside a
-//! window — is rejected, so the upload surface can only re-tune gains, not
-//! replace firmware.
+//! *except* for substitutions inside explicitly authorized regions containing
+//! autopilot parameters. Added, removed, or changed bytes elsewhere are
+//! outside that parameter-only change set and are rejected.
 
 use anyhow::{anyhow, bail, Context, Result};
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::time::Duration;
 use synapse_fbs::cmd::{
     FirmwareChunkReply, FirmwareChunkRequest, FirmwareChunkRequestArgs, FirmwareCommitReply,
@@ -20,17 +21,32 @@ use synapse_fbs::cmd::{
 use synapse_fbs::types::CommandResultCode;
 use zenoh::{Session, Wait};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Origin {
-    Start,
-    End,
-}
+const PARAMETER_MANIFEST_SCHEMA: &str = "electrode.autopilot-parameter-policy.v1";
+const PARAMETER_LIMITS: [(&str, f64, f64); 6] = [
+    ("route.crossTrackSteeringDistance", 0.25, 50.0),
+    ("route.waypointSwitchingDistance", 0.1, 50.0),
+    ("attitude.rollLimit", 0.05, 1.2),
+    ("attitude.headingPid.kp", 0.0, 10.0),
+    ("attitude.headingPid.ki", 0.0, 10.0),
+    ("attitude.headingPid.kd", 0.0, 10.0),
+];
 
-#[derive(Clone, Copy, Debug)]
-pub struct GainWindow {
-    pub origin: Origin,
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParameterRegion {
+    pub name: String,
     pub offset: usize,
     pub length: usize,
+    pub minimum: f64,
+    pub maximum: f64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ParameterPolicy {
+    pub baseline_sha256: String,
+    pub target: String,
+    pub board_id: String,
+    pub regions: Vec<ParameterRegion>,
+    pub manifest_json: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,23 +55,24 @@ pub struct Range {
     pub end: usize,
 }
 
-/// A byte that differs outside every authorized gain window.
+/// A byte that differs outside every authorized autopilot-parameter region.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutsideDiff {
     pub offset: usize,
-    pub baseline: u8,
-    pub candidate: u8,
+    pub baseline: Option<u8>,
+    pub candidate: Option<u8>,
 }
 
 #[derive(Clone, Debug)]
-pub struct GainValidation {
+pub struct ParameterValidation {
     pub allowed: bool,
     pub reason: String,
     pub baseline_size: usize,
     pub candidate_size: usize,
     pub differing_byte_count: usize,
-    pub gain_differing_byte_count: usize,
-    pub outside_gain_diffs: Vec<OutsideDiff>,
+    pub parameter_differing_byte_count: usize,
+    pub outside_parameter_diffs: Vec<OutsideDiff>,
+    pub invalid_parameters: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -126,6 +143,7 @@ fn build_prepare_request(
     image_size: usize,
     image_sha256: &str,
     selective_sha256: &str,
+    trusted_manifest: &str,
     chunk_size: usize,
     chunk_count: usize,
 ) -> Vec<u8> {
@@ -136,7 +154,7 @@ fn build_prepare_request(
     let version = builder.create_string(version);
     let image_sha256 = builder.create_string(image_sha256);
     let selective_sha256 = builder.create_string(selective_sha256);
-    let manifest = builder.create_string("{}");
+    let manifest = builder.create_string(trusted_manifest);
     let table = FirmwarePrepareRequest::create(
         &mut builder,
         &FirmwarePrepareRequestArgs {
@@ -297,7 +315,8 @@ pub fn transfer_firmware<F>(
     update_id: &str,
     version: &str,
     image: &[u8],
-    windows: &[GainWindow],
+    regions: &[ParameterRegion],
+    trusted_manifest: &str,
     progress: F,
 ) -> Result<TransferResult>
 where
@@ -322,7 +341,7 @@ where
     .max(128);
 
     let image_sha256 = full_sha256(image);
-    let selective_sha256 = selective_sha256(image, windows);
+    let selective_sha256 = selective_sha256(image, regions);
     let chunk_count = image.len().div_ceil(chunk_size).max(1);
     let prepare = query_payload(
         session,
@@ -335,6 +354,7 @@ where
             image.len(),
             &image_sha256,
             &selective_sha256,
+            trusted_manifest,
             chunk_size,
             chunk_count,
         ),
@@ -432,104 +452,214 @@ fn build_chunk_request_with_hash(
     finish_table(&mut builder, table)
 }
 
-/// Resolve gain windows to merged, sorted, clamped byte ranges — matches
-/// `resolveGainWindows` (including adjacent-range merging).
-pub fn resolve_gain_windows(length: usize, windows: &[GainWindow]) -> Vec<Range> {
-    let mut ranges: Vec<Range> = windows
-        .iter()
-        .filter_map(|w| {
-            if w.length == 0 {
-                return None;
-            }
-            // origin "end" counts back from the tail; negative clamps to 0.
-            let start = match w.origin {
-                Origin::End => length.saturating_sub(w.offset),
-                Origin::Start => w.offset,
-            };
-            let end = (start + w.length).min(length);
-            if start >= length || end <= start {
-                return None;
-            }
-            Some(Range { start, end })
-        })
-        .collect();
-
-    ranges.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
-
-    let mut merged: Vec<Range> = Vec::new();
-    for range in ranges {
-        match merged.last_mut() {
-            // New window only when it starts strictly past the last one's end;
-            // touching (start == end) ranges merge, as in the JS.
-            Some(last) if range.start <= last.end => {
-                if range.end > last.end {
-                    last.end = range.end;
-                }
-            }
-            _ => merged.push(range),
-        }
-    }
-    merged
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ParameterManifestFile {
+    schema: String,
+    target: String,
+    board_id: String,
+    baseline_sha256: String,
+    parameters: Vec<ParameterManifestRegion>,
 }
 
-/// Validate that a candidate differs from the baseline only inside gain windows.
-pub fn validate_gain_only_change(
-    candidate: &[u8],
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParameterManifestRegion {
+    name: String,
+    offset: u64,
+    encoding: String,
+    minimum: f64,
+    maximum: f64,
+}
+
+fn parameter_limits(name: &str) -> Option<(f64, f64)> {
+    PARAMETER_LIMITS
+        .iter()
+        .find(|(candidate, _, _)| *candidate == name)
+        .map(|(_, minimum, maximum)| (*minimum, *maximum))
+}
+
+/// Parse an organizer-owned manifest and bind its declared parameter offsets
+/// to one exact baseline image. A manifest may authorize a non-empty subset of
+/// the six known parameters when the compiled image does not materialize every
+/// parameter as an independently writable value.
+pub fn parse_parameter_policy(
+    json: &str,
     baseline: &[u8],
-    windows: &[GainWindow],
-) -> GainValidation {
-    if candidate.len() != baseline.len() {
-        return GainValidation {
-            allowed: false,
-            reason: format!(
-                "File size changed from {} to {} bytes.",
-                baseline.len(),
-                candidate.len()
-            ),
-            baseline_size: baseline.len(),
-            candidate_size: candidate.len(),
-            differing_byte_count: 0,
-            gain_differing_byte_count: 0,
-            outside_gain_diffs: Vec::new(),
-        };
+    expected_target: &str,
+    expected_board_id: &str,
+) -> Result<ParameterPolicy> {
+    let raw: ParameterManifestFile =
+        serde_json::from_str(json).context("parse autopilot parameter manifest")?;
+    if raw.schema != PARAMETER_MANIFEST_SCHEMA {
+        bail!("unsupported autopilot parameter manifest schema");
+    }
+    if raw.target != expected_target {
+        bail!("autopilot parameter manifest target mismatch");
+    }
+    if !expected_board_id.is_empty() && raw.board_id != expected_board_id {
+        bail!("autopilot parameter manifest board mismatch");
+    }
+    if raw.baseline_sha256.len() != 64
+        || !raw
+            .baseline_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || raw.baseline_sha256 != full_sha256(baseline)
+    {
+        bail!("autopilot parameter manifest baseline hash mismatch");
+    }
+    if raw.parameters.is_empty() || raw.parameters.len() > PARAMETER_LIMITS.len() {
+        bail!("autopilot parameter manifest must contain one to six parameters");
     }
 
-    let ranges = resolve_gain_windows(baseline.len(), windows);
+    let mut names = HashSet::new();
+    let mut regions = Vec::with_capacity(raw.parameters.len());
+    for parameter in raw.parameters {
+        let Some((minimum, maximum)) = parameter_limits(&parameter.name) else {
+            bail!("unknown autopilot parameter {}", parameter.name);
+        };
+        if !names.insert(parameter.name.clone()) {
+            bail!("duplicate autopilot parameter {}", parameter.name);
+        }
+        if parameter.encoding != "float64-le"
+            || parameter.minimum != minimum
+            || parameter.maximum != maximum
+        {
+            bail!(
+                "autopilot parameter metadata mismatch for {}",
+                parameter.name
+            );
+        }
+        let offset = usize::try_from(parameter.offset)
+            .context("autopilot parameter offset does not fit this host")?;
+        let end = offset
+            .checked_add(8)
+            .context("autopilot parameter offset overflow")?;
+        if end > baseline.len() {
+            bail!("autopilot parameter offset is outside the baseline");
+        }
+        let bytes: [u8; 8] = baseline[offset..end]
+            .try_into()
+            .expect("validated eight-byte parameter region");
+        let value = f64::from_le_bytes(bytes);
+        if !value.is_finite() || value < minimum || value > maximum {
+            bail!("baseline autopilot parameter value is invalid");
+        }
+        regions.push(ParameterRegion {
+            name: parameter.name,
+            offset,
+            length: 8,
+            minimum,
+            maximum,
+        });
+    }
+    regions.sort_by_key(|region| region.offset);
+    if regions
+        .windows(2)
+        .any(|pair| pair[0].offset + pair[0].length > pair[1].offset)
+    {
+        bail!("autopilot parameter regions overlap");
+    }
+
+    let manifest_json = serde_json::to_string(
+        &serde_json::from_str::<serde_json::Value>(json)
+            .context("canonicalize autopilot parameter manifest")?,
+    )?;
+    Ok(ParameterPolicy {
+        baseline_sha256: raw.baseline_sha256,
+        target: raw.target,
+        board_id: raw.board_id,
+        regions,
+        manifest_json,
+    })
+}
+
+pub fn resolve_parameter_regions(length: usize, regions: &[ParameterRegion]) -> Vec<Range> {
+    let mut ranges: Vec<Range> = regions
+        .iter()
+        .filter_map(|region| {
+            let end = region.offset.checked_add(region.length)?;
+            (region.length > 0 && end <= length).then_some(Range {
+                start: region.offset,
+                end,
+            })
+        })
+        .collect();
+    ranges.sort_by_key(|range| range.start);
+    ranges
+}
+
+/// Accept the complete candidate only when every changed byte is a
+/// substitution in one of the configured parameter fields and every decoded
+/// value is finite and within the compiled policy range.
+pub fn validate_parameter_only_change(
+    candidate: &[u8],
+    baseline: &[u8],
+    regions: &[ParameterRegion],
+) -> ParameterValidation {
+    let ranges = resolve_parameter_regions(baseline.len(), regions);
     let inside = |index: usize| ranges.iter().any(|r| index >= r.start && index < r.end);
 
     let mut differing_byte_count = 0;
-    let mut gain_differing_byte_count = 0;
-    let mut outside_gain_diffs: Vec<OutsideDiff> = Vec::new();
+    let mut parameter_differing_byte_count = 0;
+    let mut outside_parameter_diffs: Vec<OutsideDiff> = Vec::new();
 
-    for index in 0..baseline.len() {
-        if baseline[index] == candidate[index] {
+    for index in 0..baseline.len().max(candidate.len()) {
+        let baseline_byte = baseline.get(index).copied();
+        let candidate_byte = candidate.get(index).copied();
+        if baseline_byte == candidate_byte {
             continue;
         }
         differing_byte_count += 1;
-        if inside(index) {
-            gain_differing_byte_count += 1;
-        } else if outside_gain_diffs.len() < 16 {
-            outside_gain_diffs.push(OutsideDiff {
+        if baseline_byte.is_some() && candidate_byte.is_some() && inside(index) {
+            parameter_differing_byte_count += 1;
+        } else if outside_parameter_diffs.len() < 16 {
+            outside_parameter_diffs.push(OutsideDiff {
                 offset: index,
-                baseline: baseline[index],
-                candidate: candidate[index],
+                baseline: baseline_byte,
+                candidate: candidate_byte,
             });
         }
     }
 
-    let allowed = outside_gain_diffs.is_empty();
-    GainValidation {
+    let mut invalid_parameters = Vec::new();
+    for region in regions {
+        let Some(end) = region.offset.checked_add(8) else {
+            invalid_parameters.push(region.name.clone());
+            continue;
+        };
+        let Some(bytes) = candidate.get(region.offset..end) else {
+            invalid_parameters.push(region.name.clone());
+            continue;
+        };
+        let value = f64::from_le_bytes(
+            bytes
+                .try_into()
+                .expect("validated eight-byte candidate parameter region"),
+        );
+        if !value.is_finite() || value < region.minimum || value > region.maximum {
+            invalid_parameters.push(region.name.clone());
+        }
+    }
+
+    let allowed = outside_parameter_diffs.is_empty() && invalid_parameters.is_empty();
+    let reason = if allowed {
+        "Only authorized autopilot parameter values changed."
+    } else if !outside_parameter_diffs.is_empty() {
+        "Binary changes are not limited to authorized autopilot parameters."
+    } else {
+        "One or more autopilot parameter values are invalid."
+    };
+    ParameterValidation {
         allowed,
-        reason: if allowed {
-            "Only authorized gain-window bytes changed.".to_string()
-        } else {
-            "Binary changes include bytes outside the authorized gain windows.".to_string()
-        },
+        reason: reason.to_string(),
         baseline_size: baseline.len(),
         candidate_size: candidate.len(),
         differing_byte_count,
-        gain_differing_byte_count,
-        outside_gain_diffs,
+        parameter_differing_byte_count,
+        outside_parameter_diffs,
+        invalid_parameters,
     }
 }
 
@@ -541,10 +671,10 @@ pub fn full_sha256(buffer: &[u8]) -> String {
     hex(Sha256::digest(buffer))
 }
 
-/// SHA-256 over the buffer with gain-window bytes excised — stable regardless of
-/// what a legal gain change writes. Matches `buildBinaryMetadata.selectiveSha256`.
-pub fn selective_sha256(buffer: &[u8], windows: &[GainWindow]) -> String {
-    let ranges = resolve_gain_windows(buffer.len(), windows);
+/// SHA-256 over the buffer with parameter-region bytes excised — stable
+/// regardless of what a legal parameter change writes.
+pub fn selective_sha256(buffer: &[u8], regions: &[ParameterRegion]) -> String {
+    let ranges = resolve_parameter_regions(buffer.len(), regions);
     let mut hasher = Sha256::new();
     let mut cursor = 0;
     for range in &ranges {
@@ -559,99 +689,180 @@ pub fn selective_sha256(buffer: &[u8], windows: &[GainWindow]) -> String {
     hex(hasher.finalize())
 }
 
-/// Parse gain windows from JSON (`[{origin,offset,length}, ...]`), the same shape
-/// the Node config and artifacts use.
-pub fn parse_gain_windows(json: &str) -> Vec<GainWindow> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Vec::new();
-    };
-    let items = value
-        .get("gainWindows")
-        .and_then(|v| v.as_array())
-        .or_else(|| value.as_array());
-    let Some(items) = items else {
-        return Vec::new();
-    };
-    items
-        .iter()
-        .filter_map(|item| {
-            let length = item.get("length").and_then(|v| v.as_u64())? as usize;
-            if length == 0 {
-                return None;
-            }
-            let offset = item.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            let origin = match item.get("origin").and_then(|v| v.as_str()) {
-                Some("start") => Origin::Start,
-                _ => Origin::End,
-            };
-            Some(GainWindow {
-                origin,
-                offset,
-                length,
-            })
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const WINDOWS: &[GainWindow] = &[GainWindow {
-        origin: Origin::Start,
-        offset: 4,
-        length: 2,
-    }];
+    fn test_baseline() -> Vec<u8> {
+        let mut baseline = vec![0u8; 128];
+        for (index, value) in [4.25_f64, 4.0, 0.5, 0.5, 0.0, 0.5].into_iter().enumerate() {
+            baseline[16 + index * 8..24 + index * 8].copy_from_slice(&value.to_le_bytes());
+        }
+        baseline
+    }
+
+    fn test_manifest(baseline: &[u8]) -> String {
+        format!(
+            r#"{{
+                "schema":"electrode.autopilot-parameter-policy.v1",
+                "target":"cubs2",
+                "boardId":"mr_vmu_tropic",
+                "baselineSha256":"{}",
+                "parameters":[
+                    {{"name":"route.crossTrackSteeringDistance","offset":16,"encoding":"float64-le","minimum":0.25,"maximum":50.0}},
+                    {{"name":"route.waypointSwitchingDistance","offset":24,"encoding":"float64-le","minimum":0.1,"maximum":50.0}},
+                    {{"name":"attitude.rollLimit","offset":32,"encoding":"float64-le","minimum":0.05,"maximum":1.2}},
+                    {{"name":"attitude.headingPid.kp","offset":40,"encoding":"float64-le","minimum":0.0,"maximum":10.0}},
+                    {{"name":"attitude.headingPid.ki","offset":48,"encoding":"float64-le","minimum":0.0,"maximum":10.0}},
+                    {{"name":"attitude.headingPid.kd","offset":56,"encoding":"float64-le","minimum":0.0,"maximum":10.0}}
+                ]
+            }}"#,
+            full_sha256(baseline)
+        )
+    }
+
+    fn test_policy(baseline: &[u8]) -> ParameterPolicy {
+        parse_parameter_policy(&test_manifest(baseline), baseline, "cubs2", "mr_vmu_tropic")
+            .unwrap()
+    }
+
+    fn roll_only_manifest(baseline: &[u8]) -> String {
+        format!(
+            r#"{{
+                "schema":"electrode.autopilot-parameter-policy.v1",
+                "target":"cubs2",
+                "boardId":"mr_vmu_tropic",
+                "baselineSha256":"{}",
+                "parameters":[
+                    {{"name":"attitude.rollLimit","offset":32,"encoding":"float64-le","minimum":0.05,"maximum":1.2}}
+                ]
+            }}"#,
+            full_sha256(baseline)
+        )
+    }
 
     #[test]
     fn identical_is_allowed() {
-        let base = vec![1u8; 16];
-        let result = validate_gain_only_change(&base, &base, WINDOWS);
+        let base = test_baseline();
+        let policy = test_policy(&base);
+        let result = validate_parameter_only_change(&base, &base, &policy.regions);
         assert!(result.allowed);
         assert_eq!(result.differing_byte_count, 0);
     }
 
     #[test]
-    fn gain_only_change_is_allowed() {
-        let base = vec![0u8; 16];
+    fn parameter_only_change_is_allowed() {
+        let base = test_baseline();
+        let policy = test_policy(&base);
         let mut candidate = base.clone();
-        candidate[4] = 9; // inside window [4,6)
-        candidate[5] = 9;
-        let result = validate_gain_only_change(&candidate, &base, WINDOWS);
+        candidate[16..24].copy_from_slice(&5.0f64.to_le_bytes());
+        let result = validate_parameter_only_change(&candidate, &base, &policy.regions);
         assert!(result.allowed);
-        assert_eq!(result.differing_byte_count, 2);
-        assert_eq!(result.gain_differing_byte_count, 2);
+        assert!(result.differing_byte_count > 0);
+        assert_eq!(
+            result.differing_byte_count,
+            result.parameter_differing_byte_count
+        );
     }
 
     #[test]
-    fn outside_change_is_rejected() {
-        let base = vec![0u8; 16];
+    fn one_outside_change_rejects_the_whole_binary() {
+        let base = test_baseline();
+        let policy = test_policy(&base);
         let mut candidate = base.clone();
-        candidate[10] = 9; // outside the window
-        let result = validate_gain_only_change(&candidate, &base, WINDOWS);
+        candidate[16..24].copy_from_slice(&5.0f64.to_le_bytes());
+        candidate[80] ^= 1;
+        let result = validate_parameter_only_change(&candidate, &base, &policy.regions);
         assert!(!result.allowed);
-        assert_eq!(result.outside_gain_diffs.len(), 1);
-        assert_eq!(result.outside_gain_diffs[0].offset, 10);
+        assert_eq!(result.outside_parameter_diffs.len(), 1);
+        assert_eq!(result.outside_parameter_diffs[0].offset, 80);
     }
 
     #[test]
-    fn size_change_is_rejected() {
-        let result = validate_gain_only_change(&[0u8; 8], &[0u8; 16], WINDOWS);
+    fn length_change_is_an_outside_parameter_change() {
+        let base = test_baseline();
+        let policy = test_policy(&base);
+        let result = validate_parameter_only_change(&base[..63], &base, &policy.regions);
         assert!(!result.allowed);
-        assert!(result.reason.contains("File size changed"));
+        assert_eq!(result.outside_parameter_diffs[0].offset, 63);
+        assert_eq!(result.outside_parameter_diffs[0].candidate, None);
     }
 
     #[test]
-    fn selective_hash_is_stable_across_gain_change() {
-        let base = vec![0u8; 16];
+    fn appended_bytes_are_outside_parameter_changes() {
+        let base = test_baseline();
+        let policy = test_policy(&base);
         let mut candidate = base.clone();
-        candidate[4] = 42;
-        candidate[5] = 42;
+        candidate.extend_from_slice(&[0u8; 4]);
+        let result = validate_parameter_only_change(&candidate, &base, &policy.regions);
+        assert!(!result.allowed);
+        assert_eq!(result.differing_byte_count, 4);
+        assert_eq!(result.outside_parameter_diffs[0].offset, 128);
+        assert_eq!(result.outside_parameter_diffs[0].baseline, None);
+        assert_eq!(result.outside_parameter_diffs[0].candidate, Some(0));
+    }
+
+    #[test]
+    fn nonfinite_and_out_of_range_parameter_values_are_rejected() {
+        let base = test_baseline();
+        let policy = test_policy(&base);
+        let mut candidate = base.clone();
+        candidate[16..24].copy_from_slice(&f64::NAN.to_le_bytes());
+        let result = validate_parameter_only_change(&candidate, &base, &policy.regions);
+        assert!(!result.allowed);
+        assert_eq!(
+            result.invalid_parameters,
+            ["route.crossTrackSteeringDistance"]
+        );
+
+        candidate[16..24].copy_from_slice(&100.0f64.to_le_bytes());
+        let result = validate_parameter_only_change(&candidate, &base, &policy.regions);
+        assert!(!result.allowed);
+    }
+
+    #[test]
+    fn selective_hash_is_stable_across_parameter_change() {
+        let base = test_baseline();
+        let policy = test_policy(&base);
+        let mut candidate = base.clone();
+        candidate[16..24].copy_from_slice(&5.0f64.to_le_bytes());
         assert_ne!(full_sha256(&base), full_sha256(&candidate));
         assert_eq!(
-            selective_sha256(&base, WINDOWS),
-            selective_sha256(&candidate, WINDOWS)
+            selective_sha256(&base, &policy.regions),
+            selective_sha256(&candidate, &policy.regions)
         );
+    }
+
+    #[test]
+    fn manifest_is_bound_to_baseline_names_and_ranges() {
+        let base = test_baseline();
+        let manifest = test_manifest(&base);
+        assert!(parse_parameter_policy(&manifest, &base, "cubs2", "mr_vmu_tropic").is_ok());
+        assert!(parse_parameter_policy(&manifest, &[1u8; 128], "cubs2", "mr_vmu_tropic").is_err());
+        assert!(parse_parameter_policy(
+            &manifest.replace("50.0", "500.0"),
+            &base,
+            "cubs2",
+            "mr_vmu_tropic"
+        )
+        .is_err());
+        assert!(parse_parameter_policy(&manifest, &base, "other", "mr_vmu_tropic").is_err());
+    }
+
+    #[test]
+    fn manifest_may_authorize_a_known_nonempty_subset() {
+        let base = test_baseline();
+        let policy =
+            parse_parameter_policy(&roll_only_manifest(&base), &base, "cubs2", "mr_vmu_tropic")
+                .unwrap();
+        assert_eq!(policy.regions.len(), 1);
+        assert_eq!(policy.regions[0].name, "attitude.rollLimit");
+
+        let empty = roll_only_manifest(&base).replace(
+            r#"{"name":"attitude.rollLimit","offset":32,"encoding":"float64-le","minimum":0.05,"maximum":1.2}"#,
+            "",
+        );
+        assert!(parse_parameter_policy(&empty, &base, "cubs2", "mr_vmu_tropic").is_err());
     }
 
     #[test]
@@ -664,6 +875,7 @@ mod tests {
             1025,
             &"a".repeat(64),
             "",
+            "{}",
             512,
             3,
         );
@@ -703,53 +915,6 @@ mod tests {
         assert_eq!(
             firmware_key("cmd/firmware", "prepare"),
             "cmd/firmware_prepare"
-        );
-    }
-
-    #[test]
-    fn parses_gain_windows_json() {
-        let json = r#"{"gainWindows":[{"origin":"start","offset":18480,"length":8}]}"#;
-        let windows = parse_gain_windows(json);
-        assert_eq!(windows.len(), 1);
-        assert_eq!(windows[0].origin, Origin::Start);
-        assert_eq!(windows[0].offset, 18480);
-        assert_eq!(windows[0].length, 8);
-    }
-
-    #[test]
-    fn repository_cubs2_fixtures_match_policy_when_present() {
-        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let Some(repository_root) = manifest_dir.ancestors().nth(4) else {
-            return;
-        };
-        let artifacts = repository_root.join("artifacts/cubs2-firmware");
-        let baseline_path = artifacts.join("baseline-cubs2-mr-vmu-tropic.bin");
-        if !baseline_path.exists() {
-            return;
-        }
-
-        let baseline = std::fs::read(baseline_path).unwrap();
-        let accepted = std::fs::read(artifacts.join("candidate-cubs2-gain-only.bin")).unwrap();
-        let rejected =
-            std::fs::read(artifacts.join("candidate-cubs2-rejected-outside-gain.bin")).unwrap();
-        let windows = parse_gain_windows(
-            &std::fs::read_to_string(artifacts.join("gain-windows-cubs2.json")).unwrap(),
-        );
-
-        let accepted_result = validate_gain_only_change(&accepted, &baseline, &windows);
-        assert!(accepted_result.allowed, "{}", accepted_result.reason);
-        assert!(accepted_result.differing_byte_count > 0);
-        assert_eq!(
-            accepted_result.differing_byte_count,
-            accepted_result.gain_differing_byte_count
-        );
-
-        let rejected_result = validate_gain_only_change(&rejected, &baseline, &windows);
-        assert!(!rejected_result.allowed);
-        assert!(!rejected_result.outside_gain_diffs.is_empty());
-        assert_eq!(
-            full_sha256(&accepted),
-            "1a967afa3f54586ecb099d815d391a473774a406813ec969dfe6cbd0a67d3484"
         );
     }
 }

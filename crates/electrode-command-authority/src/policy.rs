@@ -4,22 +4,16 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use synapse_fbs::cmd::{ParamGetRequest, ParamKind, ParamSetRequest, TrajectorySetRequest};
-use synapse_fbs::topic::{LocalPositionCommandData, ManualControlData, RadioControlData};
+use synapse_fbs::topic::RadioControlData;
 
 use crate::velocity_budget::{BudgetState, Credential, VelocityBudgetStore};
 
-const VELOCITY_ONLY_MASK: u16 = 3527;
 const LOCAL_ENU_FRAME: u8 = 0;
-const MANUAL_ACTIVE_AXES_MASK: u16 = 0x03ff;
-const MANUAL_FLAG_ACTIVE: u8 = 4;
-const MANUAL_FLAG_VALID: u8 = 8;
 const FIRMWARE_PREPARE_MAX_BYTES: usize = 4 * 1024;
 const FIRMWARE_CHUNK_MAX_BYTES: usize = 68 * 1024;
 const FIRMWARE_COMMIT_MAX_BYTES: usize = 2 * 1024;
 const VELOCITY_MAGIC: &[u8; 4] = b"EVC1";
 const VELOCITY_BUDGET_MAGIC: &[u8; 4] = b"EVB1";
-const RAW_VELOCITY_MAGIC: &[u8; 4] = b"EVR1";
-const VELOCITY_PAYLOAD_BYTES: usize = 56;
 const TEAM_NAME_MAX_BYTES: usize = 64;
 /// Canonical vehicle query keys used by the staged firmware-update transfer.
 pub const CANONICAL_FIRMWARE_QUERY_KEYS: [&str; 6] = [
@@ -134,12 +128,11 @@ impl CommandPolicy {
         match suffix {
             "velocity" => self.authorize_velocity(payload),
             "velocity_budget" => self.authorize_velocity_budget(payload),
-            "manual" => self.authorize_manual(payload),
             "radio" => self.authorize_radio(payload),
             "gain" => self.authorize_gain(payload),
             "parameters" => self.authorize_parameters(payload),
             "trajectory" => self.authorize_trajectory(payload),
-            raw if raw.starts_with("raw/") => self.authorize_raw(&raw[4..], payload),
+            raw if raw.starts_with("raw/") => self.authorize_raw(&raw[4..], payload, false),
             firmware if firmware.starts_with("firmware/") => {
                 self.authorize_firmware(&firmware[9..], payload)
             }
@@ -184,10 +177,9 @@ impl CommandPolicy {
                 "trajectory_set",
                 "trajectory",
             )),
-            "velocity" => Ok(self.publish_topic("pos_sp", payload, "velocity", None)),
             "manual" => Ok(self.publish_topic("manual", payload, "manual", None)),
             "radio" => Ok(self.publish_topic("rc", payload, "radio", None)),
-            raw if raw.starts_with("raw/") => self.authorize_raw(&raw[4..], payload),
+            raw if raw.starts_with("raw/") => self.authorize_raw(&raw[4..], payload, true),
             firmware if firmware.starts_with("firmware/") => {
                 self.authorize_firmware(&firmware[9..], payload)
             }
@@ -230,35 +222,42 @@ impl CommandPolicy {
     }
 
     fn authorize_velocity(&self, payload: &[u8]) -> Result<AuthorizedCommand, PolicyError> {
-        let (team, vehicle_payload) =
-            credential_envelope(payload, VELOCITY_MAGIC, Some(VELOCITY_PAYLOAD_BYTES))?;
-        let command = follow_struct::<LocalPositionCommandData>(vehicle_payload, 56)?;
-        let velocity = command.velocity_enu_m_s();
-        let (x, y, z) = (velocity.x(), velocity.y(), velocity.z());
-        if !x.is_finite() || !y.is_finite() || !z.is_finite() {
-            return rejected("velocity components must be finite");
+        let (team, vehicle_payload) = credential_envelope(payload, VELOCITY_MAGIC, None)?;
+        let request = flatbuffers::root::<ParamSetRequest<'_>>(vehicle_payload)
+            .map_err(|error| invalid(error.to_string()))?;
+        let value = request
+            .value()
+            .ok_or_else(|| invalid("ParamSetRequest has no value"))?;
+        if value.name().unwrap_or("") != "velocity.setpoint" {
+            return rejected("velocity command must set exactly velocity.setpoint");
         }
-        if y != 0.0 || z != 0.0 {
-            return rejected("velocity must be X-only; Y and Z must be zero");
+        if value.kind() != ParamKind::Float {
+            return rejected("velocity.setpoint must use ParamKind::Float");
         }
-        if command.type_mask() != VELOCITY_ONLY_MASK
-            || command.coordinate_frame().0 != LOCAL_ENU_FRAME
+        let velocity = value.float_value();
+        if !velocity.is_finite()
+            || velocity < f64::from(self.config.velocity_min_mps)
+            || velocity > f64::from(self.config.velocity_max_mps)
         {
-            return rejected("velocity must use the Local ENU velocity-only shape");
-        }
-        if x < self.config.velocity_min_mps || x > self.config.velocity_max_mps {
             return rejected(format!(
-                "velocity {x:.3} m/s is outside [{:.3}, {:.3}]",
+                "velocity {velocity:.3} m/s is outside [{:.3}, {:.3}]",
                 self.config.velocity_min_mps, self.config.velocity_max_mps
             ));
         }
-        let state = self.consume_velocity_budget(&team, Some(x))?;
-        let mut command = self.publish_topic(
-            "pos_sp",
-            vehicle_payload,
-            "velocity",
-            Some(state.device_id.clone()),
-        );
+        let state = self.consume_velocity_budget(&team, Some(velocity as f32))?;
+        let mut command = AuthorizedCommand {
+            delivery: Delivery::Query,
+            target: self.config.parameter_key.clone(),
+            payload: vehicle_payload.to_vec(),
+            status_leaf: "velocity".to_string(),
+            velocity_device: None,
+            velocity_remaining: None,
+            velocity_credential_id: None,
+            velocity_limit: None,
+            velocity_used: None,
+            velocity_budget_version: None,
+            encoding: command_request_encoding("param_set"),
+        };
         apply_budget_state(&mut command, &state);
         Ok(command)
     }
@@ -276,33 +275,6 @@ impl CommandPolicy {
         command.target.clear();
         apply_budget_state(&mut command, &state);
         Ok(command)
-    }
-
-    fn authorize_manual(&self, payload: &[u8]) -> Result<AuthorizedCommand, PolicyError> {
-        let command = follow_struct::<ManualControlData>(payload, 40)?;
-        let axes = [
-            command.pitch_milli(),
-            command.roll_milli(),
-            command.throttle_milli(),
-            command.yaw_milli(),
-            command.aux0_milli(),
-            command.aux1_milli(),
-            command.aux2_milli(),
-            command.aux3_milli(),
-            command.aux4_milli(),
-            command.aux5_milli(),
-        ];
-        if axes.iter().any(|value| !(-1000..=1000).contains(value)) {
-            return rejected("manual axes must be within [-1000, 1000]");
-        }
-        if command.active_axes() & !MANUAL_ACTIVE_AXES_MASK != 0 {
-            return rejected("manual active_axes contains unknown bits");
-        }
-        let required = MANUAL_FLAG_ACTIVE | MANUAL_FLAG_VALID;
-        if command.flags() & required != required {
-            return rejected("manual command must be active and valid");
-        }
-        Ok(self.publish_topic("manual", payload, "manual", None))
     }
 
     fn authorize_radio(&self, payload: &[u8]) -> Result<AuthorizedCommand, PolicyError> {
@@ -410,7 +382,12 @@ impl CommandPolicy {
         })
     }
 
-    fn authorize_raw(&self, leaf: &str, payload: &[u8]) -> Result<AuthorizedCommand, PolicyError> {
+    fn authorize_raw(
+        &self,
+        leaf: &str,
+        payload: &[u8],
+        trusted: bool,
+    ) -> Result<AuthorizedCommand, PolicyError> {
         if leaf.is_empty()
             || leaf.len() > 64
             || !leaf
@@ -419,20 +396,13 @@ impl CommandPolicy {
         {
             return rejected("raw target must be one safe topic leaf");
         }
-        if leaf == "pos_sp" || leaf == "local_position_command" {
-            let (team, vehicle_payload) = credential_envelope(payload, RAW_VELOCITY_MAGIC, None)?;
-            if vehicle_payload.is_empty() || vehicle_payload.len() > self.config.raw_max_bytes {
-                return rejected("credentialed raw velocity payload has an invalid size");
-            }
-            let state = self.consume_velocity_budget(&team, None)?;
-            let mut command = self.publish_topic(
+        if !trusted
+            && matches!(
                 leaf,
-                vehicle_payload,
-                "velocity",
-                Some(state.device_id.clone()),
-            );
-            apply_budget_state(&mut command, &state);
-            return Ok(command);
+                "manual" | "manual_control_command" | "pos_sp" | "local_position_command"
+            )
+        {
+            return rejected("checked raw target is reserved for trusted local control");
         }
         if payload.is_empty() || payload.len() > self.config.raw_max_bytes {
             return rejected(format!(
@@ -600,11 +570,9 @@ fn team_name_from_any_velocity_envelope(payload: &[u8]) -> Result<String, Policy
         .get(..4)
         .ok_or_else(|| invalid("velocity credential envelope is too short"))?;
     if magic == VELOCITY_MAGIC {
-        credential_envelope(payload, VELOCITY_MAGIC, Some(VELOCITY_PAYLOAD_BYTES)).map(|v| v.0)
+        credential_envelope(payload, VELOCITY_MAGIC, None).map(|v| v.0)
     } else if magic == VELOCITY_BUDGET_MAGIC {
         credential_envelope(payload, VELOCITY_BUDGET_MAGIC, Some(0)).map(|v| v.0)
-    } else if magic == RAW_VELOCITY_MAGIC {
-        credential_envelope(payload, RAW_VELOCITY_MAGIC, None).map(|v| v.0)
     } else {
         Err(invalid("velocity credential envelope has invalid magic"))
     }
@@ -612,33 +580,19 @@ fn team_name_from_any_velocity_envelope(payload: &[u8]) -> Result<String, Policy
 
 fn validate_gain(name: &str, kind: ParamKind, value: f64) -> Result<(), PolicyError> {
     if kind != ParamKind::Float {
-        return rejected("controller gains must use ParamKind::Float");
+        return rejected("autopilot parameters must use ParamKind::Float");
     }
     let (min, max) = match name {
-        "velocity.setpoint" | "guidance.cruiseSpeed" | "route.cruiseSpeed" => (1.0, 12.0),
-        "route.altitudeToFlightPathGain" | "route.speedToAccelerationGain" => (0.0, 10.0),
-        "route.altitudeLookaheadDistance"
-        | "route.crossTrackSteeringDistance"
-        | "route.waypointSwitchingDistance" => (0.1, 50.0),
-        "route.flightPathAngleLimit" | "tecs.pitchCommandLimit" => (0.02, 0.7),
-        "tecs.thrustKp" | "tecs.thrustKi" | "tecs.pitchKp" | "tecs.pitchKi" => (0.0, 2.0),
-        "tecs.energyRateIntegralMax" | "tecs.energyDistributionIntegralMax" => (0.0, 100.0),
-        "tecs.turnThrustGain" => (0.0, 5.0),
-        "tecs.turnPitchGain" => (-2.0, 2.0),
+        "route.crossTrackSteeringDistance" => (0.25, 50.0),
+        "route.waypointSwitchingDistance" => (0.1, 50.0),
         "attitude.rollLimit" => (0.05, 1.2),
-        "attitude.rollRateLimit" => (0.1, 8.0),
-        "attitude.headingPid.kp"
-        | "attitude.headingPid.ki"
-        | "attitude.headingPid.kd"
-        | "attitude.headingPid.integralMax"
-        | "attitude.pitchPid.kp"
-        | "attitude.pitchPid.ki"
-        | "attitude.pitchPid.kd"
-        | "attitude.pitchPid.integralMax" => (0.0, 10.0),
-        _ => return rejected(format!("gain parameter {name:?} is not allowlisted")),
+        "attitude.headingPid.kp" | "attitude.headingPid.ki" | "attitude.headingPid.kd" => {
+            (0.0, 10.0)
+        }
+        _ => return rejected(format!("autopilot parameter {name:?} is not allowlisted")),
     };
     if !value.is_finite() || value < min || value > max {
-        return rejected(format!("gain {name} must be within [{min}, {max}]"));
+        return rejected(format!("parameter {name} must be within [{min}, {max}]"));
     }
     Ok(())
 }

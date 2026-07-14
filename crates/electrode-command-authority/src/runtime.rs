@@ -419,17 +419,15 @@ fn publish_policy_error(
     let prefix = format!("{}/", config.policy.intent_prefix.trim_end_matches('/'));
     let suffix = intent_key.strip_prefix(&prefix).unwrap_or("");
     match suffix {
-        "velocity" | "velocity_budget" | "raw/local_position_command" => {
-            match policy.velocity_state_for_payload(payload) {
-                Ok(state) => publish_velocity_state(browser, config, "rejected", &state, message),
-                Err(_) => publish_unknown_velocity_status(
-                    browser,
-                    config,
-                    CommandPolicy::credential_id_for_payload(payload).as_deref(),
-                    message,
-                ),
-            }
-        }
+        "velocity" | "velocity_budget" => match policy.velocity_state_for_payload(payload) {
+            Ok(state) => publish_velocity_state(browser, config, "rejected", &state, message),
+            Err(_) => publish_unknown_velocity_status(
+                browser,
+                config,
+                CommandPolicy::credential_id_for_payload(payload).as_deref(),
+                message,
+            ),
+        },
         "gain" => publish_status(browser, config, "gain", "rejected", message),
         firmware if firmware.starts_with("firmware/") => {
             let update_id = firmware[9..].split('/').next().unwrap_or("");
@@ -507,16 +505,17 @@ fn enqueue_query(
     config: &CommandAuthorityConfig,
     command: AuthorizedCommand,
 ) {
-    let status_leaf = command.status_leaf.clone();
-    let message = match sender.try_send(QueuedQuery {
+    let (command, message) = match sender.try_send(QueuedQuery {
         command,
         response: browser.clone(),
     }) {
         Ok(()) => return,
-        Err(TrySendError::Full(_)) => "command query queue is full",
-        Err(TrySendError::Disconnected(_)) => "command query worker is unavailable",
+        Err(TrySendError::Full(queued)) => (queued.command, "command query queue is full"),
+        Err(TrySendError::Disconnected(queued)) => {
+            (queued.command, "command query worker is unavailable")
+        }
     };
-    publish_status(browser, config, &status_leaf, "rejected", message);
+    publish_query_status(browser, config, &command, "rejected", message);
 }
 
 fn execute_query(
@@ -528,13 +527,7 @@ fn execute_query(
     let query_session = match open_session("client", "", Some(&config.vehicle_listen)) {
         Ok(session) => session,
         Err(error) => {
-            publish_status(
-                browser,
-                config,
-                &command.status_leaf,
-                "rejected",
-                &error.to_string(),
-            );
+            publish_query_status(browser, config, &command, "rejected", &error.to_string());
             return;
         }
     };
@@ -548,13 +541,7 @@ fn execute_query(
     let replies = match request.wait() {
         Ok(replies) => replies,
         Err(error) => {
-            publish_status(
-                browser,
-                config,
-                &command.status_leaf,
-                "rejected",
-                &error.to_string(),
-            );
+            publish_query_status(browser, config, &command, "rejected", &error.to_string());
             return;
         }
     };
@@ -570,39 +557,31 @@ fn execute_query(
                 let _ = browser.put(reply_key, payload.clone()).wait();
                 match command_reply_status(&command.status_leaf, &payload) {
                     Ok((status, message)) => {
-                        publish_status(browser, config, &command.status_leaf, status, &message)
+                        publish_query_status(browser, config, &command, status, &message)
                     }
-                    Err(error) => publish_status(
+                    Err(error) => publish_query_status(
                         browser,
                         config,
-                        &command.status_leaf,
+                        &command,
                         "rejected",
                         &error.to_string(),
                     ),
                 }
             }
-            Err(error) => publish_status(
-                browser,
-                config,
-                &command.status_leaf,
-                "rejected",
-                &error.to_string(),
-            ),
+            Err(error) => {
+                publish_query_status(browser, config, &command, "rejected", &error.to_string())
+            }
         },
-        Ok(None) => publish_status(
+        Ok(None) => publish_query_status(
             browser,
             config,
-            &command.status_leaf,
+            &command,
             "rejected",
             "target service returned no reply",
         ),
-        Err(error) => publish_status(
-            browser,
-            config,
-            &command.status_leaf,
-            "rejected",
-            &error.to_string(),
-        ),
+        Err(error) => {
+            publish_query_status(browser, config, &command, "rejected", &error.to_string())
+        }
     }
 }
 
@@ -639,19 +618,29 @@ fn command_reply_status(leaf: &str, payload: &[u8]) -> Result<(&'static str, Str
             )),
         };
     }
-    parameter_reply_status(payload)
+    parameter_reply_status(
+        payload,
+        if leaf == "velocity" {
+            "velocity setpoint"
+        } else {
+            "parameter"
+        },
+    )
 }
 
-fn parameter_reply_status(payload: &[u8]) -> Result<(&'static str, String)> {
+fn parameter_reply_status(payload: &[u8], subject: &str) -> Result<(&'static str, String)> {
     let reply = flatbuffers::root::<ParamSetReply<'_>>(payload)
         .map_err(|error| anyhow!("invalid ParamSetReply: {error}"))?;
     let result = reply.result();
     let detail = reply.result_detail();
     match result {
-        CommandResultCode::Accepted => Ok(("accepted", "target service accepted the gain".into())),
-        CommandResultCode::InProgress => {
-            Ok(("in_progress", "target service is applying the gain".into()))
+        CommandResultCode::Accepted => {
+            Ok(("accepted", format!("target service accepted the {subject}")))
         }
+        CommandResultCode::InProgress => Ok((
+            "in_progress",
+            format!("target service is applying the {subject}"),
+        )),
         _ => Err(anyhow!(
             "target service returned {} (detail {detail})",
             result.variant_name().unwrap_or("unknown result")
@@ -941,6 +930,20 @@ fn publish_status(
     }
 }
 
+fn publish_query_status(
+    browser: &Session,
+    config: &CommandAuthorityConfig,
+    command: &AuthorizedCommand,
+    status: &str,
+    message: &str,
+) {
+    if command.velocity_remaining.is_some() {
+        publish_velocity_command_status(browser, config, status, command, message);
+    } else {
+        publish_status(browser, config, &command.status_leaf, status, message);
+    }
+}
+
 fn publish_velocity_command_status(
     browser: &Session,
     config: &CommandAuthorityConfig,
@@ -1046,8 +1049,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        ensure_loopback_browser_endpoint, ensure_loopback_vehicle_endpoint, parameter_reply_status,
-        should_announce_topic,
+        command_reply_status, ensure_loopback_browser_endpoint, ensure_loopback_vehicle_endpoint,
+        parameter_reply_status, should_announce_topic,
     };
     use flatbuffers::FlatBufferBuilder;
     use synapse_fbs::cmd::{ParamSetReply, ParamSetReplyArgs};
@@ -1070,22 +1073,27 @@ mod tests {
     #[test]
     fn parameter_reply_result_controls_browser_status() {
         assert_eq!(
-            parameter_reply_status(&reply(CommandResultCode::Accepted, 0))
+            parameter_reply_status(&reply(CommandResultCode::Accepted, 0), "gain")
                 .unwrap()
                 .0,
             "accepted"
         );
         assert_eq!(
-            parameter_reply_status(&reply(CommandResultCode::InProgress, 0))
+            parameter_reply_status(&reply(CommandResultCode::InProgress, 0), "gain")
                 .unwrap()
                 .0,
             "in_progress"
         );
-        let denied = parameter_reply_status(&reply(CommandResultCode::Denied, 7))
+        let denied = parameter_reply_status(&reply(CommandResultCode::Denied, 7), "gain")
             .unwrap_err()
             .to_string();
         assert!(denied.contains("Denied"));
         assert!(denied.contains("detail 7"));
+
+        let velocity =
+            command_reply_status("velocity", &reply(CommandResultCode::Accepted, 0)).unwrap();
+        assert_eq!(velocity.0, "accepted");
+        assert_eq!(velocity.1, "target service accepted the velocity setpoint");
     }
 
     #[test]
