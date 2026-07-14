@@ -9,28 +9,15 @@ use synapse_fbs::topic::RadioControlData;
 use crate::velocity_budget::{BudgetState, Credential, VelocityBudgetStore};
 
 const LOCAL_ENU_FRAME: u8 = 0;
-const FIRMWARE_PREPARE_MAX_BYTES: usize = 4 * 1024;
-const FIRMWARE_CHUNK_MAX_BYTES: usize = 68 * 1024;
-const FIRMWARE_COMMIT_MAX_BYTES: usize = 2 * 1024;
 const VELOCITY_MAGIC: &[u8; 4] = b"EVC1";
 const VELOCITY_BUDGET_MAGIC: &[u8; 4] = b"EVB1";
 const TEAM_NAME_MAX_BYTES: usize = 64;
-/// Canonical vehicle query keys used by the staged firmware-update transfer.
-pub const CANONICAL_FIRMWARE_QUERY_KEYS: [&str; 6] = [
-    "cmd/firmware_info",
-    "cmd/firmware_status",
-    "cmd/firmware_prepare",
-    "cmd/firmware_chunk",
-    "cmd/firmware_commit",
-    "cmd/firmware_abort",
-];
 
 /// Whether the authorized payload is a Zenoh publication or request/reply query.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Delivery {
     Publish,
     Query,
-    Firmware,
     Budget,
 }
 
@@ -58,7 +45,6 @@ pub struct PolicyConfig {
     pub intent_prefix: String,
     pub vehicle_topic_prefix: String,
     pub parameter_key: String,
-    pub firmware_key_prefix: String,
     pub velocity_min_mps: f32,
     pub velocity_max_mps: f32,
     pub velocity_budget: u32,
@@ -75,7 +61,6 @@ impl Default for PolicyConfig {
             // publishes bare catalog keys, so the default is empty.
             vehicle_topic_prefix: String::new(),
             parameter_key: "cmd/param_set".to_string(),
-            firmware_key_prefix: "cmd/firmware".to_string(),
             velocity_min_mps: 1.0,
             velocity_max_mps: 4.0,
             velocity_budget: 5,
@@ -130,9 +115,6 @@ impl CommandPolicy {
             "gain" => self.authorize_gain(payload),
             "parameters" => self.authorize_parameters(payload),
             "trajectory" => self.authorize_trajectory(payload),
-            firmware if firmware.starts_with("firmware/") => {
-                self.authorize_firmware(&firmware[9..], payload)
-            }
             other => Err(PolicyError::UnknownIntent(other.to_string())),
         }
     }
@@ -176,9 +158,6 @@ impl CommandPolicy {
             )),
             "manual" => Ok(self.publish_topic("manual", payload, "manual", None)),
             "radio" => Ok(self.publish_topic("rc", payload, "radio", None)),
-            firmware if firmware.starts_with("firmware/") => {
-                self.authorize_firmware(&firmware[9..], payload)
-            }
             other => Err(PolicyError::UnknownIntent(other.to_string())),
         }
     }
@@ -378,45 +357,6 @@ impl CommandPolicy {
         })
     }
 
-    fn authorize_firmware(
-        &self,
-        suffix: &str,
-        payload: &[u8],
-    ) -> Result<AuthorizedCommand, PolicyError> {
-        let parts = suffix.split('/').collect::<Vec<_>>();
-        let recognized = matches!(parts.as_slice(), [id, "start"] if safe_id(id))
-            || matches!(parts.as_slice(), [id, "commit"] if safe_id(id))
-            || matches!(parts.as_slice(), [id, "chunk", index] if safe_id(id) && index.parse::<u32>().is_ok());
-        if !recognized {
-            return Err(PolicyError::UnknownIntent(format!("firmware/{suffix}")));
-        }
-        let max_payload = match parts.as_slice() {
-            [_, "start"] => FIRMWARE_PREPARE_MAX_BYTES,
-            [_, "commit"] => FIRMWARE_COMMIT_MAX_BYTES,
-            [_, "chunk", _] => FIRMWARE_CHUNK_MAX_BYTES,
-            _ => unreachable!("recognized firmware shape"),
-        };
-        if payload.is_empty() || payload.len() > max_payload {
-            return rejected(format!(
-                "firmware payload must contain 1 to {max_payload} bytes"
-            ));
-        }
-        let update_id = parts[0];
-        Ok(AuthorizedCommand {
-            delivery: Delivery::Firmware,
-            target: suffix.to_string(),
-            payload: payload.to_vec(),
-            status_leaf: format!("firmware/{update_id}"),
-            velocity_device: None,
-            velocity_remaining: None,
-            velocity_credential_id: None,
-            velocity_limit: None,
-            velocity_used: None,
-            velocity_budget_version: None,
-            encoding: None,
-        })
-    }
-
     fn consume_velocity_budget(
         &self,
         team: &str,
@@ -575,14 +515,6 @@ where
     // SAFETY: Synapse generated fixed-layout structs use unaligned accessors,
     // and the exact-size check above guarantees the complete backing storage.
     Ok(unsafe { T::follow(payload, 0) })
-}
-
-fn safe_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 80
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 fn rejected<T>(reason: impl Into<String>) -> Result<T, PolicyError> {

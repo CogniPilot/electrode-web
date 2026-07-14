@@ -34,25 +34,3 @@ Vehicle telemetry is relayed one way to the trusted local browser. LAN
 `MocapFrame`, rigid-body names, and external-odometry streams are validated and
 relayed from the dedicated telemetry client. Private Rumoca `MocapFrame` data
 is accepted only from the trusted local browser domain.
-
-## Firmware updates
-
-The browser's staged namespace is
-`gcs/v1/cmd/firmware/<update-id>/{start,chunk/<index>,commit}`. The vehicle-side
-query keys are `cmd/firmware_{info,status,prepare,chunk,commit,abort}`.
-The request and reply payloads use the generated firmware bindings exported by
-`synapse_fbs` 0.5.1. This crate assembles and hashes the browser upload,
-compares it with an explicitly configured trusted baseline, allows
-substitutions only inside configured autopilot-parameter regions, and only then
-performs the vehicle query transfer with retries. Added, removed, or changed
-bytes outside those regions are rejected. Progress is published on
-`gcs/v1/status/firmware/<update-id>` using participant-safe messages; detailed
-validation and transport reasons stay in organizer logs.
-
-Set `ELECTRODE_GCS_FIRMWARE_BASELINE` to the trusted binary and
-`ELECTRODE_GCS_PARAMETER_MANIFEST_PATH` to the parameter-region JSON generated for
-that exact build. There are no artifact or byte-offset fallbacks. With a
-baseline but no regions, only an identical image can pass. First-upload
-baseline bootstrapping is disabled unless
-`ELECTRODE_GCS_FIRMWARE_AUTOBOOTSTRAP=true` is explicitly set for a transport
-test.

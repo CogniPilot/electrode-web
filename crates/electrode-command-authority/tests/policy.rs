@@ -1,6 +1,4 @@
-use electrode_command_authority::{
-    CommandAuthorityConfig, CommandPolicy, Delivery, PolicyConfig, CANONICAL_FIRMWARE_QUERY_KEYS,
-};
+use electrode_command_authority::{CommandAuthorityConfig, CommandPolicy, Delivery, PolicyConfig};
 use flatbuffers::FlatBufferBuilder;
 use std::sync::atomic::{AtomicU64, Ordering};
 use synapse_fbs::cmd::{
@@ -254,30 +252,12 @@ fn packet_traffic_command_path_is_removed() {
 }
 
 #[test]
-fn firmware_upload_uses_staged_authority_delivery() {
+fn firmware_update_command_path_is_removed() {
     let policy = policy();
-    assert_eq!(PolicyConfig::default().firmware_key_prefix, "cmd/firmware");
-    assert!(CANONICAL_FIRMWARE_QUERY_KEYS.contains(&"cmd/firmware_abort"));
-    let command = policy
+    assert!(policy
         .authorize("gcs/v1/cmd/firmware/update-1/start", &[0; 32])
-        .unwrap();
-    assert_eq!(command.delivery, Delivery::Firmware);
-    assert_eq!(command.target, "update-1/start");
-    assert_eq!(command.status_leaf, "firmware/update-1");
-    assert_eq!(command.payload, vec![0; 32]);
-    assert!(policy
-        .authorize("gcs/v1/cmd/firmware/update-1/chunk/2", &[1; 64])
-        .is_ok());
-    assert!(policy
-        .authorize(
-            "gcs/v1/cmd/firmware/update-1/chunk/2",
-            &vec![1; 68 * 1024 + 1]
-        )
         .is_err());
     assert!(policy
-        .authorize("gcs/v1/cmd/firmware/../commit", &[0; 32])
-        .is_err());
-    assert!(policy
-        .authorize("gcs/v1/cmd/firmware_info", &[0; 32])
+        .authorize_trusted("gcs/v1/cmd/firmware/update-1/start", &[0; 32])
         .is_err());
 }

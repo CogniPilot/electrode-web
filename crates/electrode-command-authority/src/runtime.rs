@@ -14,7 +14,6 @@ use synapse_fbs::topic::{MocapFrame, RawPoseData};
 use synapse_fbs::types::CommandResultCode;
 use zenoh::{Session, Wait};
 
-use crate::firmware_gate::{publish_policy_rejection, FirmwareGate};
 use crate::policy::{AuthorizedCommand, CommandPolicy, Delivery, PolicyConfig};
 
 const PARAMETER_QUEUE_CAPACITY: usize = 32;
@@ -85,10 +84,6 @@ impl CommandAuthorityConfig {
                     "ELECTRODE_GCS_PARAMETER_KEY",
                     defaults.policy.parameter_key,
                 ),
-                firmware_key_prefix: value_or(
-                    "ELECTRODE_GCS_FIRMWARE_KEY_PREFIX",
-                    defaults.policy.firmware_key_prefix,
-                ),
                 velocity_min_mps: 1.0,
                 velocity_max_mps: 4.0,
                 velocity_budget: env::var("ELECTRODE_GCS_VELOCITY_BUDGET")
@@ -150,14 +145,9 @@ impl CommandAuthority {
         let vehicle_router = open_session("router", &config.vehicle_listen, None)?;
         let vehicle_session = open_session("client", "", Some(&config.vehicle_listen))?;
         let policy = Arc::new(CommandPolicy::new(config.policy.clone()));
-        let firmware_gate = Arc::new(FirmwareGate::from_env(
-            config.policy.firmware_key_prefix.clone(),
-            config.query_timeout,
-        ));
         let (query_sender, query_receiver) = sync_channel::<QueuedQuery>(PARAMETER_QUEUE_CAPACITY);
         let worker_vehicle = vehicle_session.clone();
         let worker_config = config.clone();
-        let worker_firmware_gate = firmware_gate;
         let query_worker = std::thread::Builder::new()
             .name("electrode-command-query".to_string())
             .spawn(move || {
@@ -169,13 +159,6 @@ impl CommandAuthority {
                             &queued.response,
                             &worker_config,
                             command,
-                        ),
-                        Delivery::Firmware => worker_firmware_gate.handle_intent(
-                            &worker_vehicle,
-                            &queued.response,
-                            &worker_config.policy.intent_prefix,
-                            &command.target,
-                            &command.payload,
                         ),
                         Delivery::Publish => {
                             tracing::error!("publish command reached query worker")
@@ -428,13 +411,6 @@ fn publish_policy_error(
             ),
         },
         "gain" => publish_status(browser, config, "gain", "rejected", message),
-        firmware if firmware.starts_with("firmware/") => {
-            let update_id = firmware[9..].split('/').next().unwrap_or("");
-            if !publish_policy_rejection(browser, &config.policy.intent_prefix, update_id, message)
-            {
-                publish_status(browser, config, "command", "rejected", message);
-            }
-        }
         _ => publish_status(browser, config, "command", "rejected", message),
     }
 }
