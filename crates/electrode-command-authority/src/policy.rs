@@ -48,7 +48,7 @@ pub struct AuthorizedCommand {
     pub velocity_used: Option<u32>,
     pub velocity_budget_version: Option<String>,
     /// Synapse value-contract encoding stamped on the outbound Zenoh value.
-    /// None for raw targets outside the catalog.
+    /// None for targets outside the Synapse catalog.
     pub encoding: Option<String>,
 }
 
@@ -64,7 +64,6 @@ pub struct PolicyConfig {
     pub velocity_budget: u32,
     pub velocity_budget_json: PathBuf,
     pub velocity_budget_csv: PathBuf,
-    pub raw_max_bytes: usize,
 }
 
 impl Default for PolicyConfig {
@@ -82,7 +81,6 @@ impl Default for PolicyConfig {
             velocity_budget: 5,
             velocity_budget_json: PathBuf::from("data/velocity-budget-db.json"),
             velocity_budget_csv: PathBuf::from("data/velocity-budget.csv"),
-            raw_max_bytes: 4 * 1024,
         }
     }
 }
@@ -132,7 +130,6 @@ impl CommandPolicy {
             "gain" => self.authorize_gain(payload),
             "parameters" => self.authorize_parameters(payload),
             "trajectory" => self.authorize_trajectory(payload),
-            raw if raw.starts_with("raw/") => self.authorize_raw(&raw[4..], payload, false),
             firmware if firmware.starts_with("firmware/") => {
                 self.authorize_firmware(&firmware[9..], payload)
             }
@@ -179,7 +176,6 @@ impl CommandPolicy {
             )),
             "manual" => Ok(self.publish_topic("manual", payload, "manual", None)),
             "radio" => Ok(self.publish_topic("rc", payload, "radio", None)),
-            raw if raw.starts_with("raw/") => self.authorize_raw(&raw[4..], payload, true),
             firmware if firmware.starts_with("firmware/") => {
                 self.authorize_firmware(&firmware[9..], payload)
             }
@@ -380,37 +376,6 @@ impl CommandPolicy {
             velocity_budget_version: None,
             encoding: command_request_encoding("trajectory_set"),
         })
-    }
-
-    fn authorize_raw(
-        &self,
-        leaf: &str,
-        payload: &[u8],
-        trusted: bool,
-    ) -> Result<AuthorizedCommand, PolicyError> {
-        if leaf.is_empty()
-            || leaf.len() > 64
-            || !leaf
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
-        {
-            return rejected("raw target must be one safe topic leaf");
-        }
-        if !trusted
-            && matches!(
-                leaf,
-                "manual" | "manual_control_command" | "pos_sp" | "local_position_command"
-            )
-        {
-            return rejected("checked raw target is reserved for trusted local control");
-        }
-        if payload.is_empty() || payload.len() > self.config.raw_max_bytes {
-            return rejected(format!(
-                "raw payload must contain 1 to {} bytes",
-                self.config.raw_max_bytes
-            ));
-        }
-        Ok(self.publish_topic(leaf, payload, &format!("raw/{leaf}"), None))
     }
 
     fn authorize_firmware(

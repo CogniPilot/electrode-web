@@ -243,42 +243,13 @@ fn trusted_local_parameters_bypass_lan_value_policy() {
 }
 
 #[test]
-fn raw_path_denies_checked_control_topics_but_preserves_trusted_bytes() {
+fn packet_traffic_command_path_is_removed() {
     let policy = policy();
-    assert_eq!(
-        policy
-            .authorize("gcs/v1/cmd/raw/text_status", b"operator bytes")
-            .unwrap()
-            .target,
-        "text_status"
-    );
-    let payload = (0_u8..40).collect::<Vec<_>>();
     assert!(policy
-        .authorize("gcs/v1/cmd/raw/manual_control_command", &payload)
-        .is_err());
-    assert!(policy.authorize("gcs/v1/cmd/raw/manual", &payload).is_err());
-    let trusted = policy
-        .authorize_trusted("gcs/v1/cmd/raw/manual_control_command", &payload)
-        .unwrap();
-    assert_eq!(trusted.target, "manual_control_command");
-    assert_eq!(trusted.payload, payload);
-
-    for leaf in ["pos_sp", "local_position_command"] {
-        assert!(policy
-            .authorize(&format!("gcs/v1/cmd/raw/{leaf}"), &[1, 2, 3, 4])
-            .is_err());
-    }
-    let command = policy
-        .authorize_trusted("gcs/v1/cmd/raw/pos_sp", &[1, 2, 3, 4])
-        .unwrap();
-    assert_eq!(command.target, "pos_sp");
-    assert_eq!(command.payload, vec![1, 2, 3, 4]);
-    assert_eq!(command.velocity_remaining, None);
-    assert!(policy
-        .authorize("gcs/v1/cmd/raw/nested/channel", &[0; 16])
+        .authorize("gcs/v1/cmd/raw/text_status", b"operator bytes")
         .is_err());
     assert!(policy
-        .authorize("gcs/v1/cmd/raw/text_status", &vec![0; 4097])
+        .authorize_trusted("gcs/v1/cmd/raw/text_status", b"operator bytes")
         .is_err());
 }
 

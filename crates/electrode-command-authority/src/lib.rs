@@ -1,9 +1,8 @@
 //! Electrode command authority.
 //!
 //! Browser peers and native vehicle peers use separate Zenoh sessions. The
-//! browser-to-vehicle paths are the typed mappings and bounded Packet Traffic
-//! path in [`CommandPolicy`], plus the schema-verified private simulator
-//! MocapFrame relay.
+//! browser-to-vehicle paths are the typed mappings in [`CommandPolicy`], plus
+//! the schema-verified private simulator MocapFrame relay.
 
 #[allow(unreachable_pub)]
 mod firmware;

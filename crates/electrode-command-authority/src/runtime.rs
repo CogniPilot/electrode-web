@@ -104,7 +104,6 @@ impl CommandAuthorityConfig {
                     "ELECTRODE_GCS_VELOCITY_BUDGET_CSV",
                     defaults.policy.velocity_budget_csv,
                 ),
-                raw_max_bytes: defaults.policy.raw_max_bytes,
             },
         }
     }

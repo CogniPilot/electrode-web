@@ -30,15 +30,6 @@ Accepted typed intents:
 - `gcs/v1/cmd/parameters` -> `cmd/param_get` query
 - `gcs/v1/cmd/trajectory` -> `cmd/trajectory_set` query
 
-`gcs/v1/cmd/raw/<leaf>` preserves the Packet Traffic prototype feature. The
-leaf must be one safe segment and each payload is bounded to 4 KiB. Explicitly
-selected typed leaves are allowed; the bytes are forwarded exactly and are not
-claimed to be a schema-verified FlatBuffer. Checked raw targets `manual` and
-`manual_control_command`, `pos_sp`, and `local_position_command` are denied.
-Repeat and interval are controlled by the website. Native Electrode controls
-and trusted localhost raw forwarding remain available and are not part of the
-checked LAN protocol.
-
 Vehicle telemetry is relayed one way to the trusted local browser. LAN
 `MocapFrame`, rigid-body names, and external-odometry streams are validated and
 relayed from the dedicated telemetry client. Private Rumoca `MocapFrame` data
