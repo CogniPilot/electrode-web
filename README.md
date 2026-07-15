@@ -2,7 +2,7 @@
 
 Read the developer book first:
 
-https://cognipilot.github.io/electrode-web/dev-book/
+https://cognipilot.github.io/electrode_web/dev-book/
 
 Then build and start the local ground station:
 
